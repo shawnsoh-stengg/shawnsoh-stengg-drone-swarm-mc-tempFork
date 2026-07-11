@@ -48,10 +48,16 @@ RUN mkdir -p /opt/drone-mc/install /etc/drone-mc /var/drone-mc
 # from the host (SDD §12.5, ICD §9.4).
 COPY cyclonedds.xml /etc/drone-mc/cyclonedds.xml
 
+# /opt/ros/humble/install is this base image's own source-built layout;
+# apt-installed ros-humble-* debs (e.g. ros-humble-mavlink above) land in
+# the standard dpkg prefix /opt/ros/humble instead, which nothing sources
+# by default — find_package() reads CMAKE_PREFIX_PATH directly, so it must
+# be listed here too or packages installed via apt are invisible to CMake.
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
     CYCLONEDDS_URI=/etc/drone-mc/cyclonedds.xml \
     ROS_DOMAIN_ID=0 \
-    AMENT_PREFIX_PATH=/opt/drone-mc/install:/opt/ros/humble/install \
+    AMENT_PREFIX_PATH=/opt/drone-mc/install:/opt/ros/humble/install:/opt/ros/humble \
+    CMAKE_PREFIX_PATH=/opt/drone-mc/install:/opt/ros/humble/install:/opt/ros/humble \
     COLCON_HOME=/root/.colcon
 
 # Source ROS 2 and the shared workspace on every interactive shell session.
