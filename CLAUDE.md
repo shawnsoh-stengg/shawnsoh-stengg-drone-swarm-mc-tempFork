@@ -1,0 +1,175 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Status
+
+Design is complete; implementation is underway. The 7 packages described in `SDD-MC-001.md` are being built out in `ws/src/` (`fcc_bridge`, `gcs_comms`, `health_monitor`, `mc_msgs`, `mission_exec`, `swarm_coord`, `vision`), alongside the vendored `px4_msgs` dependency fetched by `scripts/05-build-workspace.sh`.
+
+## Document Map
+
+| File | Purpose |
+|------|---------|
+| `SRS-MC-001.md` | Requirements (FR/IR/PR/SFR/SW tags — 80+ requirements) |
+| `ICD-MC-001.md` | Interface specifications for all 5 interface domains |
+| `SDD-MC-001.md` | Software design: node designs, algorithms, deployment architecture |
+| `HID-MC-001.md` | Hardware interface specs (UART, CSI, Ethernet, power) |
+| `TP-MC-001.md` | Test plan: 4-level strategy (UT → NI → ST → HW) |
+| `diagrams/` | 24 PlantUML source files + rendered PNGs (01–24) |
+
+Key diagrams: `02` (ROS 2 node topology), `03` (Docker/systemd deployment), `04` (mission state machine), `10` (FccBackend class hierarchy).
+
+## Build System
+
+```bash
+# 0. One-time Jetson host setup (runs directly on the Jetson, not in Docker)
+# Prerequisite: Jetson already flashed with JetPack 6.2.2 via NVIDIA SDK
+# Manager (HID-MC-001 §8.1) and booted to a login prompt.
+sudo ./scripts/01-install-os.sh          # Netplan dual-IP (eth0) + ttyTHS1 udev rule
+sudo ./scripts/01b-smoke-test-os.sh      # TP-SM-001: OS + netplan + udev verification
+
+# 1. Build the ros2-core base Docker image (once, or after Dockerfile changes)
+./scripts/04-install-ros2-core.sh
+./scripts/04b-smoke-test-ros2.sh        # verify ROS 2 Humble + CycloneDDS
+
+# 2. Build the shared colcon workspace (ws/src/) inside the container
+./scripts/05-build-workspace.sh         # writes to /opt/drone-mc/install
+./scripts/05b-smoke-test-colcon.sh      # verify workspace
+
+# 3. Install the drone-mc.target systemd orchestration (on the Jetson)
+sudo ./scripts/02-install-systemd-units.sh    # installs + enables all 8 service units
+sudo ./scripts/02b-smoke-test-units.sh        # verify units/target/slices
+sudo systemctl start drone-mc.target          # brings up every MC service container
+
+# MC_VERSION overrides the Docker image tag (default: dev)
+MC_VERSION=1.0.0 ./scripts/04-install-ros2-core.sh
+
+# Debug build
+CMAKE_BUILD_TYPE=Debug ./scripts/05-build-workspace.sh
+
+# Alternate install dir (useful on developer workstations)
+DRONE_MC_INSTALL_DIR=/tmp/drone-mc-install ./scripts/05-build-workspace.sh
+```
+
+ROS 2 packages live in `ws/src/`. Once packages exist:
+
+```bash
+# Build single package (native, with workspace sourced)
+source /opt/ros/humble/install/setup.bash
+colcon build --merge-install --packages-select fcc_bridge
+
+# Unit tests (gtest)
+colcon test --packages-select fcc_bridge
+colcon test-result --verbose
+
+# Node-integration tests (launch_testing)
+ros2 launch fcc_bridge fcc_bridge_test.launch.py
+
+# System tests against PX4 SITL
+ros2 launch mission_exec sitl_mission_test.launch.py
+
+# mavlink-router (Meson/Ninja, separate from colcon)
+cd mavlink-router && meson setup build && ninja -C build
+```
+
+## Architecture Overview
+
+**Platform:** Jetson Orin NX 16GB (JetPack 6.2.2, Ubuntu 22.04 aarch64) + Pixhawk 6X (PX4 v1.14). Connected via ttyTHS1 (921600 baud, uXRCE-DDS) or 192.168.12.x ethernet fallback.
+
+**4-Layer design** (SDD §2.1):
+
+```
+Layer 4 — Mission Intelligence
+  swarm_coordinator_node, mission_executor_node, search_planner_node,
+  visual_localisation_node, detection_node
+
+Layer 3 — GCS & Swarm Communication
+  gcs_mavlink_node (MAVROS bridge), mavlink-router v4
+
+Layer 2 — FCC Abstraction
+  fcc_bridge_node  ←→  FccBackend (XrceDdsBackend | MavlinkUdpBackend)
+
+Layer 1 — Hardware & Transport
+  ttyTHS1 serial, 192.168.12.x ethernet, CSI camera, MANET radio
+```
+
+**7 ROS 2 packages:** `fcc_bridge`, `swarm_coord`, `mission_exec`, `vision`, `gcs_comms`, `health_monitor`, `mavlink_router` (external daemon).
+
+## Key Design Patterns
+
+**FccBackend abstraction** — `fcc_bridge_node` uses a factory pattern to swap uXRCE-DDS (production) for MAVLink UDP (SITL) without changing any higher-layer code. This is the central seam for hardware-in-the-loop vs. simulation.
+
+**Threading model** — Every node uses `MultiThreadedExecutor` with two `CallbackGroup`s: reentrant for subscription callbacks (parallel data processing), mutually exclusive for timer callbacks (serialized periodic publish). Control loops use `WallTimer` at 10 ms + atomic state.
+
+**MAVLink channel separation** — Three distinct channels: GCS→FCC (standard PX4 autopilot), GCS→MC (separate MAVROS channel), MC↔FCC (uXRCE-DDS for vehicle state/commands — mavlink-router routes between the first two). MC↔FCC also carries one MAVLink exception: the standard mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`, plus `MISSION_WRITE_PARTIAL_LIST` for single-item replace) on a dedicated UDP port (`192.168.12.31:14555`, always ethernet, not routed by mavlink-router) — stock PX4 has no DDS-writable mission topic, so this is the only way to get waypoints into FCC-side dataman (ICD IR-007).
+
+**Mission state machine** — 11 states in `mission_executor_node`: PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND, with FAULT → RTL escape. GCS retains override authority at all times (500 ms response requirement, FR-003).
+
+**Deployment** — Not Docker Compose. Six Docker containers each managed as systemd units under `drone-mc.target`. RT services (`fcc_bridge`, `swarm_coord`) in `rt.slice`; best-effort in `be.slice`. Shared colcon workspace bind-mounted to all containers.
+
+## Key Algorithms (SDD §3.x)
+
+- **ISR election:** weighted score (`0.4×battery + 0.4×proximity + 0.2×sensor_ok`), top ⌈N/2⌉ elected, ACK consensus.
+- **Voronoi partitioning:** Fortune's sweep line (deterministic), all drones compute independently then exchange VORONOI_ACCEPT with 1 cm tolerance check. Re-partitions on peer loss during SEARCH.
+- **Boustrophedon coverage:** min-area bounding rectangle + parallel sweep lines, +5 m altitude between rows. Cartesian waypoints back-projected to WGS-84 for PX4 mission upload.
+- **Visual odometry (GNSS-denied):** FAST+ORB → KLT → 5-point essential + RANSAC; scale from IMU pre-integration; 10-keyframe sliding window, no loop closure; auto-handover GNSS↔VO on fix quality.
+- **Detection:** YOLOv8n ONNX → TensorRT, 640×640, IoU 0.45 / conf 0.5, geolocation via camera intrinsics + drone pose. Max queue depth 2 (drop oldest on backpressure).
+
+## Internal ROS 2 Topic Naming
+
+All internal topics are namespaced under `/mc/`. Key topics that cross multiple packages:
+- `/mc/fcc/vehicle_state` (10 Hz) — authoritative flight state from `fcc_bridge`
+- `/mc/mission_phase` — current state machine phase
+- `/mc/swarm/peer_states`, `/mc/swarm/voronoi_cell`, `/mc/swarm/isr_role`
+- `/mc/local_pose` (10+ Hz) — visual odometry position estimate
+- `/mc/detections` — AI detection results with geolocated positions
+- `/mc/health`, `/mc/fault` — system health and fault signals
+
+## Network / IP Reference
+
+| Host | Address |
+|------|---------|
+| Jetson MC | 192.168.10.11 |
+| Pixhawk FCC | 192.168.10.31 |
+| GCS laptop | 192.168.10.10 |
+| MC↔FCC internal | 192.168.12.x |
+| Peer MCs | 192.168.10.12+ |
+
+## Repository Structure (Implemented)
+
+```
+docker/ros2-core/
+  Dockerfile          # ros2-core base image (FROM for all service containers)
+  cyclonedds.xml      # default DDS config, overridden by /etc/drone-mc bind-mount
+config/
+  environment         # default env vars for all containers (ICD §9.4)
+  params/             # per-node ROS 2 YAML params (populated as packages land)
+  netplan/
+    01-drone-mc.yaml          # Jetson eth0 dual-IP (HIF-002/HIF-004), installed by 01-install-os.sh
+  udev/
+    99-drone-mc.rules         # /dev/ttyTHS1 dialout permissions (HIF-001), installed by 01-install-os.sh
+  systemd/
+    drone-mc.target                 # top-level target, all 8 services WantedBy= this (SDD §12.4)
+    rt.slice / be.slice             # cgroup v2 slices (SDD §12.3)
+    drone-mc-health-monitor.service # + mavlink-router, fcc-bridge, gcs-comms, swarm-coord,
+                                     #   mission-exec, camera, vision — installed by 02-install-systemd-units.sh
+ws/
+  src/                # colcon workspace — ROS 2 packages go here
+scripts/
+  01-install-os.sh            # Jetson host: install Netplan + udev rule (post-JetPack-flash)
+  01b-smoke-test-os.sh        # TP-SM-001: OS + netplan + udev verification
+  02-install-systemd-units.sh  # install + enable drone-mc.target and all 8 service units
+  02b-smoke-test-units.sh      # units/target/slices loaded, enabled, valid (LIVE_CHECK=1 for a real boot test)
+  04-install-ros2-core.sh     # build ros2-core Docker image
+  04b-smoke-test-ros2.sh      # TP-SM-004: ROS 2 + CycloneDDS
+  05-build-workspace.sh       # colcon build → /opt/drone-mc/install
+  05b-smoke-test-colcon.sh    # TP-SM-005: workspace + pkg-list
+```
+
+## Tooling Decisions
+
+- **Diagrams:** PlantUML (v1.2026 compatible syntax). Source in `diagrams/*.puml`, rendered to `diagrams/*.png`.
+- **Documents:** Markdown only (not HTML/artifacts).
+- **Languages:** C++17 (all ROS 2 nodes), Python 3 (test utilities, GCS-side scripts).
+- **DDS:** CycloneDDS with `cyclonedds.xml` in container base image.
+- **Params:** YAML files in `params/default.yaml` and `params/sitl.yaml` per package.
