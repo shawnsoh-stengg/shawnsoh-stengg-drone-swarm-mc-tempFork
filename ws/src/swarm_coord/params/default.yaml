@@ -1,0 +1,6 @@
+# Placeholder — real tunables land with the formation_controller_node /
+# swarm_coordinator_node implementation (SDD-MC-001 §2.4).
+formation_controller_node:
+  ros__parameters: {}
+swarm_coordinator_node:
+  ros__parameters: {}

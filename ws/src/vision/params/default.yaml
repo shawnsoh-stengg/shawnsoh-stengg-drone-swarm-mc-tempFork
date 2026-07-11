@@ -1,0 +1,6 @@
+# Placeholder — real tunables land with the visual_localisation_node /
+# detection_node implementation (SDD-MC-001 §2.4).
+visual_localisation_node:
+  ros__parameters: {}
+detection_node:
+  ros__parameters: {}

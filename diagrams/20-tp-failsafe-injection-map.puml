@@ -1,0 +1,171 @@
+@startuml 20-tp-failsafe-injection-map
+' ─────────────────────────────────────────────────────────────
+' Diagram 20: Failsafe Test Injection Points on Mission FSM
+' Shows where each SITL failsafe test injects a fault
+' MC-TP-001 §6  TP-ST-002 through TP-ST-006, TP-ST-010
+' ─────────────────────────────────────────────────────────────
+
+title "20 — Failsafe Test Injection Points\nSITL Fault Injection on Mission Phase FSM  ·  MC-TP-001 §6"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 8
+
+skinparam state {
+  BackgroundColor #D8E8F8
+  BorderColor #3D5A80
+  BorderThickness 1.5
+  FontSize 10
+  FontStyle bold
+  ArrowColor #3D5A80
+  ArrowFontSize 9
+  ArrowFontColor #2A4060
+  StartColor #1A3860
+  EndColor #1A3860
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' MISSION PHASE FSM
+' ═══════════════════════════════════════════════════
+[*] --> PREFLIGHT
+
+PREFLIGHT : Pre-arm checks
+PREFLIGHT --> ARMING : GCS ARM_AUTHORISE\n+ checks pass
+
+ARMING : FCC arming sequence
+ARMING --> TAKEOFF : arming_state = ARMED
+
+TAKEOFF : FCC AUTO_TAKEOFF
+TAKEOFF --> INGRESS : altitude reached\n+ GCS INGRESS cmd
+
+INGRESS : Formation keeping\nto muster waypoint
+INGRESS --> MUSTER : FCC mission item\ncomplete
+
+MUSTER : Formation hold\nPeer state exchange
+MUSTER --> ISR_SELECTION : quorum met
+
+state ISR_SELECTION #FFE8C0
+ISR_SELECTION : Coordinator election\nScoring · ISR_RESULT
+ISR_SELECTION --> VORONOI_PARTITION : all ACKs received
+
+state VORONOI_PARTITION #FFE8C0
+VORONOI_PARTITION : Fortune's algorithm\nConsensus protocol
+VORONOI_PARTITION --> SEARCH : consensus OK\n+ path uploaded
+
+state SEARCH #C8E8C8
+SEARCH : AUTO_MISSION\nCoverage path\nDetection active
+SEARCH --> RETURN : GCS END_MISSION\nor mission complete
+
+RETURN : AUTO_RTL
+RETURN --> LAND : at home point
+
+LAND : AUTO_LAND
+LAND --> [*] : disarmed
+
+state FAULT #FFD0D0
+FAULT : RTL or HOLD\nGCS notified
+FAULT --> [*] : disarmed
+
+' ═══════════════════════════════════════════════════
+' NOMINAL ABORT
+' ═══════════════════════════════════════════════════
+SEARCH --> FAULT : GCS ABORT (any phase)
+INGRESS --> FAULT : GCS ABORT
+MUSTER --> FAULT : GCS ABORT
+
+' ═══════════════════════════════════════════════════
+' FAULT INJECTION ANNOTATIONS
+' ═══════════════════════════════════════════════════
+
+note right of SEARCH #FFE0E0
+  <b>Fault Injection Points</b>
+  during SEARCH phase:
+  ─────────────────────────
+  <b>TP-ST-002</b>  GCS Link Loss
+  Inject: iptables DROP GCS ports
+  Trigger: 10 s timeout → HOLD
+  Assert: fault_mask = GCS_TIMEOUT
+  Recovery: GCS reconnect → cmd
+  ─────────────────────────
+  <b>TP-ST-003</b>  Low Battery RTL
+  Inject: mock battery_status 18%
+  Trigger: immediate (< 2 s)
+  Assert: nav_state = AUTO_RTL
+  Assert: STATUSTEXT WARN received
+  ─────────────────────────
+  <b>TP-ST-004</b>  Executor Crash
+  Inject: docker kill mc-mission-exec
+  Trigger: 5 s watchdog → restart
+  Assert: heartbeat resumes < 15 s
+  Assert: FCC holds during restart
+  Extension: 3× crash → RTL
+  Assert: fault_mask = EXECUTOR_DEAD
+  ─────────────────────────
+  <b>TP-ST-005</b>  Peer Drone Lost
+  Inject: stop Drone 2 MC stack
+  Trigger: 3 s → re-partition
+  Assert: voronoi_cell updated
+  Assert: new path covers full polygon
+  ─────────────────────────
+  <b>TP-ST-006</b>  FCC Comms Lost
+  Inject: docker kill mc-fcc-bridge
+  Trigger: 1 s → FCC_LINK_LOST
+  Assert: phase = FAULT
+  Assert: STATUSTEXT CRITICAL
+end note
+
+note left of ISR_SELECTION #FFE0E0
+  <b>TP-ST-010</b>  Coordinator Failover
+  Inject: kill Drone 1 MC stack
+  at entry to ISR_SELECTION
+  Trigger: 8 s failover timeout
+  Assert: Drone 2 broadcasts ISR_RESULT
+  Assert: election completes correctly
+  Assert: phase proceeds to VORONOI
+end note
+
+note left of PREFLIGHT #FFE8CC
+  <b>TP-UT-011</b>  Pre-arm Check
+  (unit test, no SITL)
+  Inject: battery_remaining = 0.28
+  Assert: pre_arm_checks() = false
+  Assert: ARMING not entered
+end note
+
+note right of FAULT #FFD0D0
+  <b>All failsafe tests ultimately</b>
+  <b>resolve through this state.</b>
+  ─────────────────────────
+  TP-ST-003: Low battery → RTL → LAND
+  TP-ST-004 (ext.): 3× crash → RTL
+  TP-ST-006: FCC lost → FAULT declared
+  ─────────────────────────
+  S1 severity: any failsafe that does
+  NOT reach expected safe state.
+end note
+
+' ═══════════════════════════════════════════════════
+' EXPECTED OUTCOMES LEGEND
+' ═══════════════════════════════════════════════════
+legend right
+  | Test | Injection Phase | Injected Fault | Expected outcome |
+  | <b>TP-ST-002</b> | SEARCH | GCS link DROP | HOLD until recovery |
+  | <b>TP-ST-003</b> | SEARCH | battery = 18% | RTL immediately |
+  | <b>TP-ST-004</b> | SEARCH | executor kill | restart < 15 s; HOLD |
+  | <b>TP-ST-004 ext.</b> | SEARCH | 3× executor kill | RTL; EXECUTOR_DEAD |
+  | <b>TP-ST-005</b> | SEARCH | peer MC stop | re-partition → new path |
+  | <b>TP-ST-006</b> | SEARCH | fcc-bridge kill | FAULT; STATUSTEXT CRITICAL |
+  | <b>TP-ST-010</b> | ISR_SELECTION | coordinator kill | Drone 2 takes over |
+endlegend
+
+@enduml

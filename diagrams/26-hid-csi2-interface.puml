@@ -1,0 +1,237 @@
+@startuml 26-hid-csi2-interface
+' ─────────────────────────────────────────────────────────────
+' Diagram 26: CSI-2 Camera Interface Detail
+' MC-HID-001 §5 — HIF-003
+' ─────────────────────────────────────────────────────────────
+
+title "26 — CSI-2 Camera Interface Detail\nHIF-003 · IMX219 ↔ Jetson CSI Port 0  ·  MC-HID-001 §5"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 4
+
+skinparam package {
+  BorderThickness 2
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam rectangle {
+  BorderThickness 1.5
+  FontSize 9
+}
+
+skinparam class {
+  BorderThickness 1.5
+  FontSize 9
+  AttributeFontSize 9
+  BackgroundColor #F4F8FF
+  BorderColor #3D5A80
+  HeaderBackgroundColor #D8E8F8
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam arrow {
+  Color #3D5A80
+  FontColor #1C2334
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' 22-PIN FPC CONNECTOR PINOUT (visual representation)
+' ═══════════════════════════════════════════════════
+
+package "22-Pin FPC Connector (0.5 mm pitch)  —  Standard Raspberry Pi CSI-2 Layout" as FPC #F0F0FF {
+
+  class "Signal Group: Power" as PWR_PINS {
+    Pin 20 : VDD_3V3    | 3.3 V from baseboard · 280 mA (IMX219 analog)
+    Pin 21 : VDD_1V8    | 1.8 V from baseboard · 150 mA (IMX219 digital core)
+    Pin  1 : GND
+    Pin  4 : GND
+    Pin  7 : GND
+    Pin 10 : GND
+    Pin 14 : GND
+    Pin 19 : GND
+    Pin 22 : GND
+  }
+
+  class "Signal Group: MIPI CSI-2 Data" as DATA_PINS {
+    Pin  2 : CSI0_DN0   | Data lane 0, negative  (200 mV diff, D-PHY HS)
+    Pin  3 : CSI0_DP0   | Data lane 0, positive
+    Pin  5 : CSI0_DN1   | Data lane 1, negative
+    Pin  6 : CSI0_DP1   | Data lane 1, positive
+    Pin  8 : CSI0_CN    | Clock lane, negative
+    Pin  9 : CSI0_CP    | Clock lane, positive
+  }
+
+  class "Signal Group: Control" as CTRL_PINS {
+    Pin 11 : CAM_GPIO   | Camera reset / standby (active low)
+    Pin 13 : CAM_GPIO2  | Optional GPIO (unused in standard config)
+    Pin 15 : SCL        | I²C clock · 400 kHz · camera config (addr 0x10)
+    Pin 16 : SDA        | I²C data  · read/write image sensor registers
+    Pin 17 : CAM_VSYNC  | Vertical sync output (optional, not used by nvarguscamerasrc)
+    Pin 18 : CAM_CLKIN  | 24 MHz MCLK input from Jetson to IMX219
+    Pin 12 : (NC)       | Not connected
+  }
+}
+
+' ═══════════════════════════════════════════════════
+' IMX219 CAMERA MODULE
+' ═══════════════════════════════════════════════════
+
+package "IMX219 Camera Module" as CAM_PKG #F0E8F8 {
+  class "Sony IMX219 Sensor" as SENSOR #D8C0F0 {
+    1/4-inch CMOS
+    3280 x 2464 native
+    Production mode: 1280 x 720 at 15 FPS
+    Bayer RGGB pattern
+  }
+
+  class "MIPI D-PHY TX" as DPHY_TX #D8C0F0 {
+    2 data lanes
+    HS mode: >= 200 mV diff
+    LP mode: 1.2 V single-ended
+    Max link rate: 912 Mbps/lane
+  }
+
+  class "I2C Slave" as I2C_SLAVE #D8C0F0 {
+    Address: 0x10
+    400 kHz fast-mode
+    Register map: PX4 / V4L2 compatible
+  }
+}
+
+' ═══════════════════════════════════════════════════
+' JETSON CSI PORT 0
+' ═══════════════════════════════════════════════════
+
+package "Jetson Orin NX — CSI Port 0" as JET_CSI #D8E8F8 {
+  class "MIPI D-PHY RX" as DPHY_RX #B8D4EC {
+    2 data lanes + clock
+    Auto lane swap compensation
+    ESD protected
+  }
+
+  class "ISP (Image Signal Processor)" as ISP #B8D4EC {
+    Hardware demosaic, noise reduction
+    AWB, AEC in hardware
+    Output: NV12, BGR8
+    /dev/video0
+  }
+
+  class "I2C Master (Bus 2)" as I2C_MASTER #B8D4EC {
+    Configures IMX219 at init:
+    frame size, exposure, gain
+    Device tree: /dev/i2c-2 addr 0x10
+  }
+
+  class "MCLK Output" as MCLK #B8D4EC {
+    24 MHz +/- 200 ppm
+    Required for IMX219 PLL lock
+  }
+}
+
+' ═══════════════════════════════════════════════════
+' SOFTWARE STACK
+' ═══════════════════════════════════════════════════
+
+package "Software Pipeline  (Jetson)" as SW_PKG #E8E8F8 {
+  class "GStreamer" as GST #C8C8F0 {
+    nvarguscamerasrc sensor-id=0
+    nvvidconv -> BGR8
+    appsink max-buffers=2 drop=true
+  }
+
+  class "gscam2 ROS 2 driver" as GSCAM #C8C8F0 {
+    /camera/image_raw  (sensor_msgs/Image)
+    /camera/camera_info  (sensor_msgs/CameraInfo)
+    Rate: >= 15 FPS
+  }
+
+  class "Consumers" as CONS #C8C8F0 {
+    visual_localisation_node  (VO pipeline)
+    detection_node  (TensorRT inference)
+  }
+}
+
+' ═══════════════════════════════════════════════════
+' BASEBOARD CONNECTOR
+' ═══════════════════════════════════════════════════
+
+class "J2 — FPC ZIF Connector" as J2 #D0C8E8 {
+  22-pin · 0.5 mm pitch
+  Zero insertion force (ZIF)
+  Latch must be locked before power-on
+}
+
+class "Baseboard Power" as BB_PWR #F4C88A {
+  3.3V_PERIPH -> Pin 20
+  1.8V_PERIPH -> Pin 21
+  (from onboard LDO regulators)
+}
+
+' ═══════════════════════════════════════════════════
+' CONNECTIONS
+' ═══════════════════════════════════════════════════
+
+SENSOR    --> DPHY_TX   : image data\n(raw Bayer RGGB)
+DPHY_TX   -[#7030A0,thickness=2]-> J2        : CSI-2 lanes 0,1\n+ clock lane (pins 2–9)
+J2        -[#7030A0,thickness=2]-> DPHY_RX   : MIPI D-PHY\n200 mV diff
+
+I2C_MASTER -[#3050A0]-> J2         : SCL / SDA (pins 15–16)
+J2         -[#3050A0]-> I2C_SLAVE  : I²C 400 kHz
+MCLK       -[#5050B0]-> J2         : CLKIN 24 MHz (pin 18)
+J2         -[#5050B0]-> SENSOR     : MCLK to PLL
+
+BB_PWR    -[#D08000]-> J2          : 3.3V + 1.8V (pins 20–21)
+J2        -[#D08000]-> SENSOR      : power supply
+
+DPHY_RX   --> ISP      : raw frame
+ISP       --> GST      : /dev/video0\n(V4L2 API)
+GST       --> GSCAM    : BGR8 frames
+GSCAM     --> CONS     : /camera/image_raw\n/camera/camera_info
+
+I2C_MASTER --> I2C_SLAVE : init registers\n(1280×720 mode\n15 FPS config)
+
+' ═══════════════════════════════════════════════════
+' CAUTION NOTES
+' ═══════════════════════════════════════════════════
+
+note right of J2
+  CAUTION: ZIF connector latch.
+  Unlock (lift lever) before inserting FPC.
+  Lock (press lever down) before powering on.
+  Do not pull FPC cable while latch is locked.
+  Inspect after every hard landing.
+end note
+
+note right of GST
+  GStreamer pipeline:
+  nvarguscamerasrc sensor-id=0 !
+  'video/x-raw(memory:NVMM),
+   width=1280,height=720,
+   framerate=15/1' !
+  nvvidconv !
+  video/x-raw,format=BGR !
+  appsink max-buffers=2 drop=true
+end note
+
+note bottom of DPHY_TX
+  Cable spec:
+  22-pin FPC · 0.5 mm pitch
+  15 cm recommended · 30 cm max
+  Bend radius ≥ 5 mm
+  Route away from ESC/motor wiring
+  (EMI on CSI-2 differential pairs)
+end note
+
+@enduml

@@ -1,0 +1,30 @@
+# drone-mc-mavlink-router.service — mavlink-router v4 (SDD §12.4: no service
+# dependencies; routes GCS<->FCC and GCS<->MC MAVLink channels).
+# Installed by scripts/02-install-systemd-units.sh.
+[Unit]
+Description=Drone MC — mavlink-router
+PartOf=drone-mc.target
+After=docker.service drone-mc-health-monitor.service
+Requires=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-mavlink-router \
+  --network=host \
+  --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/mavlink-router:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-mavlink-router
+Restart=on-failure
+RestartSec=5s
+MemoryMax=256M
+CPUQuota=30%
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=drone-mc.target

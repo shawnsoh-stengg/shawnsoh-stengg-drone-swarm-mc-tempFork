@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CycloneDDS domain configuration for drone-mc containers.
+  Deployed to /etc/drone-mc/cyclonedds.xml — bind-mounted read-only into
+  every service container (SDD §12.5, ICD §9.4).
+
+  Production:  replace NetworkInterfaceAddress with the MANET interface name or
+               192.168.10.11 (drone 1), 192.168.10.12 (drone 2), etc.
+  SITL/dev:    set NetworkInterfaceAddress to "lo" and AllowMulticast to false.
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config
+              https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <General>
+      <!--
+        "auto" picks the first non-loopback interface. Override to the MANET
+        interface name (e.g. "eth0") or IP (e.g. "192.168.10.11") in the
+        per-drone host copy of this file.
+      -->
+      <NetworkInterfaceAddress>auto</NetworkInterfaceAddress>
+      <AllowMulticast>true</AllowMulticast>
+      <!-- Keeps single DDS messages within a single UDP datagram on the MANET link. -->
+      <MaxMessageSize>65500B</MaxMessageSize>
+      <FragmentSize>4096B</FragmentSize>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <!-- Enough slots for all nodes across drone-mc + a few extras for tooling. -->
+      <MaxAutoParticipantIndex>32</MaxAutoParticipantIndex>
+    </Discovery>
+    <Internal>
+      <SocketReceiveBufferSize min="10MB"/>
+      <SocketSendBufferSize min="1MB"/>
+    </Internal>
+    <Tracing>
+      <Verbosity>warning</Verbosity>
+      <OutputFile>stderr</OutputFile>
+    </Tracing>
+  </Domain>
+</CycloneDDS>

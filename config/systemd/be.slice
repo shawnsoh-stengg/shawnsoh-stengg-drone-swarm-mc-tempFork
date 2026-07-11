@@ -1,0 +1,8 @@
+# be.slice — cgroup v2 slice for best-effort MC services (mavlink-router,
+# camera, gcs-comms, vision, mission-exec, health-monitor). SDD-MC-001 §12.3.
+[Unit]
+Description=Drone MC — best-effort services slice
+
+[Slice]
+CPUWeight=200
+MemoryHigh=8G

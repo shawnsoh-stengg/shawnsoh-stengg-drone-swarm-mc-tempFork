@@ -1,0 +1,4 @@
+# Placeholder — real tunables land with the health_monitor_node
+# implementation (SDD-MC-001 §2.4).
+health_monitor_node:
+  ros__parameters: {}

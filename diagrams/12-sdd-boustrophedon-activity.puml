@@ -1,0 +1,163 @@
+@startuml 12-sdd-boustrophedon-activity
+' ─────────────────────────────────────────────────────────────
+' Diagram 12: Boustrophedon Coverage Path Algorithm
+' SDD §7.1 — search_planner_node
+' MC-SDD-001
+' ─────────────────────────────────────────────────────────────
+
+title "12 — Boustrophedon Coverage Path Algorithm\nsearch_planner_node  ·  SDD §7.1"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 5
+
+skinparam activity {
+  BackgroundColor #D8E8F8
+  BorderColor #3D5A80
+  BorderThickness 1.5
+  FontSize 10
+  DiamondBackgroundColor #FFE8C0
+  DiamondBorderColor #C07000
+  DiamondFontSize 9
+  ArrowColor #3D5A80
+  ArrowFontSize 9
+  ArrowFontColor #2A4060
+  StartColor #1A3860
+  EndColor #1A3860
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam swimlane {
+  BorderColor #8AA8C8
+  TitleFontSize 10
+  TitleFontStyle bold
+}
+
+|search_planner_node|
+
+start
+
+:Receive  /mc/swarm/voronoi_cell
+(cell polygon, ordered CCW vertices);
+
+note right
+  Triggered on:
+  1. Initial VORONOI_PARTITION complete
+  2. Re-partition due to peer loss
+end note
+
+:Load parameters from ROS 2 param server
+  footprint_width_m  (default 20.0 m)
+  overlap_fraction   (default 0.20)
+  search_altitude_m  (default 50.0 m AGL)
+  search_speed_ms    (default 5.0 m/s);
+
+:Project cell polygon vertices
+ from geodetic to local ENU Cartesian
+ (origin = cell centroid, GeographicLib);
+
+:Compute convex hull of cell polygon
+ (gift-wrapping  O(n)  n = vertex count);
+
+:Find minimum-area bounding rectangle
+ of convex hull (rotating calipers  O(n))
+ → sweep axis = longer rectangle edge;
+
+:row_spacing = footprint_width_m × (1 − overlap_fraction)
+ (default: 20.0 × 0.80 = 16.0 m);
+
+:Generate parallel sweep lines
+ perpendicular to sweep axis,
+ spaced row_spacing apart,
+ spanning full bounding rectangle extent;
+
+repeat
+
+  :Intersect next sweep line with cell polygon
+   (Sutherland-Hodgman clip to polygon boundary);
+
+  if (intersection non-empty?) then (yes)
+    :Record row waypoint pair
+     (entry_pt, exit_pt) in row_list[];
+  else (no, sweep line outside cell)
+  endif
+
+repeat while (more sweep lines?) is (yes)
+
+if (row_list empty?) then (yes)
+  :Log error: cell too small for footprint width;
+  :Publish empty coverage_path (executor retains HOLD);
+  stop
+else (no)
+endif
+
+:Order rows in boustrophedon pattern:
+ row[0]: left → right
+ row[1]: right → left  (swap entry/exit)
+ row[2]: left → right  …;
+
+note right
+  Alternating direction minimises
+  dead-transit between rows.
+  Each row transition adds one
+  altitude-offset waypoint (+5 m AGL)
+  to clear obstacles during turn.
+end note
+
+:Insert transition waypoints between rows:
+ after each row exit_pt → climb +5 m AGL
+ waypoint (type: LOITER_TURNS n=0)
+ before descending to next row entry_pt;
+
+:Back-project all Cartesian waypoints
+ to geodetic (lat, lon, alt_msl)
+ (alt_msl = terrain_alt + search_altitude_m);
+
+:Annotate each waypoint:
+  acceptance_radius = row_spacing / 2
+  waypoint_speed    = search_speed_ms
+  frame             = MAV_FRAME_GLOBAL_RELATIVE_ALT;
+
+:Choose path start waypoint:
+ nearest waypoint to drone's current position
+ (Euclidean distance in ENU frame)
+ → minimise dead transit from muster point;
+
+:Publish  /mc/search/coverage_path
+ (mc_msgs/CoveragePathStamped)
+ N waypoints, ordered from start;
+
+note right
+  Typical values for 500 m × 500 m cell:
+  row_spacing = 16 m  → ~31 rows
+  Waypoints per path ≈ 62 transit + 31 transitions = ~93 total
+  Computation time ≤ 5 s  [PR-008]
+end note
+
+|mission_executor_node|
+
+:Receive  /mc/search/coverage_path;
+
+:Format as PX4 mission items
+ (MAV_CMD_NAV_WAYPOINT per point
+  MAV_CMD_NAV_LOITER_TURNS for transitions);
+
+:Upload mission to FCC via fcc_bridge_node
+ (MAVLink mission upload protocol);
+
+:Command FCC: SET_MODE AUTO → MISSION;
+
+|search_planner_node|
+
+stop
+
+@enduml

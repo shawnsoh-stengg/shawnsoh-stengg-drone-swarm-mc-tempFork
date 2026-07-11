@@ -1,0 +1,192 @@
+@startuml 08-icd-interface-topology
+' ─────────────────────────────────────────────────────────────
+' Diagram 08: ICD Interface Topology
+' All five interface domains — IFD-001 to IFD-005
+' MC-ICD-001
+' ─────────────────────────────────────────────────────────────
+
+title "08 — ICD Interface Topology\nAll Interface Domains · Mission Computer"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam ArrowFontSize 9
+skinparam RoundCorner 5
+skinparam Padding 5
+skinparam shadowing false
+
+skinparam package {
+  BackgroundColor #F4F8FF
+  BorderColor #3D5A80
+  BorderThickness 2
+  FontSize 11
+  FontStyle bold
+}
+
+skinparam rectangle {
+  BorderThickness 1
+  FontSize 10
+}
+
+skinparam component {
+  BorderThickness 1
+  FontSize 10
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' EXTERNAL ENTITIES
+' ═══════════════════════════════════════════════════
+
+package "Flight Control Computer" as FCC_PKG #FFF0E0 {
+  rectangle "Pixhawk 6X  ·  192.168.10.31\nPX4 v1.14  ·  NuttX\nuORB topic bus" as FCC #FFD4A8
+}
+
+package "Ground Control Station" as GCS_PKG #E8F4E8 {
+  rectangle "QGroundControl  ·  192.168.10.10\nMAVLink system_id = 255" as GCS #B8DCA8
+}
+
+package "Swarm Peers" as PEER_PKG #F0E8F8 {
+  rectangle "Peer MC #2  ·  192.168.10.12" as P2 #D8C0F0
+  rectangle "Peer MC #3  ·  192.168.10.13" as P3 #D8C0F0
+}
+
+rectangle "IMX219 CSI Camera\nSensor-id 0  ·  MIPI CSI-2" as CAM #EDE0F8
+
+' ═══════════════════════════════════════════════════
+' MISSION COMPUTER
+' ═══════════════════════════════════════════════════
+package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as MC_PKG #E4EEF8 {
+
+  rectangle "IFD-001\nfcc_bridge_node\n[FccBackend]\n─────────────────\nttyTHS1  921600 baud\n192.168.12.x  UDP:8888  uXRCE-DDS Agent\n192.168.12.x  UDP:14555  mission protocol (MAVLink, always on)" as IFD001 #C0D8F0
+
+  rectangle "IFD-002\nmavlink-router v4\ngcs_mavlink_node  +  MAVROS\n─────────────────\nUDP :14551 (recv)  :14552 (send)\nsys_id = drone_id  comp_id = 191" as IFD002 #A8D0A8
+
+  rectangle "IFD-003\nswarm_coordinator_node\n─────────────────\nUDP :14900 heartbeat\nUDP :14901 coordination\nSwarm binary protocol v1" as IFD003 #C8A8E8
+
+  rectangle "IFD-004\ncamera_node (gscam2)\n─────────────────\nCSI-2 · GStreamer pipeline\n1280×720 · ≥15 FPS · BGR8" as IFD004 #D0B8F8
+
+  package "IFD-005  ·  Internal ROS 2 Topics  ·  CycloneDDS  ·  Domain 0" as IFD005 #E8E8F8 {
+    rectangle "/mc/fcc/*\nvehicle_state · odometry · imu\nmission_upload · mission_item_update · send_command" as T_FCC #D8E8F8
+    rectangle "/mc/swarm/*\npeer_states · voronoi_cell · isr_role" as T_SWARM #E0D0F8
+    rectangle "/mc/gcs/*\ncommand · mission_upload · link_status" as T_GCS #D0E8D0
+    rectangle "/mc/search/*  ·  /mc/local_pose\n/mc/detections  ·  /mc/health\n/mc/mission_phase  ·  /mc/fault" as T_MISC #E8E8D0
+  }
+
+}
+
+' ═══════════════════════════════════════════════════
+' IFD-001: MC ↔ FCC
+' ═══════════════════════════════════════════════════
+FCC <-[#E07000]-> IFD001
+
+note on link #FFF0E0
+  <b>FCC → MC  (subscribed by MC)</b>
+  vehicle_local_position  ≥10 Hz
+  vehicle_global_position  ≥5 Hz
+  vehicle_status  ≥5 Hz
+  battery_status  ≥2 Hz
+  vehicle_attitude  ≥50 Hz
+  vehicle_odometry  ≥20 Hz
+  sensor_combined  ≥100 Hz
+  ─────────────────────────
+  <b>MC → FCC  (published by MC)</b>
+  vehicle_command  (event)
+  vehicle_visual_odometry  ≥10 Hz
+  ─────────────────────────
+  <b>Mission protocol  (MAVLink 2/UDP :14555 — the</b>
+  <b>one MAVLink exception on this link, IR-007)</b>
+  full upload: MISSION_COUNT/ITEM_INT/ACK
+    (on change — search paths, ingress/muster)
+  single-item replace: MISSION_WRITE_PARTIAL_LIST
+    (≥5 Hz during INGRESS — FORMATION_SLOT)
+  MISSION mode only, no OFFBOARD
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-002: MC ↔ GCS
+' ═══════════════════════════════════════════════════
+GCS <-[#208040]-> IFD002
+
+note on link #E8F4E8
+  <b>GCS → MC  (received)</b>
+  HEARTBEAT  1 Hz
+  COMMAND_LONG  (event)
+  MISSION_COUNT / MISSION_ITEM_INT
+  MC_CMD_PHASE_TRANSITION (50001)
+  MC_CMD_ARM_AUTHORISE (50002)
+  MC_CMD_END_MISSION (50003)
+  MC_CMD_GCS_OVERRIDE (50004)
+  ─────────────────────────
+  <b>MC → GCS  (sent)</b>
+  HEARTBEAT  1 Hz
+  MC_STATUS (50100)  ≥2 Hz
+  MC_DETECTION (50101)  (event)
+  MC_HEALTH (50103)  ≥1 Hz
+  COMMAND_ACK  (event)
+  STATUSTEXT  (event)
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-003: MC ↔ Swarm Peers
+' ═══════════════════════════════════════════════════
+PEER_PKG <-[#7030A0]-> IFD003
+
+note on link #F0E8F8
+  <b>Bidirectional  ·  MANET 192.168.10.x</b>
+  SWARM_HEARTBEAT (0x01)  1 Hz
+  ─────────────────────────
+  ISR_CANDIDATE (0x10)
+  ISR_RESULT (0x11)
+  ISR_RESULT_ACK (0x12)
+  ─────────────────────────
+  VORONOI_PROPOSAL (0x20)
+  VORONOI_ACCEPT (0x21)
+  ─────────────────────────
+  PEER_STATE (0x30)  ≥5 Hz
+  PEER_STATE_REQUEST (0x31)
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-004: Camera → MC
+' ═══════════════════════════════════════════════════
+CAM -[#5050C0]-> IFD004
+
+note on link #EDE0F8
+  <b>Camera → MC  (unidirectional)</b>
+  /camera/image_raw
+    sensor_msgs/Image
+    BGR8  ·  1280×720  ·  ≥15 FPS
+  /camera/camera_info
+    sensor_msgs/CameraInfo
+    calibration · intrinsics · distortion
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-005 internal connections
+' ═══════════════════════════════════════════════════
+IFD001 ..[#C0D0E8].. T_FCC
+IFD002 ..[#A0C8A0].. T_GCS
+IFD003 ..[#C0A0D8].. T_SWARM
+IFD004 ..[#C0A0E8].. T_MISC
+
+' ═══════════════════════════════════════════════════
+' LEGEND
+' ═══════════════════════════════════════════════════
+legend right
+  | Line color | Interface |
+  | <#E07000> Orange  | IFD-001  MC ↔ FCC  (uXRCE-DDS) |
+  | <#208040> Green   | IFD-002  MC ↔ GCS  (MAVLink 2/UDP) |
+  | <#7030A0> Purple  | IFD-003  MC ↔ Peers  (Swarm/UDP) |
+  | <#5050C0> Blue    | IFD-004  Camera → MC  (CSI) |
+  | <#A0A0C0> Gray    | IFD-005  Internal  (CycloneDDS) |
+endlegend
+
+@enduml

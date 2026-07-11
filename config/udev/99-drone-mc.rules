@@ -1,0 +1,7 @@
+# /etc/udev/rules.d/99-drone-mc.rules — device permissions for MC hardware interfaces.
+# Installed by scripts/01-install-os.sh (TP-SM-001). HID-MC-001 §3.3 (HIF-001).
+#
+# ttyTHS1 (Tegra High-Speed UART 1) carries the uXRCE-DDS link to the Pixhawk
+# FCC (HIF-001). It must be group-accessible so the fcc_bridge container,
+# whose entrypoint runs as a `dialout`-group user, can open it without root.
+KERNEL=="ttyTHS1", MODE="0660", GROUP="dialout"

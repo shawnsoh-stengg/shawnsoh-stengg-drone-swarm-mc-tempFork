@@ -1,0 +1,182 @@
+@startuml 03-container-deployment
+' ─────────────────────────────────────────────────────────────
+' Diagram 03: Container and Systemd Deployment
+' Swarm Search Drone — Mission Computer (AI MC)
+' MC-SRS-001
+' ─────────────────────────────────────────────────────────────
+
+title "03 — Container Deployment\nDocker Engine · systemd · cgroups v2"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam ArrowColor #4A6080
+skinparam ArrowFontColor #4A6080
+skinparam ArrowFontSize 9
+skinparam RoundCorner 4
+skinparam Padding 5
+
+skinparam node {
+  BackgroundColor #E8F0FA
+  BorderColor #3D5A80
+  BorderThickness 2
+  FontSize 11
+  FontStyle bold
+}
+
+skinparam package {
+  BackgroundColor #F4F8FF
+  BorderColor #6A8AB0
+  BorderThickness 1
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam artifact {
+  BackgroundColor #FFFAE8
+  BorderColor #B09020
+  BorderThickness 1
+  FontSize 10
+}
+
+skinparam component {
+  BackgroundColor #DDEEFF
+  BorderColor #3A70A0
+  BorderThickness 1
+  FontSize 10
+}
+
+skinparam database {
+  BackgroundColor #F0F0F0
+  BorderColor #707070
+}
+
+' ═══════════════════════════════════════════════════
+' HOST: Jetson Orin NX 16GB
+' ═══════════════════════════════════════════════════
+node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.11" as JETSON {
+
+  ' ─── systemd target ───────────────────────────
+  package "drone-mc.target  (systemd)" as TARGET #E8F4FF {
+
+    ' ─── rt.slice (real-time) ─────────────────
+    package "rt.slice  (real-time cgroup)" as RT_SLICE #FFE8E0 {
+
+      package "fcc-bridge.service" as SVC_FCC #FFDDD0 {
+        component "Micro XRCE-DDS Agent" as UXRCE
+        component "fcc_bridge_node" as N_FCC
+      }
+
+      package "swarm-coord.service" as SVC_SWARM #FFDDD0 {
+        component "swarm_coordinator_node" as N_SWARM
+        component "formation_controller_node" as N_FORM
+      }
+
+    }
+
+    ' ─── be.slice (best-effort) ───────────────
+    package "be.slice  (best-effort cgroup)" as BE_SLICE #E8F8E8 {
+
+      package "mavlink-router.service" as SVC_MLR #D8F0D8 {
+        component "mavlink-router v4" as MLR
+      }
+
+      package "gcs-comms.service" as SVC_GCS #D8F0D8 {
+        component "gcs_mavlink_node" as N_GCS
+        component "MAVROS" as MAVROS
+      }
+
+      package "mission-exec.service" as SVC_EXEC #D8F0D8 {
+        component "mission_executor_node" as N_EXEC
+        component "search_planner_node" as N_PLAN
+        component "watchdog supervisor" as WD
+      }
+
+      package "vision.service" as SVC_VIS #D8F0D8 {
+        component "camera_node  (gscam2)" as N_CAM
+        component "visual_localisation_node" as N_VIS
+        component "detection_node" as N_DET
+      }
+
+      package "health-monitor.service" as SVC_HM #D8F0D8 {
+        component "health_monitor_node" as N_HM
+      }
+
+    }
+
+  }
+
+  ' ─── shared workspace ─────────────────────────
+  database "Shared colcon workspace\n/opt/drone-mc/install\n(bind-mounted into all containers)" as WS
+
+  ' ─── hardware devices ─────────────────────────
+  package "Hardware Interfaces" as HW #F0F0F8 {
+    artifact "ttyTHS1\n(serial → FCC)" as TTY
+    artifact "/dev/video*\n(CSI camera)" as VIDDEV
+    artifact "192.168.12.x\n(internal ethernet → FCC)" as ETH_INT
+    artifact "192.168.10.x\n(MANET mesh)" as ETH_MESH
+  }
+
+}
+
+' ─── Base image (shared) ──────────────────────
+package "Container Base Image\nros2-core\n(ROS 2 Humble · CycloneDDS)" as BASE #F8F8D8 {
+  component "cyclonedds.xml\n(shared DDS config)" as DDS_CFG
+}
+
+' ─── External references ──────────────────────
+node "Pixhawk 6X FCC\n192.168.10.31" as FCC_HW #FFECD8
+node "GCS · QGC\n192.168.10.10" as GCS_HW #D8EED8
+node "MANET Peers\n192.168.10.12+" as PEER_HW #F5ECF5
+
+' ═══════════════════════════════════════════════════
+' CONNECTIONS
+' ═══════════════════════════════════════════════════
+
+BASE <.. SVC_FCC : "extends"
+BASE <.. SVC_SWARM : "extends"
+BASE <.. SVC_GCS : "extends"
+BASE <.. SVC_EXEC : "extends"
+BASE <.. SVC_VIS : "extends"
+BASE <.. SVC_HM : "extends"
+
+WS --> SVC_FCC : "bind mount"
+WS --> SVC_SWARM : "bind mount"
+WS --> SVC_GCS : "bind mount"
+WS --> SVC_EXEC : "bind mount"
+WS --> SVC_VIS : "bind mount"
+WS --> SVC_HM : "bind mount"
+
+TTY --> SVC_FCC : "DeviceAllow"
+VIDDEV --> SVC_VIS : "DeviceAllow"
+ETH_INT --> SVC_FCC
+
+SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
+SVC_MLR --> GCS_HW : "MAVLink 2/UDP"
+SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
+
+note right of SVC_FCC
+  DeviceAllow=ttyTHS1
+  MemoryMax=512M
+  CPUQuota=50%
+  PrivateTmp=yes
+end note
+
+note right of SVC_VIS
+  DeviceAllow=/dev/video*
+  DeviceAllow=/dev/nvidia*
+  MemoryMax=6G
+  CPUQuota=100%
+  GPUAccess=all
+end note
+
+note bottom of TARGET
+  systemctl start drone-mc.target
+  brings up all services in dependency order.
+  Stopping the target cleanly shuts down
+  all containers.
+end note
+
+@enduml

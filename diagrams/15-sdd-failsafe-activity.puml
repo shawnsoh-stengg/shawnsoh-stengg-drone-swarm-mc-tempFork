@@ -1,0 +1,152 @@
+@startuml 15-sdd-failsafe-activity
+' ─────────────────────────────────────────────────────────────
+' Diagram 15: Health Monitor Failsafe Decision Tree
+' SDD §10.3 — health_monitor_node  (1 Hz decision loop)
+' MC-SDD-001
+' ─────────────────────────────────────────────────────────────
+
+title "15 — Health Monitor Failsafe Decision Tree\nhealth_monitor_node  ·  1 Hz decision loop  ·  SDD §10.3"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 5
+
+skinparam activity {
+  BackgroundColor #D8E8F8
+  BorderColor #3D5A80
+  BorderThickness 1.5
+  FontSize 10
+  DiamondBackgroundColor #FFE8C0
+  DiamondBorderColor #C07000
+  DiamondFontSize 9
+  ArrowColor #3D5A80
+  ArrowFontSize 9
+  ArrowFontColor #2A4060
+  StartColor #1A3860
+  EndColor #C02020
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+start
+
+:1 Hz WallTimer fires;
+
+fork
+  ' ─── Branch A: FCC link ───────────────────────────
+  :Read fcc_backend.is_link_alive(1.0s);
+  if (FCC link alive?) then (no)
+    :<color:#C02020>Set FCC_LINK_LOST in fault_mask</color>;
+    :Attempt vehicle_command HOLD\n via fcc_bridge_node;
+    if (FCC responds to HOLD?) then (no)
+      :<color:#C02020>Declare FAULT phase</color>;
+      :Publish /mc/health {FCC_LINK_DEAD};
+      :Notify GCS: STATUSTEXT CRITICAL;
+      note right
+        Cannot RTL without FCC link.
+        PX4 independent failsafe
+        (RC/GCS loss) will act.
+        [FR-015]
+      end note
+    else (yes)
+      :Log fault: FCC_TIMEOUT;
+      :Notify GCS: STATUSTEXT WARN;
+    endif
+  else (yes)
+  endif
+
+fork again
+  ' ─── Branch B: Executor node liveness ────────────
+  :Check /mc/executor/heartbeat age;
+  if (age > 5 s?) then (yes)
+    :restart_count[executor]++;
+    if (restart_count > 3?) then (yes)
+      :<color:#C02020>CRITICAL_FAULT — executor dead</color>;
+      :Command RTL via fcc_bridge_node directly\n(bypass mission_executor);
+      :Publish /mc/health {EXECUTOR_DEAD};
+      :Notify GCS: STATUSTEXT CRITICAL;
+      note right
+        Restart attempts exhausted.
+        fcc_bridge_node is still alive
+        and can accept vehicle_command.
+        [FR-075, SFR-004]
+      end note
+    else (no)
+      :Trigger systemd restart\n(via watchdog.sock);\n→ docker restart mission-exec.service;
+      :Notify GCS: STATUSTEXT WARN\n"executor restarting (attempt N/3)";
+    endif
+  else (no)
+  endif
+
+fork again
+  ' ─── Branch C: GCS link ──────────────────────────
+  :Read /mc/gcs/link_status.gcs_link_ok;
+  if (GCS link lost?) then (yes)
+    if (mission_phase in autonomous phases?) then (yes)
+      ' INGRESS, MUSTER, ISR_SELECTION,
+      ' VORONOI_PARTITION, SEARCH
+      if (GCS override HOLD active?) then (no)
+        :Signal mission_executor:\n  command HOLD via /mc/fault;
+        :Log fault: GCS_TIMEOUT;
+        note right
+          On GCS recovery:
+          GCS must re-issue phase command.
+          HOLD is not auto-released.
+          [FR-073, SFR-007]
+        end note
+      else (yes: GCS explicit override)
+      endif
+    else (no: safe phase)
+    endif
+  else (no)
+  endif
+
+fork again
+  ' ─── Branch D: Battery ───────────────────────────
+  :Read battery_remaining from /mc/fcc/vehicle_state;
+  if (battery_remaining < 20%?) then (yes)
+    if (GCS override LOW_BATTERY_RTL active\n AND GCS link healthy?) then (yes)
+      :Log suppressed: operator override active;
+      note right
+        Override only honoured with
+        a healthy GCS link.
+        [SFR-008]
+      end note
+    else (no)
+      :<color:#C02020>Command RTL\n via fcc_bridge_node</color>;
+      :Publish /mc/health {LOW_BATTERY};
+      :Notify GCS: STATUSTEXT WARN\n"low battery — initiating RTL";
+    endif
+  else (no)
+  endif
+
+fork again
+  ' ─── Branch E: Thermal ───────────────────────────
+  :Read GPU temp (tegrastats pipe)\nand CPU temp (/sys/class/thermal/...);
+  if (GPU temp > 85 °C?) then (yes)
+    :Reduce inference_rate_limit_fps → 5 FPS\n(dynamic ROS 2 param update);
+    :Notify GCS: STATUSTEXT WARN "GPU thermal throttle";
+  else (no)
+  endif
+  if (CPU temp > 90 °C?) then (yes)
+    :<color:#E05000>Set CPU_OVERTEMP in fault_mask</color>;
+    :Notify GCS: STATUSTEXT WARN;
+  else (no)
+  endif
+
+end fork
+
+:Publish /mc/health\n(all metrics + fault_mask + node_alive_mask);
+:Publish MC_HEALTH (50103) → GCS via gcs_mavlink_node;
+
+end
+
+@enduml

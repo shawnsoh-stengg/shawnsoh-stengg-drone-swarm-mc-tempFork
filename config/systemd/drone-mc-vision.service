@@ -1,0 +1,35 @@
+# drone-mc-vision.service — visual_localisation_node + detection_node
+# (GPU/TensorRT). Depends on camera (image stream) and fcc-bridge (IMU
+# pre-integration scale for VO). Split from the original combined
+# vision.service in diagram 03 — see drone-mc-camera.service.
+# Installed by scripts/02-install-systemd-units.sh.
+[Unit]
+Description=Drone MC — Vision (VO + detection)
+PartOf=drone-mc.target
+After=docker.service drone-mc-health-monitor.service drone-mc-camera.service drone-mc-fcc-bridge.service
+Requires=docker.service drone-mc-camera.service drone-mc-fcc-bridge.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-vision \
+  --runtime nvidia \
+  --network=host \
+  --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/vision:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-vision
+Restart=on-failure
+RestartSec=5s
+MemoryMax=6G
+CPUQuota=100%
+DeviceAllow=/dev/nvhost-gpu rw
+DeviceAllow=/dev/nvmap rw
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=drone-mc.target

@@ -1,0 +1,5 @@
+# fcc_bridge_node tunables (SDD-MC-001 §3.4, ICD-MC-001 §7, FCC-004).
+fcc_bridge_node:
+  ros__parameters:
+    vehicle_state_rate_hz: 10.0
+    link_timeout_s: 1.0

@@ -1,0 +1,154 @@
+@startuml 23-hid-signal-interfaces
+' ─────────────────────────────────────────────────────────────
+' Diagram 23: Signal Interface Block Diagram — All Six HIFs
+' MC-HID-001 §3–§8
+' ─────────────────────────────────────────────────────────────
+
+title "23 — Signal Interface Block Diagram\nAll Hardware Interfaces · Electrical Parameters  ·  MC-HID-001"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 5
+
+skinparam package {
+  BorderThickness 2
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam rectangle {
+  BorderThickness 1.5
+  FontSize 9
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam arrow {
+  Color #3D5A80
+  FontColor #1C2334
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' EXTERNAL SYSTEMS
+' ═══════════════════════════════════════════════════
+
+rectangle "LiPo Battery\n4S (14.8 V) – 6S (25.2 V)\n≤ 60 A continuous\nXT60 female" as BAT #FFD4A8
+
+rectangle "IMX219 Camera\nSensor: Sony 1/4\"\nResolution: up to 3280×2464\nOperation: 1280×720 @ 15 FPS\n22-pin FPC (0.5 mm pitch)" as CAM #EDE0F8
+
+package "MANET Radio Air Unit" as AU_PKG #E8F4E8 {
+  rectangle "MANET AU\nIPv4 bridge\n192.168.10.1\nRJ45 Ethernet uplink" as AU #B8DCA8
+}
+
+package "GCS (Ground Control Station)" as GCS_PKG #E8F4E8 {
+  rectangle "QGroundControl\n192.168.10.10\nUDP: 14550 (FCC)\nUDP: 14552 (MC recv)" as GCS #C8E8C0
+}
+
+package "Swarm Peer Drone MCs" as PEER_PKG #F0E8F8 {
+  rectangle "Peer MC #2\n192.168.10.12\nUDP: 14900 hb\nUDP: 14901 coord" as PEER #D8C0F0
+}
+
+rectangle "Debug Host\nUbuntu x86_64\nlaptop / bench PC" as DBG #D8D8F8
+
+' ═══════════════════════════════════════════════════
+' MISSION COMPUTER ASSEMBLY
+' ═══════════════════════════════════════════════════
+
+package "MC Assembly — Holybro Pixhawk Jetson Baseboard" as MC_PKG #E0EAF8 {
+
+  package "Jetson Orin NX 16GB  ·  192.168.10.11 / 192.168.12.1" as JET #D4E8F4 {
+    rectangle "Software Stack\nUbuntu 22.04 · JetPack 6.2.2\nROS 2 Humble · Docker\ndrone-mc.target" as JET_SW #B8D4EC
+    rectangle "Peripherals\nttyTHS1  ·  ttyTHS0\neth0  ·  CSI port 0\nUSB-C" as JET_HW #B8D4EC
+  }
+
+  rectangle "Baseboard\nPower regulator · Ethernet switch\nUART bridge (on-board trace)\nINA226 power monitor" as BB #C8D8E8
+
+  package "Pixhawk 6X  ·  192.168.10.31 / 192.168.12.2" as PX4 #F4EAD4 {
+    rectangle "PX4 v1.14 / NuttX\nSTM32H7\nuXRCE-DDS client" as PX4_SW #E8D4A8
+    rectangle "Peripherals\nUART B · Ethernet\nMicroSD · GPS · ESC\nRC · TELEM" as PX4_HW #E8D4A8
+  }
+}
+
+' ═══════════════════════════════════════════════════
+' HIF-001: SERIAL (ttyTHS1 ↔ Pixhawk UART B)
+' ═══════════════════════════════════════════════════
+
+JET_HW <-[#3D5A80,thickness=2]-> PX4_HW : **HIF-001**  UART · 3.3 V CMOS\n921600/8N1 RTS/CTS\nOn-board trace (no cable)\nuXRCE-DDS framing
+
+note on link #E0E8F8
+  Jetson: /dev/ttyTHS1
+  PX4 param: UXRCE_DDS_CFG=102
+  Latency: ≤ 100 ms actuation  [IR-006]
+end note
+
+' ═══════════════════════════════════════════════════
+' HIF-002: INTERNAL ETHERNET (192.168.12.x)
+' ═══════════════════════════════════════════════════
+
+BB <-[#208040,thickness=2]-> PX4_HW : **HIF-002**  100BASE-T (on-board)\n192.168.12.1 ↔ 192.168.12.2\nUDP:8888 uXRCE-DDS secondary
+
+' ═══════════════════════════════════════════════════
+' HIF-003: CSI-2 CAMERA
+' ═══════════════════════════════════════════════════
+
+CAM -[#7030A0,thickness=2]-> JET_HW : **HIF-003**  MIPI CSI-2 (2-lane)\n22-pin FPC 0.5 mm pitch\nD-PHY HS: 200 mV diff\nI²C @ 400 kHz (addr 0x10)\nCLKIN 24 MHz from Jetson\n3.3 V + 1.8 V from baseboard
+
+note on link #F0E8F8
+  /dev/video0  →  nvarguscamerasrc
+  1280×720 BGR8 ≥15 FPS
+  Max cable: 30 cm FPC
+end note
+
+' ═══════════════════════════════════════════════════
+' HIF-004: EXTERNAL ETHERNET → MANET
+' ═══════════════════════════════════════════════════
+
+AU -[#208040,thickness=2]-> BB : **HIF-004**  1000BASE-T\nRJ45 · Cat 5e STP\n≤ 3 m cable\n192.168.10.x subnet
+BB -[#208040,thickness=2]-> AU
+
+AU -[#90B890,dashed]-> GCS : MANET wireless
+AU -[#90B890,dashed]-> PEER : MANET wireless
+
+note on link #E8F4E8
+  All external traffic via this interface:
+  GCS↔MC MAVLink 2/UDP
+  GCS↔FCC MAVLink 2/UDP (routed)
+  Swarm heartbeat/coordination UDP
+end note
+
+' ═══════════════════════════════════════════════════
+' HIF-005: POWER
+' ═══════════════════════════════════════════════════
+
+BAT -[#E07000,thickness=4]-> BB : **HIF-005**  VBAT 14.8–25.2 V\nXT60 · ≤ 60 A\nInrush limit: NTC
+
+BB -[#E07000,thickness=2]-> JET_HW : 5V_SYS · 5 A
+BB -[#E07000,thickness=2]-> PX4_HW : 5V_FC  · 2 A
+BB -[#D08000]-> CAM : 3.3 V + 1.8 V\n(via J2)
+
+note on link #FFF0E0
+  INA226 on baseboard monitors VBAT
+  voltage + current → PX4 battery_status
+  Low battery RTL at 20%  [FR-072]
+end note
+
+' ═══════════════════════════════════════════════════
+' HIF-006: DEBUG
+' ═══════════════════════════════════════════════════
+
+DBG -[#5050B0,dashed]-> JET_HW : USB-C  (J4)\nUSB 3.2 Gen2\nRecovery / ADB / UMS
+
+DBG -[#5050B0,dashed]-> JET_HW : UART console  (J5)\nJST-GH 6-pin · 3.3 V\n115200/8N1\n/dev/ttyTHS0
+
+DBG -[#A06010,dashed]-> PX4_HW : Pixhawk debug  (J6)\nJST-SH 6-pin\nNuttX console + SWD
+
+@enduml

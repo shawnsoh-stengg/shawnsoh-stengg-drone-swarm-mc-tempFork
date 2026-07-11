@@ -1,0 +1,6 @@
+build/
+install/
+log/
+
+# Fetched via px4_msgs.repos (scripts/05-build-workspace.sh) — not vendored.
+src/px4_msgs/

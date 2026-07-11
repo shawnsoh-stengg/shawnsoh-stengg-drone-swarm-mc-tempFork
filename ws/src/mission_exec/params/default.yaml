@@ -1,0 +1,6 @@
+# Placeholder — real tunables land with the mission_executor_node /
+# search_planner_node implementation (SDD-MC-001 §2.4).
+mission_executor_node:
+  ros__parameters: {}
+search_planner_node:
+  ros__parameters: {}

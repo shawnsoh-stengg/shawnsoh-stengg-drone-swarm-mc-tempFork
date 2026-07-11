@@ -1,0 +1,35 @@
+# /etc/netplan/01-drone-mc.yaml — Jetson dual-IP eth0 configuration.
+# Installed by scripts/01-install-os.sh (TP-SM-001). HID-MC-001 §4.2 (HIF-002), §6.2 (HIF-004).
+#
+# The Jetson Orin NX built-in NIC does not enumerate as "eth0" — it gets a
+# PCIe-path predictable name from systemd (observed: enP8p1s0; this can
+# differ across baseboards/kernels). `match`+`set-name` below renames
+# whatever the kernel calls it to "eth0" at boot, so every other doc/script
+# in this repo (HID-MC-001, health checks, tcpdump commands, etc.) can keep
+# referring to the stable logical name "eth0".
+#
+# Match by MAC address, not by name. udev's own predictable-naming rule
+# renames the kernel's default "eth0" to "enP8p1s0" as part of the same
+# early `add` uevent this rule fires on — matching by `name: enP8p1s0` is a
+# race against that rename and was observed to fail silently on cold boot
+# (interface stayed "enP8p1s0", unmanaged, no IPs) even though a manual
+# `netplan apply` after boot renamed it fine. Matching by macaddress uses a
+# stable hardware property available before any renaming happens, so it
+# resolves deterministically every boot. If the NIC (and thus its MAC) is
+# ever replaced, update `match.macaddress` here.
+#
+# eth0 carries two subnets:
+#   192.168.10.11/24 — MANET-facing address (HIF-004): GCS, peer MCs
+#   192.168.12.1/24  — FCC-internal address (HIF-002): Pixhawk Ethernet fallback
+network:
+  version: 2
+  ethernets:
+    eth0:
+      match:
+        macaddress: 3c:6d:66:c3:a6:39
+      set-name: eth0
+      addresses:
+        - 192.168.10.11/24
+        - 192.168.12.1/24
+      nameservers:
+        addresses: []

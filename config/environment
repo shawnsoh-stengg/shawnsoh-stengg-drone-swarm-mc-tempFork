@@ -1,0 +1,50 @@
+# /etc/drone-mc/environment — default deployment environment variables.
+# Bind-mounted read-only into every drone-mc Docker container (SDD §12.2).
+# Edit per-drone values (DRONE_ID, MC_VERSION, FCC_TRANSPORT) before
+# starting drone-mc.target on each vehicle.
+
+# --- Drone identity ---
+DRONE_ID=1
+MC_VERSION=dev
+
+# --- FCC transport (SDD §3, ICD §9.4) ---
+# serial: ttyTHS1 via uXRCE-DDS (production default, HID §HIF-001)
+# ethernet: 192.168.12.x UDP (fallback, HID §HIF-002)
+FCC_TRANSPORT=serial
+FCC_SERIAL_DEVICE=/dev/ttyTHS1
+FCC_SERIAL_BAUD=921600
+FCC_ETH_IP=192.168.12.31
+FCC_ETH_PORT=8888
+
+# Mission protocol (MAVLink, always on 192.168.12.x — independent of
+# FCC_TRANSPORT above; stock PX4 has no DDS-writable mission topic, IR-007)
+FCC_MISSION_PORT=14555
+
+# --- GCS (ICD §IFD-002) ---
+GCS_IP=192.168.10.10
+GCS_MAV_PORT_RECV=14551
+GCS_MAV_PORT_SEND=14552
+
+# --- Swarm (ICD §IFD-003) ---
+SWARM_HB_PORT=14900
+SWARM_COORD_PORT=14901
+
+# --- Safety thresholds (SRS FR-010, FR-011) ---
+LOW_BATTERY_THRESHOLD=0.20
+GCS_LINK_TIMEOUT_S=10
+FCC_LINK_TIMEOUT_S=1
+EXECUTOR_WD_TIMEOUT_S=5
+
+# --- Simulation ---
+# Set to true to use MavlinkUdpBackend instead of XrceDdsBackend (SDD §13.1).
+SIMULATION_MODE=false
+
+# --- ROS 2 / DDS ---
+ROS_DOMAIN_ID=0
+CYCLONEDDS_URI=/etc/drone-mc/cyclonedds.xml
+
+# --- Camera (ICD §IFD-004) ---
+CAMERA_CALIBRATION_FILE=/etc/drone-mc/camera_calibration.yaml
+CAMERA_WIDTH=1280
+CAMERA_HEIGHT=720
+CAMERA_FPS=30

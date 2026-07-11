@@ -1,0 +1,56 @@
+// Copyright 2026 Jun Hong Lee. All rights reserved.
+// Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §3, ICD-MC-001 §3).
+
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+#include "rclcpp/time.hpp"
+
+namespace fcc_bridge
+{
+
+// Aggregated FCC vehicle state (SDD §3.2). Populated by FccBackend
+// implementations from whatever transport-specific messages they receive;
+// application nodes never see the underlying transport types.
+struct VehicleState
+{
+  // Position/velocity, NED frame (m, m/s) — from vehicle_local_position
+  float x{0.0F};
+  float y{0.0F};
+  float z{0.0F};
+  float vx{0.0F};
+  float vy{0.0F};
+  float vz{0.0F};
+  bool xy_valid{false};
+  bool z_valid{false};
+
+  // Geodetic position — from vehicle_global_position
+  double lat{0.0};
+  double lon{0.0};
+  float alt_msl{0.0F};
+
+  // Attitude quaternion [w, x, y, z], body FRD -> NED — from vehicle_attitude
+  std::array<float, 4> q{1.0F, 0.0F, 0.0F, 0.0F};
+
+  // Heading, rad, from North — from vehicle_local_position
+  float heading{0.0F};
+
+  // From battery_status
+  float battery_remaining{-1.0F};
+
+  // From vehicle_status
+  uint8_t arming_state{0};
+  uint8_t nav_state{0};
+
+  // See note in XrceDdsBackend::on_vehicle_status — stock PX4 v1.14
+  // VehicleStatus has no failure_detector_status field; this is
+  // currently populated from vehicle_status.failsafe as a placeholder
+  // pending an ICD correction.
+  uint16_t failure_flags{0};
+
+  rclcpp::Time stamp{};
+};
+
+}  // namespace fcc_bridge

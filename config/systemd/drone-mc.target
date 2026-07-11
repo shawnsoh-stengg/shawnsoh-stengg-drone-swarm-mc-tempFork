@@ -1,0 +1,15 @@
+# drone-mc.target — top-level target grouping all 8 AI Mission Computer
+# services (SDD-MC-001 §12.4). Installed by scripts/02-install-systemd-units.sh.
+#
+#   systemctl start drone-mc.target   brings up all 8 containers in
+#                                      dependency order (see drone-mc-*.service).
+#   systemctl stop  drone-mc.target   stops every unit that declares
+#                                      PartOf=drone-mc.target, cleanly.
+[Unit]
+Description=Drone MC — AI Mission Computer (all services)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,163 @@
+@startuml 24-hid-power-distribution
+' ─────────────────────────────────────────────────────────────
+' Diagram 24: Power Rail Distribution
+' MC-HID-001 §7 — HIF-005
+' ─────────────────────────────────────────────────────────────
+
+title "24 — Power Rail Distribution\nHIF-005 · Battery to All Consumers  ·  MC-HID-001 §7"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 5
+
+skinparam rectangle {
+  BorderThickness 1.5
+  FontSize 9
+}
+
+skinparam package {
+  BorderThickness 2
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam arrow {
+  Color #3D5A80
+  FontColor #1C2334
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' SOURCE
+' ═══════════════════════════════════════════════════
+
+rectangle "LiPo Battery\n4S: 14.8 V (nom) · 16.8 V (full)\n6S: 22.2 V (nom) · 25.2 V (full)\nXT60 female\n≤ 60 A continuous · 120 A peak 10 s" as BAT #FFD4A8
+
+' ═══════════════════════════════════════════════════
+' PROTECTION AND MEASUREMENT
+' ═══════════════════════════════════════════════════
+
+rectangle "J1  XT60 male\nInput connector\nPolarity-keyed" as J1 #FFD4A8
+
+rectangle "NTC Inrush Limiter\nLimits di/dt at power-on\nInrush ≤ 8 A for 2 ms\nDo not power-cycle < 10 s" as NTC #F4C890
+
+rectangle "INA226 Power Monitor\nVoltage sense: VBAT ±0.1%\nCurrent sense: ±0.1%\nI²C → PX4 → battery_status\n≥ 2 Hz update rate" as INA #F4C890
+
+' ═══════════════════════════════════════════════════
+' REGULATORS
+' ═══════════════════════════════════════════════════
+
+rectangle "DC-DC Regulator A\nVBAT → 5V_SYS\nSync buck · η ≥ 90%\nSoft-start · OCP · OVP" as REGA #FFE4A0
+
+rectangle "DC-DC Regulator B\nVBAT → 5V_FC\nSync buck · isolated from 5V_SYS\nSoft-start · OCP · OVP" as REGB #FFE4A0
+
+rectangle "LDO C\n5V_SYS → 3.3V_PERIPH\n±3% · 1 A max\nCamera · UART pull-ups" as REGC #FFF4C0
+
+rectangle "LDO D\n5V_SYS → 1.8V_PERIPH\n±3% · 500 mA max\nIMX219 digital core" as REGD #FFF4C0
+
+' ═══════════════════════════════════════════════════
+' CONSUMERS — 5V_SYS
+' ═══════════════════════════════════════════════════
+
+package "Jetson Orin NX 16GB  (5V_SYS)" as JET_PKG #D8E8F4 {
+  rectangle "CPU (8-core Arm Cortex-A78AE)\nIdle: 1.0 A  ·  Peak: 2.5 A" as JET_CPU #B8D4EC
+  rectangle "GPU (1024-core Ampere)\nInference peak: +1.5 A" as JET_GPU #B8D4EC
+  rectangle "LPDDR5 16 GB RAM\nIdle: 0.2 A  ·  Peak: 0.8 A" as JET_RAM #B8D4EC
+  rectangle "NVMe SSD (if fitted)\nPeak: 0.6 A" as JET_SSD #B8D4EC
+  rectangle "USB / HDMI peripherals\nPeak: 0.3 A" as JET_USB #B8D4EC
+}
+
+rectangle "Jetson Total\nIdle: ~1.0 A\nPeak (inference): ~4.2 A\nRated supply: 5 A" as JET_TOT #90B8DC
+
+' ═══════════════════════════════════════════════════
+' CONSUMERS — 5V_FC
+' ═══════════════════════════════════════════════════
+
+package "Pixhawk 6X  (5V_FC)" as PX4_PKG #F4EAD4 {
+  rectangle "STM32H7 MCU + sensors\nIdle: 200 mA  ·  Active: 450 mA" as PX4_MCU #E8D4A8
+  rectangle "GPS module (if powered from FC)\n~100 mA additional" as PX4_GPS #E8D4A8
+  rectangle "Telemetry / USB (active)\nPeak: 700 mA total" as PX4_TEL #E8D4A8
+}
+
+rectangle "Pixhawk Total\nIdle: 200 mA\nPeak: 700 mA\nRated supply: 2 A" as PX4_TOT #E8C880
+
+' ═══════════════════════════════════════════════════
+' CONSUMERS — 3.3V / 1.8V
+' ═══════════════════════════════════════════════════
+
+package "IMX219 Camera  (3.3V + 1.8V)" as CAM_PKG #EDE0F8 {
+  rectangle "Analog / pixel array\n3.3 V · 280 mA active" as CAM_A #D8C0F0
+  rectangle "Digital core / MIPI D-PHY\n1.8 V · 150 mA active" as CAM_D #D8C0F0
+}
+
+rectangle "UART pull-ups  (3.3V)\nNegligible (< 10 mA)" as PULLUPS #F0F0F0
+
+' ═══════════════════════════════════════════════════
+' POWER FLOW
+' ═══════════════════════════════════════════════════
+
+BAT   -[#E07000,thickness=4]-->  J1   : VBAT
+J1    -[#E07000,thickness=4]-->  NTC  : VBAT (inrush protected)
+NTC   -[#E07000,thickness=4]-->  INA  : VBAT (measured)
+INA   -[#E07000,thickness=3]-->  REGA : VBAT → 5V_SYS
+INA   -[#E07000,thickness=3]-->  REGB : VBAT → 5V_FC
+
+REGA  -[#E07000,thickness=3]-->  JET_TOT  : 5V_SYS · 5 A rated
+REGA  -[#D08000,thickness=2]-->  REGC     : → 3.3V_PERIPH
+REGA  -[#D08000,thickness=2]-->  REGD     : → 1.8V_PERIPH
+REGB  -[#E07000,thickness=3]-->  PX4_TOT  : 5V_FC  · 2 A rated
+
+JET_TOT --> JET_CPU : power
+JET_TOT --> JET_GPU : power
+JET_TOT --> JET_RAM : power
+JET_TOT --> JET_SSD : power
+JET_TOT --> JET_USB : power
+
+PX4_TOT --> PX4_MCU : power
+PX4_TOT --> PX4_GPS : power
+PX4_TOT --> PX4_TEL : power
+
+REGC  -[#D08000]--> CAM_A    : 3.3V · 280 mA
+REGD  -[#D08000]--> CAM_D    : 1.8V · 150 mA
+REGC  -[#D08000]--> PULLUPS  : 3.3V
+
+' ═══════════════════════════════════════════════════
+' NOTES
+' ═══════════════════════════════════════════════════
+
+note right of INA
+  INA226 data path:
+  INA226 → I²C → PX4 power monitor driver
+  → uORB battery_status
+  → uXRCE-DDS → /mc/fcc/vehicle_state
+  → health_monitor_node
+  → GCS MC_HEALTH (50103)
+  Calibration: BAT1_V_DIV · BAT1_A_PER_V
+  in PX4 parameters.
+end note
+
+note right of JET_TOT
+  5V_SYS peak (4.2 A) is below 5 A rail limit.
+  Baseboard bulk capacitance (2× 470 µF) absorbs
+  GPU inference inrush transients.
+  nvpmodel mode 2 (15 W limit) available if
+  GPU temperature exceeds 90 °C.
+end note
+
+note bottom of PX4_TOT
+  5V_FC is isolated from 5V_SYS to prevent
+  Jetson GPU noise coupling into FCC sensors.
+  Do NOT cross-connect 5V_SYS and 5V_FC.
+end note
+
+@enduml

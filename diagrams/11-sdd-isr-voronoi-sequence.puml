@@ -1,0 +1,196 @@
+@startuml 11-sdd-isr-voronoi-sequence
+' ─────────────────────────────────────────────────────────────
+' Diagram 11: ISR Election and Voronoi Partition — Detailed Algorithm
+' SDD §6.2 / §6.3
+' MC-SDD-001
+' ─────────────────────────────────────────────────────────────
+
+title "11 — ISR Election and Voronoi Partition\nDetailed Algorithm Sequence  ·  SDD §6.2 / §6.3"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+
+skinparam sequence {
+  ArrowColor #3D5A80
+  ArrowFontColor #1C2334
+  ArrowFontSize 9
+  ParticipantBorderColor #3D5A80
+  ParticipantFontSize 10
+  ParticipantFontStyle bold
+  LifeLineBorderColor #9AB0CC
+  BoxLineColor #8AA8C8
+  BoxBackgroundColor #F4F8FF
+  DividerBackgroundColor #E0EAFF
+  DividerBorderColor #3D5A80
+  DividerBorderThickness 1
+  DividerFontSize 10
+  DividerFontStyle bold
+  DividerFontColor #1C2334
+  GroupBodyBackgroundColor #F8FAFF
+  GroupHeaderFontColor #1C2334
+  NoteBackgroundColor #FFFAE8
+  NoteBorderColor #C09030
+  NoteFontSize 9
+}
+
+participant "mission_executor\n[Drone 1 — Coordinator]" as ME1 #B8D4F0
+participant "swarm_coordinator\n[Drone 1 — Coordinator]" as SC1 #C8A8E8
+participant "swarm_coordinator\n[Drone 2]" as SC2 #D0B8F0
+participant "swarm_coordinator\n[Drone 3]" as SC3 #D0B8F0
+participant "mission_executor\n[Drone 2/3]" as ME23 #C8D8E8
+
+' ═══════════════════════════════════════════════════
+' PHASE ENTRY
+' ═══════════════════════════════════════════════════
+== Phase Entry: MUSTER → ISR_SELECTION ==
+
+ME1 -> SC1 : /mc/mission_phase = ISR_SELECTION\n(all peers in MUSTER and quorum met)
+ME23 -> SC2 : /mc/mission_phase = ISR_SELECTION
+ME23 -> SC3 : /mc/mission_phase = ISR_SELECTION
+
+SC1 -> SC1 : Identify coordinator:\n  lowest drone_id in ALIVE set\n  drone_id 1 < 2 < 3  →  Drone 1 is coordinator
+
+note over SC1
+  If coordinator drone is LOST,
+  next-lowest-ID ALIVE drone takes over.
+  Detected by: no ISR_RESULT received
+  within 8 s of phase entry  [SDD §6.2].
+end note
+
+' ═══════════════════════════════════════════════════
+' ISR CANDIDATE BROADCAST
+' ═══════════════════════════════════════════════════
+== Step 1 — ISR_CANDIDATE Broadcast  (all drones) ==
+
+SC1 -> SC2 : ISR_CANDIDATE (0x10)\n  battery_pct · sensor_flags · dist_to_centroid_m
+SC1 -> SC3 : ISR_CANDIDATE (0x10)
+SC2 -> SC1 : ISR_CANDIDATE (0x10)
+SC2 -> SC3 : ISR_CANDIDATE (0x10)
+SC3 -> SC1 : ISR_CANDIDATE (0x10)
+SC3 -> SC2 : ISR_CANDIDATE (0x10)
+
+note over SC1
+  5 s collection window.
+  Coordinator collects candidates from all ALIVE peers.
+  Missing candidates after 5 s: use last known values
+  from SWARM_HEARTBEAT if available; else exclude drone.
+end note
+
+' ═══════════════════════════════════════════════════
+' ISR SCORING AT COORDINATOR
+' ═══════════════════════════════════════════════════
+== Step 2 — Scoring  (coordinator only, Drone 1) ==
+
+SC1 -> SC1 : score(d) = 0.4 × battery_pct/100\n         + 0.4 × 1/max(dist_m, 1)\n         + 0.2 × sensor_ok(sensor_flags)\n─────────────────────\nDrone 1: battery=80%  dist=45m  sensors=OK → score=0.67\nDrone 2: battery=65%  dist=30m  sensors=OK → score=0.72\nDrone 3: battery=90%  dist=60m  sensors=OK → score=0.64\n─────────────────────\nisr_count = ceil(3/2) = 2\nElected: [Drone 2, Drone 1]  (top 2 by score)
+
+' ═══════════════════════════════════════════════════
+' ISR RESULT BROADCAST
+' ═══════════════════════════════════════════════════
+== Step 3 — ISR_RESULT Broadcast  (coordinator → all) ==
+
+SC1 -> SC2 : ISR_RESULT (0x11)\n  isr_count=2 · total_drones=3 · isr_ids=[2,1]
+SC1 -> SC3 : ISR_RESULT (0x11)\n  isr_count=2 · total_drones=3 · isr_ids=[2,1]
+
+SC2 -> SC1 : ISR_RESULT_ACK (0x12)  accepted=1
+SC3 -> SC1 : ISR_RESULT_ACK (0x12)  accepted=1
+
+alt All ACKs received within 5 s
+  SC1 -> ME1 : /mc/swarm/isr_role = {ISR_SELECTED, role_id}
+  SC2 -> ME23 : /mc/swarm/isr_role = {ISR_SELECTED, role_id}
+  SC3 -> ME23 : /mc/swarm/isr_role = {SEARCH_RESERVE}
+else ACK missing after 5 s → re-broadcast once
+  SC1 -> SC2 : ISR_RESULT (0x11)  [retry]
+  SC1 -> SC3 : ISR_RESULT (0x11)  [retry]
+  note right of SC1 #FFEECC
+    If second attempt also times out:
+    notify mission_executor of coordination fault.
+  end note
+end
+
+' ═══════════════════════════════════════════════════
+' VORONOI PHASE ENTRY
+' ═══════════════════════════════════════════════════
+== Phase Entry: ISR_SELECTION → VORONOI_PARTITION ==
+
+ME1 -> SC1 : /mc/mission_phase = VORONOI_PARTITION
+ME23 -> SC2 : /mc/mission_phase = VORONOI_PARTITION
+
+' ═══════════════════════════════════════════════════
+' VORONOI PROPOSAL
+' ═══════════════════════════════════════════════════
+== Step 4 — VORONOI_PROPOSAL Broadcast  (ISR drones only, round=1) ==
+
+note over SC1, SC2
+  Only ISR-selected drones participate in partition.
+  Drone 3 (SEARCH_RESERVE) waits and accepts the result.
+end note
+
+SC1 -> SC2 : VORONOI_PROPOSAL (0x20)\n  round=1 · lat_e7=... · lon_e7=... · alt_m=50.0
+SC2 -> SC1 : VORONOI_PROPOSAL (0x20)\n  round=1 · lat_e7=... · lon_e7=...
+
+' ═══════════════════════════════════════════════════
+' LOCAL VORONOI COMPUTATION
+' ═══════════════════════════════════════════════════
+== Step 5 — Local Voronoi Computation  (each ISR drone independently) ==
+
+SC1 -> SC1 : 1. Project sites to local ENU (origin = polygon centroid)\n2. Fortune's sweep-line  O(n log n)  n=2 sites\n3. Clip each cell to search polygon\n   (Sutherland-Hodgman algorithm)\n4. Retain own cell  (match by site index)\n5. Back-project cell vertices to geodetic
+
+SC2 -> SC2 : (same deterministic algorithm,\n same inputs → same result)
+
+note over SC1, SC2
+  All ISR drones run the identical deterministic algorithm.
+  Same input set → same Voronoi diagram.
+  Each drone retains only its own cell.
+  Consensus check verifies agreement.
+end note
+
+' ═══════════════════════════════════════════════════
+' VORONOI ACCEPT
+' ═══════════════════════════════════════════════════
+== Step 6 — VORONOI_ACCEPT Exchange  (ISR drones) ==
+
+SC1 -> SC2 : VORONOI_ACCEPT (0x21)\n  round=1 · vertex_count=8\n  vertices[] lat_e7,lon_e7  (CCW, Drone 1 cell boundary)
+SC2 -> SC1 : VORONOI_ACCEPT (0x21)\n  round=1 · vertex_count=6\n  vertices[] (Drone 2 cell boundary)
+
+== Step 7 — Consensus Check ==
+
+SC1 -> SC1 : Compare received VORONOI_ACCEPT from Drone 2\n  against locally computed Drone 2 cell.\n  Tolerance: ≤ 1 cm per vertex.\n  MATCH → consensus declared ✓
+SC2 -> SC2 : Compare received VORONOI_ACCEPT from Drone 1\n  MATCH → consensus declared ✓
+
+alt Consensus declared by all ISR drones
+  SC1 -> ME1 : /mc/swarm/voronoi_cell\n  (own cell polygon, ordered CCW vertices)
+  SC2 -> ME23 : /mc/swarm/voronoi_cell
+  SC3 -> ME23 : /mc/swarm/voronoi_cell\n  (SEARCH_RESERVE: receives full map, no cell assigned)
+
+  ME1 -> ME1 : transition  VORONOI_PARTITION → SEARCH
+  ME23 -> ME23 : transition  VORONOI_PARTITION → SEARCH
+
+else Mismatch detected → re-proposal
+  note over SC1, SC2 #FFEECC
+    round_counter++.  Drones re-broadcast positions
+    (VORONOI_PROPOSAL round=2) and recompute.
+    Max 3 rounds before coordination fault declared.
+  end note
+end
+
+' ═══════════════════════════════════════════════════
+' RE-PARTITION ON PEER LOSS
+' ═══════════════════════════════════════════════════
+== Re-partition on Peer Loss  (during SEARCH) ==
+
+SC1 -> SC1 : Drone 2 SWARM_HEARTBEAT absent > 3 s\n→ Drone 2 state = LOST
+SC1 -> ME1 : peer_lost_event(drone_id=2)
+ME1 -> ME1 : SEARCH → VORONOI_PARTITION\n(re-enter with updated ALIVE set = {1, 3})
+SC3 -> ME23 : /mc/swarm/voronoi_cell  (new expanded cell)
+
+note over ME1, ME23
+  FCC mission cancelled.  New coverage path computed
+  by search_planner_node for new cell.  Start waypoint
+  chosen nearest to current position.  [FR-036]
+end note
+
+@enduml

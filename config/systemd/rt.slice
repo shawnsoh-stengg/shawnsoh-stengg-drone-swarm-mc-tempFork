@@ -1,0 +1,8 @@
+# rt.slice — cgroup v2 slice for latency-sensitive MC services
+# (fcc-bridge, swarm-coord). SDD-MC-001 §12.3.
+[Unit]
+Description=Drone MC — real-time services slice
+
+[Slice]
+CPUWeight=800
+MemoryHigh=4G

@@ -1,0 +1,107 @@
+@startuml 01-system-context
+' ─────────────────────────────────────────────────────────────
+' Diagram 01: System Context
+' Swarm Search Drone — Mission Computer (AI MC)
+' MC-SRS-001
+' ─────────────────────────────────────────────────────────────
+
+title "01 — System Context\nSwarm Search Drone · Mission Computer"
+
+left to right direction
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 11
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam ArrowColor #4A6080
+skinparam ArrowFontColor #4A6080
+skinparam ArrowFontSize 10
+skinparam RoundCorner 6
+skinparam Padding 6
+
+skinparam package {
+  BackgroundColor #F4F8FF
+  BorderColor #3D5A80
+  BorderThickness 2
+  FontSize 11
+  FontStyle bold
+  FontColor #1C2334
+}
+
+skinparam rectangle {
+  BackgroundColor #E8F0FA
+  BorderColor #3D5A80
+  BorderThickness 1
+  FontSize 11
+  FontColor #1C2334
+}
+
+' ── MANET MESH NETWORK ───────────────────────────────────────
+package "MANET Mesh Network  192.168.10.2x" as MANET #F0F0F0 {
+  rectangle "Mesh Radio\n(AU)" as AU #E0E0E0
+}
+
+' ── GROUND CONTROL STATION ───────────────────────────────────
+package "Ground Control Station" as GCS_PKG #D8EED8 {
+  rectangle "QGroundControl\n192.168.10.10\n\nMission Planner\nOperator Monitor" as GCS #B8DCBA
+}
+
+' ── SWARM PEERS ──────────────────────────────────────────────
+package "Swarm Peers  (192.168.10.12+)" as PEERS_PKG #F5ECF5 {
+  rectangle "Peer MC #2\n192.168.10.12" as P2 #E8D8F0
+  rectangle "Peer MC #3\n192.168.10.13" as P3 #E8D8F0
+}
+
+' ── AIRBORNE DRONE ───────────────────────────────────────────
+package "Airborne Drone" as DRONE_PKG #E8F2FC {
+
+  package "Mission Computer (MC)" as MC_PKG #CCDFF5 {
+    rectangle "Jetson Orin NX 16GB\n192.168.10.11\n──────────────────\nROS 2 Humble · CycloneDDS\nDocker Engine\ndrone-mc.target\n──────────────────\nC++17 application nodes\nAI inference (GPU)" as MC #A8CCEE
+  }
+
+  package "Flight Control Computer (FCC)" as FCC_PKG #FFECD8 {
+    rectangle "Pixhawk 6X\n192.168.10.31\n──────────────────\nPX4 v1.14 · NuttX\nuORB topics\nMAVLink 2" as FCC #FFD4A8
+  }
+
+  rectangle "IMX219\nCSI Camera" as CAM #EDE0F8
+
+  rectangle "Mission Protocol Socket\nMAVLink 2/UDP :14555\n192.168.12.31 (always ethernet)\nnot routed by mavlink-router" as MISSPROTO #F5ECF5
+}
+
+' ── CONNECTIONS ──────────────────────────────────────────────
+
+' MC ↔ FCC  (direct — not via MANET)
+MC <-right-> FCC : "  uXRCE-DDS\n  ttyTHS1 (Telem2) serial"
+
+' MC ↔ FCC mission protocol  (the one MAVLink exception on this link, IR-007)
+MC .down.> MISSPROTO : "MAVLink-Mission Comm.\n 192.168.12.3x ethernet\n  MISSION_COUNT\n  MISSION_ITEM_INT\n  MISSION_ACK"
+MISSPROTO .right.> FCC
+
+' Camera → MC
+CAM -up-> MC : "  CSI\n  /camera/image_raw\n  ≥15 FPS"
+
+' MC ↔ MANET
+MC <--> AU : "  MAVLink 2/UDP  →  GCS (MC channel)\n  Swarm heartbeat / coordination (UDP)\n  192.168.10.x"
+
+' GCS ↔ MANET
+GCS <--> AU : "  MAVLink 2/UDP  →  FCC (PX4-Flight Temetry ch.)\n  MAVLink 2/UDP  →  MC (separate ch.)\n  Mission upload · Commands · Telemetry"
+
+' Peers ↔ MANET
+P2 <--> AU : "  Swarm protocol/UDP\n  Heartbeat · Voronoi · ISR"
+P3 <--> AU : "  Swarm protocol/UDP"
+
+' FCC ↔ MANET (autopilot telemetry to GCS goes via AU)
+FCC <.> AU : "  MAVLink 2/UDP\n  (PX4-Flight Telemetry channel)"
+
+legend right
+  | Color | Subsystem |
+  | <#A8CCEE> | Mission Computer (MC) |
+  | <#FFD4A8> | Flight Controller (FCC) |
+  | <#B8DCBA> | Ground Control Station |
+  | <#E8D8F0> | Swarm Peer MCs |
+  | <#EDE0F8> | Onboard Sensors |
+  | <#F5ECF5> | MC↔FCC Mission Protocol (MAVLink exception, IR-007) |
+endlegend
+
+@enduml

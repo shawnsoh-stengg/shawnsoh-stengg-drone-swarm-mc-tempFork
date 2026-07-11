@@ -1,0 +1,202 @@
+@startuml 07-failsafe-sequence
+' ─────────────────────────────────────────────────────────────
+' Diagram 07: Failsafe and Watchdog Sequences
+' Swarm Search Drone — Mission Computer (AI MC)
+' MC-SRS-001  FR-070 to FR-076 · SFR-003 to SFR-008
+' ─────────────────────────────────────────────────────────────
+
+title "07 — Failsafe and Watchdog Sequences"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+
+skinparam sequence {
+  ArrowColor #3D5A80
+  ArrowFontColor #2A4060
+  ArrowFontSize 9
+  ParticipantBorderColor #3D5A80
+  ParticipantBackgroundColor #D8E8F8
+  ParticipantFontSize 10
+  ParticipantFontStyle bold
+  LifeLineBorderColor #8AA8C8
+  LifeLineBackgroundColor #D8E8F8
+  BoxLineColor #8AA8C8
+  BoxBackgroundColor #F4F8FF
+  DividerBackgroundColor #E8F0FA
+  DividerBorderColor #3D5A80
+  DividerFontSize 10
+  DividerFontStyle bold
+  GroupBodyBackgroundColor #FAFBFF
+  NoteBackgroundColor #FFFAE8
+  NoteBorderColor #C09030
+  NoteFontSize 9
+}
+
+participant "GCS" as GCS #D8EED8
+participant "health_monitor\n_node" as HM #D0D0D0
+participant "watchdog\nsupervisor" as WD #E8E0C0
+participant "mission_executor\n_node" as EXEC #A8CCEE
+participant "FccBackend\n(fcc_bridge)" as FCC_BE #C8E0F0
+participant "FCC\n(PX4)" as FCC #FFD4A8
+
+' ═══════════════════════════════════════════════════
+' SCENARIO A: Normal heartbeat operation
+' ═══════════════════════════════════════════════════
+== Scenario A — Normal Watchdog Operation ==
+
+loop Every 1 s  [FR-074]
+  EXEC -> WD : /mc/executor/heartbeat
+  WD -> HM : heartbeat received ✓
+end
+
+HM -> GCS : /mc/health (all nominal)
+
+' ═══════════════════════════════════════════════════
+' SCENARIO B: Executor node crash → restart
+' ═══════════════════════════════════════════════════
+== Scenario B — Executor Crash: Restart Attempt  [FR-074, SFR-003] ==
+
+EXEC ->X WD : (executor crashes — heartbeat stops)
+
+note over WD
+  Watchdog polls /mc/executor/heartbeat.
+  Timeout threshold: 5 s  [FR-074]
+end note
+
+WD -> WD : heartbeat timeout\n(5 s silence detected)
+
+WD -> HM : EXECUTOR_UNRESPONSIVE
+HM -> GCS : MAVLink: STATUSTEXT\n"WARN: executor unresponsive, restarting"
+
+WD -> FCC_BE : vehicle_command: HOLD
+FCC_BE -> FCC : vehicle_command: HOLD
+FCC --> FCC_BE : mode = HOLD ✓
+FCC_BE --> WD : HOLD confirmed
+
+WD -> WD : systemd restart: mission-exec.service\n(attempt 1 of 3)
+
+note right of WD
+  systemctl restart mission-exec.service
+  → Docker container restart
+  → mission_executor_node relaunches
+end note
+
+EXEC -> WD : /mc/executor/heartbeat (resumed ✓)
+WD -> HM : executor recovered (attempt 1)
+HM -> GCS : STATUSTEXT "INFO: executor recovered"
+
+' ═══════════════════════════════════════════════════
+' SCENARIO C: 3× restart failure → RTL
+' ═══════════════════════════════════════════════════
+== Scenario C — 3× Restart Failure: Critical Fault → RTL  [FR-075, SFR-004] ==
+
+EXEC ->X WD : (executor fails again)
+WD -> WD : timeout (5 s)
+WD -> WD : restart attempt 1 → FAILED
+WD -> WD : restart attempt 2 → FAILED
+WD -> WD : restart attempt 3 → FAILED
+
+HM <- WD : CRITICAL_FAULT\n{node=mission_executor, restarts=3}
+
+HM -> HM : declare FAULT phase\nset /mc/mission_phase = FAULT
+
+HM -> GCS : MAVLink: STATUSTEXT\n"CRITICAL: executor failed ×3, commanding RTL"
+HM -> GCS : /mc/health {fault_mask=EXECUTOR_DEAD}
+
+HM -> FCC_BE : vehicle_command: RTL
+FCC_BE -> FCC : vehicle_command: NAV_RETURN_TO_LAUNCH
+FCC --> FCC_BE : RTL accepted ✓
+FCC_BE --> HM : RTL confirmed
+
+' ═══════════════════════════════════════════════════
+' SCENARIO D: GCS link lost → HOLD
+' ═══════════════════════════════════════════════════
+== Scenario D — GCS Link Lost: Autonomous Phase HOLD  [FR-073, SFR-007] ==
+
+GCS ->X EXEC : (GCS MAVLink link drops)
+
+note over EXEC
+  gcs_mavlink_node publishes
+  /mc/gcs/link_status.
+  Timeout threshold: 10 s  [FR-073]
+end note
+
+EXEC -> EXEC : GCS link lost timer starts
+
+EXEC -> EXEC : 10 s elapsed — GCS still absent
+
+EXEC -> FCC_BE : vehicle_command: HOLD
+FCC_BE -> FCC : vehicle_command: HOLD
+FCC --> FCC_BE : HOLD ✓
+
+EXEC -> HM : GCS_LINK_LOST event
+HM -> HM : log fault: GCS_TIMEOUT
+
+note over EXEC, HM
+  Drone holds position until GCS link
+  recovers. On recovery, GCS must
+  re-issue phase command.
+  SFR-007: applies in INGRESS, MUSTER,
+  ISR_SELECTION, VORONOI_PARTITION, SEARCH
+end note
+
+GCS -> EXEC : (link recovers)\nMAVLink HEARTBEAT received
+EXEC -> GCS : MAVLink: HEARTBEAT + status
+GCS -> EXEC : phase_command: SEARCH (resume)
+EXEC -> FCC_BE : vehicle_command: MISSION
+FCC_BE -> FCC : resume coverage path
+
+' ═══════════════════════════════════════════════════
+' SCENARIO E: Low battery → RTL
+' ═══════════════════════════════════════════════════
+== Scenario E — Low Battery: Automatic RTL  [FR-072, SFR-008] ==
+
+FCC -> FCC_BE : battery_status\n{remaining=19%, voltage=14.6V}
+FCC_BE -> EXEC : /mc/fcc/vehicle_state\n{battery_remaining=19%}
+EXEC -> HM : battery below LOW_BATTERY_THRESHOLD (20%)
+
+HM -> GCS : STATUSTEXT "WARN: battery 19%, initiating RTL"
+HM -> GCS : /mc/health {fault_mask=LOW_BATTERY}
+
+HM -> FCC_BE : vehicle_command: RTL
+FCC_BE -> FCC : NAV_RETURN_TO_LAUNCH
+FCC --> FCC_BE : RTL accepted
+
+note right of HM
+  SFR-008: RTL not suppressible unless
+  GCS override command is active AND
+  GCS link is healthy. Default: always RTL.
+end note
+
+' ═══════════════════════════════════════════════════
+' SCENARIO F: FCC comms loss → critical fault
+' ═══════════════════════════════════════════════════
+== Scenario F — FCC Communication Loss  [FR-015] ==
+
+FCC_BE ->X EXEC : (uXRCE-DDS bridge silent)
+
+note over FCC_BE
+  fcc_bridge_node monitors last
+  received uORB message timestamp.
+  Timeout: 1 s  [FR-015]
+end note
+
+FCC_BE -> FCC_BE : uXRCE-DDS silence >1 s
+FCC_BE -> HM : FCC_LINK_LOST
+HM -> GCS : STATUSTEXT "CRITICAL: FCC link lost"
+HM -> HM : declare FAULT phase
+
+note over HM
+  With no FCC link, vehicle_command
+  cannot be sent. The FCC PX4 failsafe
+  (RC loss / GCS loss) will independently
+  trigger failsafe actions.
+  MC declares FAULT and notifies GCS.
+end note
+
+HM -> GCS : /mc/health {fault_mask=FCC_LINK_DEAD}
+
+@enduml

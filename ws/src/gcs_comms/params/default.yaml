@@ -1,0 +1,4 @@
+# Placeholder — real tunables land with the gcs_mavlink_node
+# implementation (SDD-MC-001 §2.4).
+gcs_mavlink_node:
+  ros__parameters: {}

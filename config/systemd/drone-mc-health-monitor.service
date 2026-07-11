@@ -1,0 +1,30 @@
+# drone-mc-health-monitor.service — health_monitor_node (SDD §12.4: started
+# first, no peer dependencies, so it is up before every other service it
+# watches). Installed by scripts/02-install-systemd-units.sh.
+[Unit]
+Description=Drone MC — Health Monitor
+PartOf=drone-mc.target
+After=docker.service
+Requires=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-health-monitor \
+  --network=host \
+  --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/health-monitor:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-health-monitor
+Restart=on-failure
+RestartSec=5s
+MemoryMax=256M
+CPUQuota=20%
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=drone-mc.target

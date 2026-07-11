@@ -1,0 +1,165 @@
+@startuml 05-mavlink-channels
+' ─────────────────────────────────────────────────────────────
+' Diagram 05: MAVLink Channel Separation
+' Swarm Search Drone — Mission Computer (AI MC)
+' MC-SRS-001  IR-010 to IR-014
+' ─────────────────────────────────────────────────────────────
+
+title "05 — MAVLink Channel Separation\nGCS · Mission Computer · Flight Controller"
+
+top to bottom direction
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam ArrowColor #4A6080
+skinparam ArrowFontColor #2A4060
+skinparam ArrowFontSize 10
+skinparam RoundCorner 6
+skinparam Padding 6
+
+skinparam package {
+  BackgroundColor #F4F8FF
+  BorderColor #3D5A80
+  BorderThickness 2
+  FontSize 11
+  FontStyle bold
+}
+
+skinparam rectangle {
+  BackgroundColor #E8F0FA
+  BorderColor #4A6898
+  BorderThickness 1
+  FontSize 10
+}
+
+skinparam component {
+  BackgroundColor #D8E8F8
+  BorderColor #3A70A0
+  BorderThickness 1
+  FontSize 10
+}
+
+' ═══════════════════════════════════════════════════
+' GROUND CONTROL STATION
+' ═══════════════════════════════════════════════════
+package "Ground Control Station  ·  192.168.10.10" as GCS_PKG #D8EED8 {
+  component "QGroundControl\nAutopilot monitor\nMission planner" as QGC #B8DCA8
+
+  note as N_GCS
+    GCS originates two independent
+    MAVLink streams — one to the FCC
+    (autopilot) and one to the MC
+    (mission/coordination).
+    These MUST NOT be combined.
+  end note
+}
+
+' ═══════════════════════════════════════════════════
+' MANET MESH NETWORK (transport layer)
+' ═══════════════════════════════════════════════════
+package "MANET Mesh Network  ·  192.168.10.x" as MANET_PKG #F0F0F0 {
+  rectangle "Mesh Radio (AU)\nUDP transport" as AU #DCDCDC
+}
+
+' ═══════════════════════════════════════════════════
+' AIRBORNE DRONE
+' ═══════════════════════════════════════════════════
+package "Airborne Drone" as DRONE_PKG #E8F2FC {
+
+  ' ── CHANNEL A: GCS ↔ FCC ──────────────────────
+  package "Channel A — Autopilot  [GCS ↔ FCC]" as CHAN_A #FFECD8 {
+    rectangle "Pixhawk 6X FCC\n192.168.10.31\nPX4 v1.14 / NuttX\n\nMAVLink system_id=1\ncomp_id=MAV_COMP_ID_AUTOPILOT1" as FCC #FFD4A8
+
+    note as N_A
+      Standard PX4 autopilot channel.
+      GCS receives: heartbeat, attitude,
+      position, mode, battery, RC.
+      GCS sends: SET_MODE, COMMAND_LONG,
+      waypoint uploads.
+      MC does NOT inject on this channel.
+    end note
+  }
+
+  ' ── CHANNEL B: GCS ↔ MC ───────────────────────
+  package "Channel B — Mission Computer  [GCS ↔ MC]" as CHAN_B #E0F0E8 {
+
+    component "mavlink-router v4\n(routing daemon)\nSingle ingress/egress point\nfor Channel B" as MLR #B8DCA8
+
+    component "gcs_mavlink_node\n+ MAVROS\nMAVLink system_id = drone ID\ncomp_id = MAV_COMP_ID_ONBOARD_COMPUTER" as GCS_NODE #90C890
+
+    rectangle "Mission Computer (MC)\n192.168.10.11\nJetson Orin NX 16GB" as MC #A8CCEE
+
+    note as N_B
+      Dedicated MC channel.
+      GCS sends: mission upload, phase
+      commands, ARM authorisation.
+      MC sends: HEARTBEAT @1 Hz,
+      status telemetry @≥2 Hz,
+      detection reports (event-driven),
+      health status @≥1 Hz.
+    end note
+  }
+
+  ' ── INTERNAL: MC ↔ FCC ────────────────────────
+  package "Internal Link — MC ↔ FCC  [uXRCE-DDS + one MAVLink exception]" as CHAN_C #F5ECF5 {
+    rectangle "uXRCE-DDS Bridge\nttyTHS1 serial (primary)\n192.168.12.x ethernet (secondary)\nFccBackend abstraction layer" as DDS #D8C0F0
+
+    rectangle "Mission Protocol Socket\nMAVLink 2/UDP  192.168.12.31:14555\nAlways ethernet — independent of\nFCC_TRANSPORT above\nOwned directly by FccBackend\n(not routed by mavlink-router)" as MISSPROTO #E8D8F0
+
+    note as N_C
+      uXRCE-DDS carries state + commands.
+      MC reads uORB topics:
+        vehicle_local_position
+        vehicle_status · battery_status
+        vehicle_attitude · vehicle_odometry
+      MC writes uORB topics:
+        vehicle_command
+      MISSION mode only, no OFFBOARD.
+    end note
+
+    note as N_C2
+      Stock PX4 has no DDS-writable
+      mission topic — items live in
+      FCC-side dataman, reachable only
+      via the standard MAVLink mission
+      protocol (MISSION_COUNT / ITEM_INT /
+      ACK; MISSION_WRITE_PARTIAL_LIST for
+      single-item replace).  [IR-007]
+    end note
+  }
+}
+
+' ═══════════════════════════════════════════════════
+' CONNECTIONS
+' ═══════════════════════════════════════════════════
+
+' Channel A: GCS ↔ FCC  (orange)
+QGC <-[#E07000]-> AU : "  <&bolt> Channel A\n  MAVLink 2/UDP\n  Autopilot telemetry\n  & commands"
+AU <-[#E07000]-> FCC : "  <&bolt> Channel A\n  MAVLink 2/UDP"
+
+' Channel B: GCS ↔ MC  (green)
+QGC <-[#208040]-> AU : "  <&bolt> Channel B\n  MAVLink 2/UDP\n  Mission & coordination"
+AU <-[#208040]-> MLR : "  <&bolt> Channel B\n  MAVLink 2/UDP\n  via mavlink-router"
+MLR <-[#208040]-> GCS_NODE
+GCS_NODE <--> MC : "  ROS 2 topics /services\n  /mc/gcs/command\n  /mc/gcs/mission_upload"
+
+' Internal: MC ↔ FCC  (purple — uXRCE-DDS)
+MC <-[#7030A0]-> DDS : "  <&fork> Internal — uXRCE-DDS"
+DDS <-[#7030A0]-> FCC : "  <&fork> uXRCE-DDS\n  ttyTHS1 / 192.168.12.x"
+
+' Internal: MC ↔ FCC mission protocol  (magenta — MAVLink, the one exception)
+MC <-[#C020A0]-> MISSPROTO : "  <&bolt> Mission Protocol\n  MAVLink 2/UDP"
+MISSPROTO <-[#C020A0]-> FCC : "  <&bolt> :14555\n  192.168.12.x only"
+
+legend right
+  | Line | Channel |
+  | <#E07000> Orange | Channel A — GCS ↔ FCC (MAVLink 2/UDP) |
+  | <#208040> Green | Channel B — GCS ↔ MC (MAVLink 2/UDP) |
+  | <#7030A0> Purple | Internal — MC ↔ FCC state/commands (uXRCE-DDS) |
+  | <#C020A0> Magenta | Internal — MC ↔ FCC mission protocol (MAVLink 2/UDP :14555 — the one MAVLink exception on this link, IR-007) |
+endlegend
+
+@enduml

@@ -1,0 +1,31 @@
+# drone-mc-mission-exec.service — mission_executor_node + search_planner_node
+# (mission state machine, SDD §7/§12.4). Depends on swarm-coord (ISR/Voronoi
+# roles), fcc-bridge (vehicle_state) and gcs-comms (GCS override authority,
+# FR-003). Installed by scripts/02-install-systemd-units.sh.
+[Unit]
+Description=Drone MC — Mission Executor
+PartOf=drone-mc.target
+After=docker.service drone-mc-health-monitor.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service drone-mc-swarm-coord.service
+Requires=docker.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service drone-mc-swarm-coord.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-mission-exec \
+  --network=host \
+  --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/mission-exec:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-mission-exec
+Restart=on-failure
+RestartSec=5s
+MemoryMax=512M
+CPUQuota=50%
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=drone-mc.target
