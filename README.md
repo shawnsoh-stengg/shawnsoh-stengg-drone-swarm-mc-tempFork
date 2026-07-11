@@ -55,7 +55,11 @@ sudo ./scripts/01b-smoke-test-os.sh
 ./scripts/05-build-workspace.sh          # writes to /opt/drone-mc/install
 ./scripts/05b-smoke-test-colcon.sh
 
-# 3. Install the drone-mc.target systemd orchestration
+# 3. Build the fcc-bridge service image (ghcr.io/drone-mc/fcc-bridge)
+./scripts/08-build-fcc-bridge-image.sh
+./scripts/08b-smoke-test-fcc-bridge.sh
+
+# 4. Install the drone-mc.target systemd orchestration
 sudo ./scripts/02-install-systemd-units.sh
 sudo ./scripts/02b-smoke-test-units.sh
 sudo systemctl start drone-mc.target
@@ -70,6 +74,7 @@ per-package `colcon build`/`colcon test` usage.
 
 ```
 docker/ros2-core/     ros2-core base Docker image
+docker/fcc-bridge/     fcc-bridge service Docker image (FROM ros2-core)
 config/                environment, per-node params, netplan, udev, systemd units
 ws/src/                ROS 2 colcon workspace (7 first-party packages + vendored px4_msgs)
 scripts/               numbered setup/build/install scripts + smoke tests
