@@ -11,15 +11,26 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(mavlink REQUIRED)
+find_package(mc_msgs REQUIRED)
 
+# GCS-001: gcs_mavlink_node — raw-MAVLink Channel B transport (ICD §4.1/§4.2),
+# GCS command decode, link-status heartbeat monitoring (SDD §11.1). Uses the
+# same ros-humble-mavlink C headers as fcc_bridge's mission-protocol client
+# rather than MAVROS — MAVROS is not installed anywhere in this repo's
+# toolchain (docker/ros2-core/Dockerfile only provisions ros-humble-mavlink),
+# so this matches the pattern fcc_bridge already established for the
+# equivalent MC<->FCC problem instead of introducing a second, heavier
+# MAVLink integration strategy.
 add_library(gcs_mavlink_node_lib
   src/gcs_mavlink_node.cpp
 )
 target_include_directories(gcs_mavlink_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${mavlink_INCLUDE_DIRS}
 )
-ament_target_dependencies(gcs_mavlink_node_lib PUBLIC rclcpp)
+ament_target_dependencies(gcs_mavlink_node_lib PUBLIC rclcpp mc_msgs)
 
 add_executable(gcs_mavlink_node
   src/gcs_mavlink_node_main.cpp
@@ -58,6 +69,7 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_gcs_mavlink_node test/test_gcs_mavlink_node.cpp)
   target_link_libraries(test_gcs_mavlink_node gcs_mavlink_node_lib)
+  target_include_directories(test_gcs_mavlink_node PRIVATE ${mavlink_INCLUDE_DIRS})
 endif()
 
 ament_package()

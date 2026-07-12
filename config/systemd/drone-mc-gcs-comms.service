@@ -1,4 +1,4 @@
-# drone-mc-gcs-comms.service — gcs_mavlink_node + MAVROS (GCS<->MC channel).
+# drone-mc-gcs-comms.service — gcs_mavlink_node (raw-MAVLink GCS<->MC channel).
 # SDD §12.4: after fcc-bridge and mavlink-router.
 # Installed by scripts/02-install-systemd-units.sh.
 [Unit]

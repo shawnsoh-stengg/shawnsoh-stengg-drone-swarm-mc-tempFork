@@ -1217,6 +1217,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `GCS_IP` | `192.168.10.10` | GCS IP address |
 | `GCS_MAV_PORT_RECV` | `14551` | MC receive port for GCS MAVLink |
 | `GCS_MAV_PORT_SEND` | `14552` | MC send port to GCS MAVLink |
+| `GCS_MAVLINK_LOOPBACK_PORT` | `14560` | `gcs_mavlink_node`'s Channel B loopback port (`GCS_MAVLINK_NODE` endpoint, §4.2) |
 | `SWARM_HB_PORT` | `14900` | Swarm heartbeat port |
 | `SWARM_COORD_PORT` | `14901` | Swarm coordination port |
 | `LOW_BATTERY_THRESHOLD` | `0.20` | RTL trigger (0.0–1.0) |

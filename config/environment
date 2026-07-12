@@ -24,6 +24,9 @@ FCC_MISSION_PORT=14555
 GCS_IP=192.168.10.10
 GCS_MAV_PORT_RECV=14551
 GCS_MAV_PORT_SEND=14552
+# gcs_mavlink_node's own loopback socket — mavlink-router-channel-b.conf's
+# GCS_MAVLINK_NODE endpoint (ICD §4.2), not directly reachable off-box.
+GCS_MAVLINK_LOOPBACK_PORT=14560
 
 # --- Swarm (ICD §IFD-003) ---
 SWARM_HB_PORT=14900

@@ -4,12 +4,12 @@
   <name>gcs_comms</name>
   <version>0.1.0</version>
   <description>
-    GCS communication bridge (gcs_mavlink_node): MAVROS-based link to the
-    ground control station, mission upload state machine, and MC_STATUS/
-    MC_DETECTION/MC_HEALTH telemetry multiplexer. SDD-MC-001 §11.
-    SRS refs: FR-060-064, IR-010-014. This is a scaffold — the mavros
-    dependency and real node logic land with the gcs_comms implementation
-    work.
+    GCS communication bridge (gcs_mavlink_node): raw-MAVLink link to the
+    ground control station over Channel B (ICD §4.1/§4.2), GCS command
+    decode, and link-status heartbeat monitoring (GCS-001). Mission upload
+    state machine and MC_STATUS/MC_DETECTION/MC_HEALTH telemetry
+    multiplexer (GCS-002/GCS-003) land separately. SDD-MC-001 §11.
+    SRS refs: FR-060-064, IR-010-014.
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>
@@ -17,6 +17,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>mavlink</depend>
+  <depend>mc_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

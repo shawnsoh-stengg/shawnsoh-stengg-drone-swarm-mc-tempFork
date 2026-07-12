@@ -1,4 +1,3 @@
-# Placeholder — real tunables land with the gcs_mavlink_node
-# implementation (SDD-MC-001 §2.4).
 gcs_mavlink_node:
-  ros__parameters: {}
+  ros__parameters:
+    gcs_link_timeout_s: 10.0  # ICD-MC-001 §4.8
