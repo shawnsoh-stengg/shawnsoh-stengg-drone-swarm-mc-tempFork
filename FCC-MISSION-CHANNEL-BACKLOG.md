@@ -24,7 +24,15 @@ FCC-005 (mission forwarding) ──> FCC-006 (ack feedback) ──┬──> ME-
                                                             └──> SC-001 (formation_controller_node)
 
 FCC-007 (MavlinkUdpBackend / SITL) — independent, no dependency on the above
+FCC-008 (MicroXRCEAgent lifecycle) — independent, no dependency on the above;
+                                       blocks nothing here but blocks any
+                                       hardware-in-the-loop use of FCC-002 today
 ```
+
+FCC-008 isn't a mission-channel gap like the rest of this doc (it's the DDS
+vehicle-state/command link, not mission upload) — it's included here because
+it was found the same way (tracing an FCC-00X seam end to end) and follows
+the same informal ticket convention.
 
 Ticket ID prefixes are placeholders — only `FCC-XXX` has an established
 convention in this repo (informal, from code comments in `fcc_bridge`);
@@ -352,6 +360,102 @@ reaching the FCC.
   data — assumed valid by the time it reaches this node (upstream
   validation, if needed, is `gcs_mavlink_node`'s or `mission_executor_node`
   's concern).
+
+---
+
+## FCC-008: MicroXRCEAgent lifecycle — actually implement the `FCC_TRANSPORT` switch
+
+**As a** developer, **I want** a `MicroXRCEAgent` process launched with the
+transport (`serial`/`ethernet`) selected by `FCC_TRANSPORT`, **so that**
+`XrceDdsBackend`'s `/fmu/in`/`/fmu/out` DDS topics are actually backed by a
+live bridge to the Pixhawk, and FCC-002 works as HID-MC-001 §4.3 already
+documents it.
+
+### Background
+
+HID-MC-001 §4.3 states: "`XrceDdsBackend` then reads `FCC_TRANSPORT` to
+choose its DDS link (FCC-002) — no code changes either way." That's not what
+happens. `xrce_dds_backend.cpp` reads `FCC_TRANSPORT` once
+(`XrceDdsBackend`'s ctor) purely to put it in a log line — it never branches
+on the value, and nothing in the repo (Dockerfile, systemd unit, or launch
+script) ever runs `MicroXRCEAgent` at all, in either transport mode. HID
+§3.3/§4.2 document the two launch commands
+(`MicroXRCEAgent serial --dev /dev/ttyTHS1 --baudrate 921600 --rts-cts` and
+`MicroXRCEAgent udp4 --port 8888`) but they exist only as reference shell
+snippets in the doc, not as anything the system runs.
+
+Concretely: `config/environment` declares `FCC_SERIAL_DEVICE`,
+`FCC_SERIAL_BAUD`, and `FCC_ETH_PORT` (matching the env vars
+`xrce_dds_backend.hpp`'s ctor comment says it reads), but
+`xrce_dds_backend.cpp` never reads any of the three — it only reads
+`FCC_ETH_IP`/`FCC_MISSION_PORT`, both of which belong to the *mission*
+channel (always ethernet, independent of `FCC_TRANSPORT`), not the DDS
+link. So today, with `SIMULATION_MODE=false`, `fcc_bridge_node` starts,
+`XrceDdsBackend` subscribes/publishes on the `/fmu/*` DDS topics, and
+nothing ever bridges those to the Pixhawk — the node runs but is silently
+disconnected from real vehicle state until `FCC_LINK_LOST` eventually fires
+from `is_link_alive()` timing out. This is a functional gap, not just a
+missing log branch.
+
+### Acceptance Criteria
+
+- A `MicroXRCEAgent` process is running wherever `fcc_bridge` runs, started
+  before (or supervised alongside) `fcc_bridge_node`, so the `/fmu/in`/
+  `/fmu/out` DDS topics `XrceDdsBackend` uses are backed by a real bridge to
+  the FCC — not just present because CycloneDDS discovery succeeded between
+  two ROS nodes with nothing on the other end.
+- Transport is selected from `FCC_TRANSPORT` exactly as HID-MC-001 §4.3
+  documents: `serial` → `MicroXRCEAgent serial --dev $FCC_SERIAL_DEVICE
+  --baudrate $FCC_SERIAL_BAUD --rts-cts`; `ethernet` → `MicroXRCEAgent udp4
+  --port $FCC_ETH_PORT`. `FCC_SERIAL_DEVICE`, `FCC_SERIAL_BAUD`, and
+  `FCC_ETH_PORT` — already declared in `config/environment` and documented
+  in `xrce_dds_backend.hpp`'s ctor comment — are consumed for the first time
+  here (`XrceDdsBackend` itself still doesn't need them; they're the
+  agent's args, not the ROS node's).
+- Agent lifecycle is supervised by systemd, not the application: if the
+  agent dies, `Restart=on-failure` brings it back per the existing
+  `drone-mc-fcc-bridge.service` policy (or its own unit's policy, per
+  whichever deliverable option below is chosen) — `fcc_bridge_node` is not
+  responsible for spawning or restarting it.
+- `is_link_alive()`/`FCC_LINK_LOST` (FCC-004) behavior is unchanged — this
+  ticket makes the link real, it doesn't touch link-health detection logic.
+- `HID-MC-001.md` §4.3 (and `SDD-MC-001.md`'s deployment section, if it
+  describes container contents) is updated to state where the agent process
+  actually lives, replacing the current "no code changes either way"
+  language, which is inaccurate.
+
+### Deliverables
+
+- One of:
+  - **(a)** A new `drone-mc-xrce-agent.service` systemd unit (paralleling
+    `drone-mc-mavlink-router.service`), with `drone-mc-fcc-bridge.service`
+    gaining `After=`/`Requires=` on it — matches the existing pattern of
+    giving an independent-lifecycle bridge process its own unit rather than
+    embedding it in another container.
+  - **(b)** `docker/fcc-bridge/Dockerfile`'s `CMD` changed to launch
+    `MicroXRCEAgent` as a supervised background process (e.g. via a small
+    entrypoint script) ahead of `exec ros2 run fcc_bridge fcc_bridge_node`.
+  - (a) is preferred if the agent needs restart/cgroup accounting
+    independent of the ROS node's own crashes; (b) is simpler if they're
+    meant to live and die together. Pick one and note the reasoning in the
+    PR — HID-MC-001 §4.3 currently doesn't say either way.
+- Updated `HID-MC-001.md` §4.3 reflecting the actual deployment.
+- Smoke test addition (`04b-smoke-test-ros2.sh` or a new
+  `0Xb-smoke-test-xrce-agent.sh`, per the existing `NNb-smoke-test-*.sh`
+  convention) verifying the agent process is running and the selected
+  transport matches `FCC_TRANSPORT` after `drone-mc.target` starts.
+
+### Explicitly out of scope
+
+- Any change to `XrceDdsBackend`'s own env var contract or logic — it stays
+  exactly as documented in its ctor comment.
+- `MavlinkUdpBackend`/SITL (`SIMULATION_MODE=true`) — that path doesn't use
+  `MicroXRCEAgent` at all and is FCC-007's concern.
+- Deeper agent health monitoring beyond systemd's own restart policy (e.g.
+  surfacing agent-specific faults to `/mc/fault`) — `FCC_LINK_LOST` via
+  `is_link_alive()` already covers "no data arriving," which is the
+  observable symptom `health_monitor` needs regardless of *why* the agent is
+  down.
 
 ---
 
