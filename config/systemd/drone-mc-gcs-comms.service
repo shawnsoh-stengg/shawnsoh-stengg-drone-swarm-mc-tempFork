@@ -15,7 +15,7 @@ EnvironmentFile=/etc/drone-mc/environment
 ExecStart=/usr/bin/docker run --rm --name mc-gcs-comms \
   --network=host \
   --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
-  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc,readonly \
   --env-file /etc/drone-mc/environment \
   ghcr.io/drone-mc/gcs-comms:${MC_VERSION}
 ExecStop=/usr/bin/docker stop mc-gcs-comms

@@ -1,12 +1,27 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!--
-  CycloneDDS domain configuration for drone-mc containers.
+  CycloneDDS domain configuration for drone-mc containers (INFRA-004).
   Deployed to /etc/drone-mc/cyclonedds.xml — bind-mounted read-only into
   every service container (SDD §12.5, ICD §9.4).
 
-  Production:  replace NetworkInterfaceAddress with the MANET interface name or
-               192.168.10.11 (drone 1), 192.168.10.12 (drone 2), etc.
-  SITL/dev:    set NetworkInterfaceAddress to "lo" and AllowMulticast to false.
+  Discovery is unicast-only. SPDP multicast would go out on eth0, which
+  carries 192.168.10.x — the shared MANET link to the GCS and peer MCs
+  (CLAUDE.md Network Reference) — and that link is bandwidth-constrained,
+  not meant to carry DDS discovery traffic. AllowMulticast=false plus an
+  explicit Discovery/Peers list keeps discovery to known unicast addresses
+  instead.
+
+  Interfaces are pinned to eth0 (MANET uplink) and lo (every service
+  container runs in host network mode, so same-host containers all share one
+  loopback and discover each other over it without touching eth0 at all).
+
+  Per-drone deployment: extend the Peers list below with every other swarm
+  member's eth0 address (192.168.10.1N, SRS §2.3/ICD §9.4) before deploying
+  a swarm larger than the two peers shown here as an example.
+
+  SITL/dev: if eth0 doesn't exist on the workstation, drop that
+  NetworkInterface entry (lo alone is sufficient — all SITL nodes are on one
+  host).
 -->
 <CycloneDDS xmlns="https://cdds.io/config"
             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -14,13 +29,13 @@
               https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
   <Domain id="any">
     <General>
-      <!--
-        "auto" picks the first non-loopback interface. Override to the MANET
-        interface name (e.g. "eth0") or IP (e.g. "192.168.10.11") in the
-        per-drone host copy of this file.
-      -->
-      <NetworkInterfaceAddress>auto</NetworkInterfaceAddress>
-      <AllowMulticast>true</AllowMulticast>
+      <Interfaces>
+        <!-- MANET uplink to peer MCs/GCS — unicast discovery only. -->
+        <NetworkInterface name="eth0" priority="default" multicast="false"/>
+        <!-- Same-host container-to-container discovery (host network mode). -->
+        <NetworkInterface name="lo" priority="default" multicast="false"/>
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
       <!-- Keeps single DDS messages within a single UDP datagram on the MANET link. -->
       <MaxMessageSize>65500B</MaxMessageSize>
       <FragmentSize>4096B</FragmentSize>
@@ -29,6 +44,17 @@
       <ParticipantIndex>auto</ParticipantIndex>
       <!-- Enough slots for all nodes across drone-mc + a few extras for tooling. -->
       <MaxAutoParticipantIndex>32</MaxAutoParticipantIndex>
+      <!--
+        Multicast is off, so SPDP only finds participants listed here.
+        127.0.0.1 covers this drone's own containers; 192.168.10.1x entries
+        are every other drone's eth0 address (SRS §2.3 example: Peer MC #2 at
+        .12, Peer MC #3 at .13 — this drone's own address is not listed).
+      -->
+      <Peers>
+        <Peer address="127.0.0.1"/>
+        <Peer address="192.168.10.12"/>
+        <Peer address="192.168.10.13"/>
+      </Peers>
     </Discovery>
     <Internal>
       <SocketReceiveBufferSize min="10MB"/>
