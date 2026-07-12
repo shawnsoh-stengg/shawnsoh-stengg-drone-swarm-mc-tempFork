@@ -57,6 +57,23 @@ else
     echo "    Installed default environment. Edit DRONE_ID/MC_VERSION/FCC_TRANSPORT for this vehicle before starting drone-mc.target."
 fi
 
+# Every service bind-mounts the host's /etc/drone-mc over the image's own
+# copy (INFRA-004), so config files baked into an image (cyclonedds.xml) or
+# only ever shipped in the repo (the mavlink-router channel confs) must
+# also land here — otherwise the bind mount just hides them with an empty
+# directory.
+echo "==> Provisioning /etc/drone-mc/cyclonedds.xml"
+if [[ -f /etc/drone-mc/cyclonedds.xml ]]; then
+    echo "    /etc/drone-mc/cyclonedds.xml already exists — leaving per-drone Peers list untouched."
+else
+    install -m 644 "${REPO_ROOT}/docker/ros2-core/cyclonedds.xml" /etc/drone-mc/cyclonedds.xml
+    echo "    Installed default config. Edit the Peers list for this vehicle's swarm before starting drone-mc.target."
+fi
+
+echo "==> Provisioning mavlink-router channel configs (GCS-001/MAVR-001)"
+install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-a.conf" /etc/drone-mc/mavlink-router-channel-a.conf
+install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-b.conf" /etc/drone-mc/mavlink-router-channel-b.conf
+
 echo "==> Reloading systemd and enabling units"
 systemctl daemon-reload
 systemctl enable drone-mc.target

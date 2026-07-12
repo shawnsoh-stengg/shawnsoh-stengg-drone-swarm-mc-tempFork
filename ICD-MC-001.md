@@ -370,14 +370,31 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | MAVLink system_id (GCS) | 255 |
 
 > **Channel isolation:** This is Channel B (GCS ↔ MC). Channel A (GCS ↔ FCC, port 14550) is routed independently. The MC's mavlink-router must not forward Channel B traffic onto Channel A or vice versa.
+>
+> `mavlink-router` meshes every endpoint declared in one config together — it has no concept of isolated endpoint groups within a single process. Guaranteed isolation therefore comes from running two independent `mavlink-routerd` processes, one per channel, each reading its own conf file (`docker/mavlink-router/entrypoint.sh`) — not from a shared config with routing rules. `drone-mc-mavlink-router.service` runs both processes inside the one container.
 
 ### 4.2 mavlink-router Configuration
 
 ```ini
-# /etc/drone-mc/mavlink-router.conf
-# Channel B: GCS ↔ MC only
+# /etc/drone-mc/mavlink-router-channel-a.conf
+# Channel A: GCS ↔ FCC only. No MC-facing endpoint exists in this process —
+# nothing lets an MC application node inject onto Channel A.
 
-[UdpEndpoint GCS]
+[UdpEndpoint GCS_CHANNEL_A]
+Mode = Server
+Port = 14550       # bound on the MC's own address (192.168.10.11); GCS sends here
+
+[UdpEndpoint FCC_CHANNEL_A]
+Mode = Normal
+Address = 192.168.10.31
+Port = 14550
+```
+
+```ini
+# /etc/drone-mc/mavlink-router-channel-b.conf
+# Channel B: GCS ↔ MC only — a separate process from Channel A above.
+
+[UdpEndpoint GCS_CHANNEL_B]
 Mode = Normal
 Address = 192.168.10.10
 Port = 14551
