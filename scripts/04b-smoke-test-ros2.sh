@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 04b-smoke-test-ros2.sh — Verify ros2-core image: ROS 2 Humble + CycloneDDS.
-# TP-SM-004: ROS 2 Humble sourced · ros2 --version · CycloneDDS shared library present
+# TP-SM-004: ROS 2 Humble sourced · ROS_DISTRO=humble · CycloneDDS shared library present
 # Ref: SDD §13.2 smoke test pattern
 set -euo pipefail
 
@@ -20,8 +20,9 @@ check() {
 RUN=(docker run --rm "${IMAGE}")
 
 check "ros2-core image exists"        docker image inspect "${IMAGE}"
-check "ROS 2 Humble sourced"          "${RUN[@]}" bash -c "source /opt/ros/humble/setup.bash && ros2 --version"
-check "CycloneDDS shared library"     "${RUN[@]}" ldconfig -p | grep -q cyclone
+check "ROS 2 Humble sourced"          "${RUN[@]}" bash -c \
+    "source /opt/ros/humble/setup.bash && test \"\$ROS_DISTRO\" = humble && ros2 pkg list >/dev/null"
+check "CycloneDDS shared library"     "${RUN[@]}" test -f /opt/ros/humble/install/lib/librmw_cyclonedds_cpp.so
 check "rmw_cyclonedds_cpp installed"  "${RUN[@]}" bash -c \
     "source /opt/ros/humble/setup.bash && ros2 pkg list | grep -q rmw_cyclonedds_cpp"
 check "colcon in PATH"                "${RUN[@]}" which colcon
