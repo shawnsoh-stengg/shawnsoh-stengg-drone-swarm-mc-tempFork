@@ -27,20 +27,20 @@ add_executable(visual_localisation_node
 )
 target_link_libraries(visual_localisation_node visual_localisation_node_lib)
 
-# --- detection_node ------------------------------------------------------
-add_library(detection_node_lib
-  src/detection_node.cpp
+# --- perception_down_node (renamed from detection_node) ------------------
+add_library(perception_down_node_lib
+  src/perception_down_node.cpp
 )
-target_include_directories(detection_node_lib PUBLIC
+target_include_directories(perception_down_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(detection_node_lib PUBLIC rclcpp)
+ament_target_dependencies(perception_down_node_lib PUBLIC rclcpp)
 
-add_executable(detection_node
-  src/detection_node_main.cpp
+add_executable(perception_down_node
+  src/perception_down_node_main.cpp
 )
-target_link_libraries(detection_node detection_node_lib)
+target_link_libraries(perception_down_node perception_down_node_lib)
 
 install(
   DIRECTORY include/
@@ -51,13 +51,13 @@ install(
   DESTINATION share/${PROJECT_NAME}/params
 )
 install(
-  TARGETS visual_localisation_node_lib detection_node_lib
+  TARGETS visual_localisation_node_lib perception_down_node_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 install(
-  TARGETS visual_localisation_node detection_node
+  TARGETS visual_localisation_node perception_down_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -75,8 +75,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_visual_localisation_node test/test_visual_localisation_node.cpp)
   target_link_libraries(test_visual_localisation_node visual_localisation_node_lib)
 
-  ament_add_gtest(test_detection_node test/test_detection_node.cpp)
-  target_link_libraries(test_detection_node detection_node_lib)
+  ament_add_gtest(test_perception_down_node test/test_perception_down_node.cpp)
+  target_link_libraries(test_perception_down_node perception_down_node_lib)
 endif()
 
 ament_package()

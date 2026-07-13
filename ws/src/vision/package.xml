@@ -6,8 +6,8 @@
   <description>
     Layer 4 mission-intelligence vision pipeline: GNSS-denied visual
     odometry (visual_localisation_node, SDD-MC-001 §8, FR-050-053/IR-032)
-    and YOLOv8n/TensorRT detection with geolocation (detection_node,
-    SDD-MC-001 §9, FR-042-044/PR-007).
+    and YOLOv8n/TensorRT detection with geolocation (perception_down_node,
+    renamed from detection_node, SDD-MC-001 §9, FR-042-044/PR-007).
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>
