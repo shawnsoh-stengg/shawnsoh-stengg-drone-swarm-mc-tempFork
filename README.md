@@ -48,16 +48,16 @@ sudo ./scripts/01-install-os.sh
 sudo ./scripts/01b-smoke-test-os.sh
 
 # 1. Build the ros2-core base Docker image
-./scripts/04-install-ros2-core.sh
-./scripts/04b-smoke-test-ros2.sh
+sudo ./scripts/04-install-ros2-core.sh
+sudo ./scripts/04b-smoke-test-ros2.sh
 
 # 2. Build the shared colcon workspace (ws/src/) inside the container
-./scripts/05-build-workspace.sh          # writes to /opt/drone-mc/install
-./scripts/05b-smoke-test-colcon.sh
+sudo ./scripts/05-build-workspace.sh          # writes to /opt/drone-mc/install
+sudo ./scripts/05b-smoke-test-colcon.sh
 
 # 3. Build the fcc-bridge service image (ghcr.io/drone-mc/fcc-bridge)
-./scripts/08-build-fcc-bridge-image.sh
-./scripts/08b-smoke-test-fcc-bridge.sh
+sudo ./scripts/08-build-fcc-bridge-image.sh
+sudo ./scripts/08b-smoke-test-fcc-bridge.sh
 
 # 4. Install the drone-mc.target systemd orchestration
 sudo ./scripts/02-install-systemd-units.sh
