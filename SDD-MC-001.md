@@ -24,7 +24,8 @@
 6. [swarm_coordinator_node — Swarm Management](#6-swarm_coordinator_node--swarm-management)
 7. [search_planner_node — Coverage Path Planning](#7-search_planner_node--coverage-path-planning)
 8. [visual_localisation_node — GNSS-Denied Localisation](#8-visual_localisation_node--gnss-denied-localisation)
-9. [detection_node — AI Inference Pipeline](#9-detection_node--ai-inference-pipeline)
+9. [perception_down_node — AI Inference Pipeline](#9-perception_down_node--ai-inference-pipeline)
+9a. [perception_front_node and video_mux_node — Gimbal Video Perception and Uplink](#9a-perception_front_node-and-video_mux_node--gimbal-video-perception-and-uplink)
 10. [health_monitor_node — System Health and Failsafe](#10-health_monitor_node--system-health-and-failsafe)
 11. [gcs_mavlink_node — GCS Communication](#11-gcs_mavlink_node--gcs-communication)
 12. [Deployment Design](#12-deployment-design)
@@ -79,10 +80,10 @@ Four principles govern the design:
 ┌──────────────────────────────────────────────────────────────┐
 │  Layer 4 — Mission Intelligence                              │
 │  swarm_coordinator · mission_executor · search_planner       │
-│  visual_localisation · detection_node                        │
+│  visual_localisation · perception_down · perception_front    │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 3 — GCS and Swarm Communication                       │
-│  gcs_mavlink_node · MAVROS · mavlink-router                  │
+│  gcs_mavlink_node · MAVROS · mavlink-router · video_mux_node  │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 2 — FCC Abstraction (FccBackend)                      │
 │  fcc_bridge_node · Micro XRCE-DDS Agent                      │
@@ -136,6 +137,8 @@ Layers only communicate downward via well-defined interfaces. Layer 4 nodes neve
                   gcs_mavlink_node (→ GCS)
 ```
 
+`perception_front_node` and `video_mux_node` (§9a) form a separate pipeline — gimbal camera → GCS video — with no dependency on the graph above; a stall or fault in either has no effect on flight control or the swarm/GCS telemetry paths shown here.
+
 ### 2.3 Threading and Concurrency Model
 
 Each node uses `rclcpp::executors::MultiThreadedExecutor` with two `CallbackGroup` instances:
@@ -176,6 +179,7 @@ Parameters are loaded at node startup via `--ros-args --params-file` in the cont
 When `SIMULATION_MODE=true`:
 - `fcc_bridge_node` uses `MavlinkUdpBackend` pointed at the SITL UDP address instead of uXRCE-DDS.
 - `camera_node` publishes synthetic frames from a ROS 2 bag or a Gazebo camera topic.
+- `perception_front_node` connects to a local test RTSP server (e.g. `rtsp-simple-server` looping a recorded clip) instead of the physical gimbal camera at 192.168.10.200.
 - All other nodes are unchanged — the transport-agnostic design makes this transparent.
 
 This is enforced by a factory function called once at node startup, not by conditional compilation.
@@ -657,7 +661,7 @@ The covariance published in `/mc/local_pose` reflects estimated VO drift (grows 
 
 ---
 
-## 9. detection_node — AI Inference Pipeline
+## 9. perception_down_node — AI Inference Pipeline (renamed from detection_node)
 
 **SRS refs:** FR-042–044, PR-007  
 **Package:** `vision`
@@ -739,6 +743,72 @@ Inference is limited to consume ≤ 80% of GPU throughput (PR-010). This is enfo
 
 ---
 
+## 9a. perception_front_node and video_mux_node — Gimbal Video Perception and Uplink
+
+**SRS refs:** FR-080–084, IR-040–042
+**Package:** `video_uplink`
+
+### 9a.1 perception_front_node — RTSP Ingest, Inference, and Tracking
+
+```
+rtsp://192.168.10.200:8554/stream1 ──► rtspsrc (H.265 depay/decode, HIF-007/IFD-006)
+                                              │
+                                              ▼
+                                     Frame queue (max depth = 2, drop oldest)
+                                              │
+                                              ▼
+                                     Preprocessing (resize to model input)
+                                              │
+                                              ▼
+                                     TensorRT inference — same engine as
+                                     perception_down_node (§9.2)
+                                              │
+                                              ▼
+                                     NMS (IoU 0.45 / conf 0.5)
+                                              │
+                                              ▼
+                                     Geolocation (§9.3 algorithm; gimbal-mount TF)
+                                              │
+                                ┌─────────────┴──────────────┐
+                                ▼                              ▼
+                     /mc/perception/front/detections   IoU-based greedy tracker
+                     (DetectionArray, event-driven,      (frame-to-frame association)
+                      FR-081)                                    │
+                                                                  ▼
+                                                    /mc/perception/front/tracks
+                                                    (TrackArray, ≥ 5 Hz, FR-081)
+```
+
+The node reuses the same TensorRT engine and geolocation math as `perception_down_node` (§9.2, §9.3) — only the frame source (`rtspsrc` vs. CSI) and the camera-to-body TF (gimbal mount vs. downward mount) differ. Running both pipelines concurrently is subject to the shared ≤ 80% GPU throughput budget (PR-010, FR-082); each has its own `inference_rate_limit_fps` parameter so one can be turned down independently of the other under load.
+
+**Tracker:** a track is created for each unmatched detection. On each new frame, detections are greedily matched to existing tracks by bounding-box IoU (`track_iou_threshold`, default 0.3); a match increments `frames_tracked`, a miss increments a per-track miss counter. A track is dropped after `track_miss_limit` (default 10) consecutive misses.
+
+**Link health:** `rtspsrc` is configured to auto-reconnect on error. If no frame arrives for `gimbal_link_timeout_s` (default 3 s, ICD IFD-006 §7.3 / FR-084), the node stops publishing tracks/detections and its liveness heartbeat goes silent; `health_monitor_node` (§10.2) detects this, sets `GIMBAL_LINK_LOST` in `fault_mask` and clears `GIMBAL_OK` in `sensor_flags`. Per FR-084 this is deliberately excluded from the failsafe decision tree (§10.3) — it is perception-only and never commands a flight-mode change.
+
+### 9a.2 video_mux_node — GCS Video Re-encode and Metadata Mux
+
+```
+perception_front_node frame stream ──► GStreamer encode (H.265, nvv4l2h265enc)
+  + /mc/perception/front/detections               │
+  + /mc/perception/front/tracks                    ▼
+                                          KLV-style metadata mux (ICD IFD-007 §8.2:
+                                          time_usec, track_id, class_id, confidence,
+                                          lat/lon/alt)
+                                                     │
+                                                     ▼
+                                          RTSP server :8555 → GCS
+                                          (rtsp://192.168.10.11:8555/mc_video)
+                                                     │
+                                                     ▼
+                                          /mc/video/uplink_status (≥ 1 Hz)
+```
+
+`video_mux_node` is independent of `gcs_mavlink_node` — it owns its own RTSP server and never touches the MAVLink GCS channel (IR-041, IR-042). `streaming` in `/mc/video/uplink_status` is `false` until `perception_front_node` frames are flowing and a GCS RTSP client has connected; `client_connected` and `bitrate_kbps` are read from the underlying GStreamer RTSP server session state.
+
+On `perception_front_node` frame/track silence > 3 s, `video_mux_node` stops serving new frames and sets `streaming=false`, tearing down the active RTSP session, but keeps its encode pipeline warm so it can resume immediately once frames return (ICD IFD-007 §8.4). A GCS client disconnecting does not raise a fault — the node keeps encoding, ready for reconnect.
+
+---
+
 ## 10. health_monitor_node — System Health and Failsafe
 
 **SRS refs:** FR-070–076, SFR-001–008  
@@ -778,8 +848,10 @@ Critical nodes and timeouts:
 | `gcs_mavlink_node` | `/mc/gcs/link_status` | 2 s |
 | `swarm_coordinator_node` | `/mc/swarm/peer_states` | 3 s |
 | `camera_node` | `/camera/image_raw` | 3 s |
-| `detection_node` | `/mc/detections` (or alive topic) | 10 s |
+| `perception_down_node` | `/mc/detections` (or alive topic) | 10 s |
 | `visual_localisation_node` | `/mc/local_pose` | 5 s |
+| `perception_front_node` | `/mc/perception/front/tracks` (or alive topic) | 3 s (FR-084) |
+| `video_mux_node` | `/mc/video/uplink_status` | 2 s |
 
 ### 10.3 Failsafe Decision Tree
 
@@ -812,6 +884,9 @@ every 1 s:
   if GPU_OVERTEMP in fault_mask:
     → reduce inference_rate_limit_fps to 5 FPS (via dynamic param)
     → publish WARNING statustext
+
+  # GIMBAL_LINK_LOST (§9a.1, FR-084) is intentionally NOT handled here —
+  # it is perception-only and must never drive a flight-mode command.
 
   publish /mc/health (all metrics + fault_mask + node_alive_mask)
   publish MC_HEALTH (50103) via gcs_mavlink_node
@@ -960,7 +1035,7 @@ WantedBy=drone-mc.target
 ```
 
 Services in `rt.slice`: `fcc-bridge`, `swarm-coord`  
-Services in `be.slice`: `mavlink-router`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`
+Services in `be.slice`: `mavlink-router`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-uplink`
 
 ### 12.4 Startup Ordering
 
@@ -973,6 +1048,7 @@ drone-mc.target
   └── swarm-coord.service       (after gcs-comms)
   └── mission-exec.service      (after swarm-coord, fcc-bridge, gcs-comms)
   └── vision.service            (after fcc-bridge)
+  └── video-uplink.service      (no dependencies — HIF-007 is a separate physical link)
 ```
 
 ### 12.5 Configuration Files
@@ -992,9 +1068,11 @@ All configuration lives in `/etc/drone-mc/` (bind-mounted read-only into every c
     mission_executor.yaml
     search_planner.yaml
     visual_localisation.yaml
-    detection.yaml
+    perception_down.yaml       ← renamed from detection.yaml
+    perception_front.yaml
+    video_mux.yaml
     health_monitor.yaml
-  model.onnx                   ← AI detection model
+  model.onnx                   ← AI detection model (shared by perception_down_node and perception_front_node)
 ```
 
 ---
@@ -1011,6 +1089,7 @@ The SITL environment replaces hardware interfaces transparently:
 |---|---|
 | Pixhawk 6X on ttyTHS1 | PX4 SITL on UDP 14540/14541 (Gazebo) |
 | IMX219 CSI camera | ROS 2 bag playback via `ros2 bag play` |
+| Front gimbal IP camera | Local `rtsp-simple-server` looping a recorded clip |
 | MANET radio peers | Loopback UDP to peer SITL instances |
 | MANET radio GCS | QGroundControl on localhost |
 

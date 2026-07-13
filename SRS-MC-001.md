@@ -46,7 +46,7 @@ This specification is the primary contractual baseline between the system archit
 Requirements apply to:
 
 - Onboard functional behaviour of a single drone within a swarm during all mission phases
-- Interfaces between the MC and: the Flight Control Computer (FCC), Ground Control Station (GCS), swarm peer MCs, and the onboard IP camera
+- Interfaces between the MC and: the Flight Control Computer (FCC), Ground Control Station (GCS), swarm peer MCs, the onboard downward-facing IP camera, and the front gimbal IP camera / GCS video uplink
 - Software architecture, deployment packaging, and validation approach
 
 **Out of scope:** GCS software, FCC firmware (PX4), MANET radio firmware, airframe design, battery management electronics.
@@ -268,6 +268,16 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | FR-075 | MUST | Test | After 3 consecutive failed restart attempts on any critical node, the health monitor shall declare a critical fault and command FCC RTL via the FccBackend. |
 | FR-076 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous executor / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
 
+#### 4.1.9 Front Gimbal Perception and Video Uplink
+
+| ID | Priority | Verification | Requirement |
+|---|---|---|---|
+| FR-080 | MUST | Test | The MC shall continuously ingest RTSP/H.265 video from the front gimbal IP camera via `perception_front_node` and run AI inference for target detection and tracking, independently of the downward-camera detection pipeline (§4.1.5, §4.2.4). |
+| FR-081 | MUST | Test | `perception_front_node` shall report detections within 1 s of detection and publish continuously-updated tracks (track ID, class, confidence, geodetic position) at ≥ 5 Hz while the gimbal video pipeline is active. |
+| FR-082 | SHOULD | Analysis | Gimbal-camera detection processing shall run concurrently with downward-camera detection processing without degrading either pipeline's frame rate below its configured minimum. |
+| FR-083 | MUST | Test | The MC shall re-stream the front gimbal video, with embedded per-frame detection/track metadata, to the GCS via a dedicated RTSP/H.265 video uplink (`video_mux_node`), independent of the MC↔GCS MAVLink telemetry channel (§4.1.7). |
+| FR-084 | MUST | Test | Loss of the gimbal camera RTSP link for > 3 s shall be treated as perception-only degradation: the health monitor shall declare `GIMBAL_LINK_LOST` and clear the `GIMBAL_OK` sensor flag. This condition shall not trigger any flight failsafe action. |
+
 ---
 
 ### 4.2 Interface Requirements
@@ -311,6 +321,19 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | IR-031 | MUST | Test | The camera node shall publish `/camera/image_raw` and `/camera/camera_info` at ≥ 15 FPS during SEARCH and INGRESS phases. |
 | IR-032 | MUST | Test | The `visual_localisation_node` shall subscribe to `/camera/image_raw` and the IMU topic bridged from the FCC via uXRCE-DDS. |
 | IR-033 | SHOULD | Inspection | Camera calibration parameters (intrinsics, distortion model) shall be stored in a calibration file on the MC and loaded at node startup. The `camera_info` topic shall reflect the loaded calibration. |
+
+#### 4.2.5 MC ↔ Gimbal Camera
+
+| ID | Priority | Verification | Requirement |
+|---|---|---|---|
+| IR-040 | MUST | Test | The MC shall ingest RTSP/H.265 video from the front gimbal IP camera over the HIF-007 Ethernet path — the baseboard's existing internal Ethernet switch, reached via Jetson's single `eth0` interface (192.168.10.11) to the camera at 192.168.10.200 — via `perception_front_node`, independent of the downward CSI camera interface (§4.2.4). |
+
+#### 4.2.6 MC ↔ GCS Video Uplink
+
+| ID | Priority | Verification | Requirement |
+|---|---|---|---|
+| IR-041 | MUST | Test | The MC shall serve the front gimbal video (H.265) with embedded per-frame metadata (UTC timestamp, track ID, class, confidence, geodetic position) to the GCS via a dedicated RTSP session (`video_mux_node`), independent of the MC↔GCS MAVLink channel (§4.2.2). |
+| IR-042 | MUST | Inspection | The GCS video uplink RTSP session shall be independently restartable, with health reported via `/mc/video/uplink_status`, without affecting MAVLink telemetry or command traffic on the MC↔GCS channel. |
 
 ---
 
@@ -449,7 +472,7 @@ IMX219 CSI camera driver. Publishes raw image and camera info at ≥ 15 FPS. Loa
 
 **Req:** SW-017 · MUST · Test
 
-#### detection_node
+#### perception_down_node (renamed from detection_node)
 
 Subscribes to `/camera/image_raw`. Runs AI inference on Jetson GPU. Publishes detection reports with class, geodetic position estimate, confidence, and timestamp.
 
@@ -459,6 +482,27 @@ Subscribes to `/camera/image_raw`. Runs AI inference on Jetson GPU. Publishes de
 | Publishes | `/mc/detections` |
 
 **Req:** SW-018 · MUST · Test
+
+#### perception_front_node
+
+RTSP/H.265 client for the front gimbal IP camera (HIF-007, IFD-006). Runs AI inference and multi-frame tracking on Jetson GPU, independent of `perception_down_node`. Publishes detections and continuously-updated tracks.
+
+| Direction | Topics |
+|---|---|
+| Publishes | `/mc/perception/front/detections`, `/mc/perception/front/tracks` |
+
+**Req:** SW-020 · MUST · Test
+
+#### video_mux_node
+
+Subscribes to `perception_front_node`'s frame stream and track/detection topics. Re-encodes to H.265, muxes a per-frame metadata track, and serves the result to the GCS as a dedicated RTSP session (IFD-007), independent of `gcs_mavlink_node`.
+
+| Direction | Topics |
+|---|---|
+| Subscribes | `/mc/perception/front/detections`, `/mc/perception/front/tracks` |
+| Publishes | `/mc/video/uplink_status` |
+
+**Req:** SW-021 · MUST · Test
 
 #### health_monitor_node
 
@@ -480,8 +524,9 @@ Monitors CPU, memory, disk, GPU temperature, and node liveness via ROS 2 alive c
 | SW-033 | `gcs-comms` | gcs_mavlink_node, MAVROS | `network_mode=host` |
 | SW-034 | `swarm-coord` | swarm_coordinator_node, formation_controller_node | `network_mode=host` |
 | SW-035 | `mission-exec` | mission_executor_node, search_planner_node, watchdog supervisor | — |
-| SW-036 | `vision` | camera_node (gscam2), visual_localisation_node, detection_node | GPU device, `/dev/video*` |
+| SW-036 | `vision` | camera_node (gscam2), visual_localisation_node, perception_down_node (renamed from detection_node) | GPU device, `/dev/video*` |
 | SW-037 | `health-monitor` | health_monitor_node | Read-only `/sys`, `/proc` |
+| SW-038 | `video-uplink` | perception_front_node, video_mux_node | GPU device, `network_mode=host` (RTSP ports 8554/8555) |
 
 ### 5.4 Systemd Integration
 
@@ -554,15 +599,18 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | FR-050–053 | Visual localisation | T | HIL |
 | FR-060–064 | GCS communication | T / I | SITL |
 | FR-070–076 | Health and failsafe | T / I | SITL |
+| FR-080–084 | Gimbal perception and video uplink | T / A | SITL → HIL |
 | IR-001–007 | MC ↔ FCC interface | T / I | SITL → HIL |
 | IR-010–014 | MC ↔ GCS MAVLink | T / I | SITL |
 | IR-020–023 | Swarm peer protocol | T / I | SITL |
 | IR-030–033 | Camera interface | T / I | HIL |
+| IR-040 | Gimbal camera interface | T | HIL |
+| IR-041–042 | GCS video uplink | T / I | HIL |
 | PR-001–011 | Performance rates and latencies | T | SITL → HIL |
 | SFR-001–008 | Safety and failsafe | T / I | SITL |
 | SW-001–007 | Architecture and build conventions | I | Int |
-| SW-010–019 | ROS 2 node interface contracts | T | SITL |
-| SW-030–037 | Container packaging | I / T | Int |
+| SW-010–021 | ROS 2 node interface contracts | T | SITL |
+| SW-030–038 | Container packaging | I / T | Int |
 | SW-040–043 | Systemd integration | I / T | Int |
 | SW-050–052 | SITL validation coverage | T | SITL |
 

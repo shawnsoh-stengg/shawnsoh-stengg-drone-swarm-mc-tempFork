@@ -1,0 +1,6 @@
+# Placeholder — real tunables land with the perception_front_node /
+# video_mux_node implementation (SDD-MC-001 §9a).
+perception_front_node:
+  ros__parameters: {}
+video_mux_node:
+  ros__parameters: {}

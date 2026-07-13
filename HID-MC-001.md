@@ -23,9 +23,10 @@
 6. [HIF-004: MC ↔ MANET Radio (External Ethernet)](#6-hif-004-mc--manet-radio-external-ethernet)
 7. [HIF-005: Power and Electrical](#7-hif-005-power-and-electrical)
 8. [HIF-006: Debug and Maintenance Interfaces](#8-hif-006-debug-and-maintenance-interfaces)
-9. [Environmental and Mechanical](#9-environmental-and-mechanical)
-10. [Connector Quick Reference](#10-connector-quick-reference)
-11. [Configuration and Bring-Up Checklist](#11-configuration-and-bring-up-checklist)
+9. [HIF-007: MC ↔ Gimbal IP Camera (ETH Port 1)](#9-hif-007-mc--gimbal-ip-camera-eth-port-1)
+10. [Environmental and Mechanical](#10-environmental-and-mechanical)
+11. [Connector Quick Reference](#11-connector-quick-reference)
+12. [Configuration and Bring-Up Checklist](#12-configuration-and-bring-up-checklist)
 
 ---
 
@@ -89,6 +90,8 @@ MANET radio ──────── RJ45/SFP ──► Ethernet switch ──�
 
 IMX219 camera ─── 22-pin FPC ──► CSI-2 mux/connector ────► Jetson CSI port 0
 
+Gimbal IP camera ─ JST-GH (ETH1) ► Ethernet switch (shared with HIF-002/HIF-004) ──► Jetson eth0 (192.168.10.11)
+
 GCS / AU ─────── see HIF-004 ──► (via MANET radio, HIF-006)
 
 USB-C (debug) ─── USB-C port ──► Jetson USB-C (device / host)
@@ -111,6 +114,7 @@ GPS, RC, ESC, telemetry ────────► Pixhawk JST-GH ports (see Pi
 | HIF-004 | Ethernet (ext.) | RJ45 on baseboard: Jetson ↔ MANET radio AU | GCS link, swarm air-to-air comms |
 | HIF-005 | DC power | XT60 battery connector → baseboard power input | Main power for entire assembly |
 | HIF-006 | USB-C | USB-C connector on baseboard → Jetson USB3.2 Gen2 | Debug, flashing, peripheral |
+| HIF-007 | Ethernet (switched) | JST-GH (ETH port 1) on baseboard's internal Ethernet switch: shared Jetson eth0 ↔ Gimbal IP camera | Gimbal RTSP/H.265 video ingest for AI perception |
 
 ![Diagram 23 — Signal Interface Block Diagram](diagrams/23-hid-signal-interfaces.png)
 
@@ -632,9 +636,68 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 
 ---
 
-## 9. Environmental and Mechanical
+## 9. HIF-007: MC ↔ Gimbal IP Camera (ETH Port 1)
 
-### 9.1 Operating Limits
+**Primary function:** Ethernet transport for the front gimbal IP camera's RTSP/H.265 video stream, ingested by `perception_front_node` (`video_uplink` package) for onboard AI detection/tracking and re-streamed to the GCS (ICD IFD-006/IFD-007).
+
+### 9.1 Physical Layer
+
+| Parameter | Value |
+|---|---|
+| Interface type | 100BASE-TX Ethernet |
+| On-board path | JST-GH port on the Holybro baseboard's **internal Ethernet switch** — the same switch fabric used by HIF-002 (Jetson↔Pixhawk) and HIF-004 (MANET radio AU), §2.2 |
+| Connector type | JST-GH 6-pin, 1.25 mm pitch — labelled **ETH port 1** on baseboard silkscreen |
+| Jetson device node | `eth0` — the Jetson has a single Ethernet NIC; the camera is simply another switched host reachable over the existing HIF-002/HIF-004 interface, not a dedicated Jetson port |
+| Cable type | JST-GH 6-pin to RJ45 pigtail (camera end terminates in standard RJ45), Cat 5e, shielded, ≤ 2 m |
+| Camera connector | RJ45 (integrated in gimbal camera housing) |
+
+> **Note:** HIF-007 is **not** a second Jetson network interface. The JST-GH ETH port 1 connector wires into the baseboard's existing internal Ethernet switch alongside the Pixhawk Ethernet port (HIF-002) and the MANET radio AU port (HIF-004). The gimbal camera is simply one more host on the 192.168.10.0/24 switched segment, reached through Jetson's single `eth0` interface (192.168.10.11) — no new Netplan interface or kernel device is introduced.
+
+### 9.2 Connector Pinout (6-pin JST-GH)
+
+| Pin | Signal | Description |
+|---|---|---|
+| 1 | TX+ | Transmit data, positive |
+| 2 | TX− | Transmit data, negative |
+| 3 | RX+ | Receive data, positive |
+| 4 | RX− | Receive data, negative |
+| 5 | GND | Ground |
+| 6 | GND | Ground |
+
+### 9.3 Network Configuration
+
+| Interface | IP Address | Subnet | Notes |
+|---|---|---|---|
+| Jetson `eth0` (shared) | `192.168.10.11` | 255.255.255.0 | Existing HIF-002/HIF-004 interface — reused as-is, no change |
+| Gimbal IP camera | `192.168.10.200` | 255.255.255.0 | Static, configured on the camera itself. First address of the `.200`+ range reserved for gimbal/camera peripherals on the shared switch |
+
+No Netplan changes are required — the camera is just another host on the existing 192.168.10.0/24 switched segment already configured for `eth0` (HID §4.2). It is reachable, and reaches the Jetson, through the baseboard's internal switch alongside the Pixhawk (HIF-002) and MANET radio AU (HIF-004).
+
+### 9.4 Video Source
+
+| Parameter | Value |
+|---|---|
+| Protocol | RTSP 1.0, video codec H.265/HEVC |
+| Camera RTSP URL | `rtsp://192.168.10.200:8554/stream1` |
+| Resolution / frame rate | 1920×1080 @ 30 FPS (configurable on camera) |
+| Ingested by | `perception_front_node` (GStreamer `rtspsrc`), see SDD §9a |
+
+### 9.5 Link Verification
+
+```bash
+# On Jetson — confirm eth0 is up and camera is reachable
+ip -4 addr show eth0
+ping -c 4 192.168.10.200
+
+# Confirm RTSP stream is being served
+gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
+```
+
+---
+
+## 10. Environmental and Mechanical
+
+### 10.1 Operating Limits
 
 | Parameter | Specification |
 |---|---|
@@ -644,7 +707,7 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 | Maximum altitude | 4500 m MSL (reduced air cooling above 3000 m — monitor Jetson GPU temp via tegrastats) |
 | IP rating | Not rated — open-frame PCB assembly requires weather shroud on airframe |
 
-### 9.2 Vibration and Shock
+### 10.2 Vibration and Shock
 
 | Parameter | Specification |
 |---|---|
@@ -654,7 +717,7 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 
 > **Critical:** Vibration is the primary cause of FPC connector failure on the CSI-2 camera interface. Use the cable retainer clip or foam bracket as described in §5.5. After any hard landing, inspect the CSI-2 connector before the next flight.
 
-### 9.3 Mechanical Dimensions
+### 10.3 Mechanical Dimensions
 
 | Parameter | Value |
 |---|---|
@@ -667,7 +730,7 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 
 > Use current Holybro datasheet for certified dimension values.
 
-### 9.4 Thermal Management
+### 10.4 Thermal Management
 
 The Jetson Orin NX SoM includes a heatspreader but no fan. The baseboard does not include an integrated fan. For sustained AI inference loads at ambient temperatures > 40 °C, attach an active cooling solution:
 
@@ -687,7 +750,7 @@ Trigger health_monitor_node alert at GPU > 85 °C (SDD §10.1). Switch to nvpmod
 
 ---
 
-## 10. Connector Quick Reference
+## 11. Connector Quick Reference
 
 | ID | Connector label | Type | Pitch | Pins | Function | Mating connector |
 |---|---|---|---|---|---|---|
@@ -700,12 +763,13 @@ Trigger health_monitor_node alert at GPU > 85 °C (SDD §10.1). Switch to nvpmod
 | J7 | MICROSD (J) | MicroSD slot | — | — | Jetson OS / log storage | MicroSD card |
 | J8 | MICROSD (P) | MicroSD slot | — | — | PX4 flight log | MicroSD card |
 | J9–J14 | PX4 peripherals | JST-GH | 1.25 mm | 4–10 | GPS · RC · TELEM1 · TELEM2 · AUX · I²C | Per Pixhawk 6X docs |
+| J15 | ETH port 1 | JST-GH | 1.25 mm | 6 | Gimbal IP camera (shared internal switch port) | JST-GH 6-pin to RJ45 pigtail |
 
 > **Label positions:** Refer to the Holybro Pixhawk Jetson Baseboard silkscreen for the physical location of each connector. Connector designators (J1–J8) used in this document match the Holybro schematic reference designators.
 
 ---
 
-## 11. Configuration and Bring-Up Checklist
+## 12. Configuration and Bring-Up Checklist
 
 Use this checklist for initial lab bring-up and after any hardware change. Each item references the relevant HIF section.
 
@@ -713,35 +777,39 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 
 *Diagram 27 — Hardware Bring-Up and Pre-Flight Sequence: Ordered flow from first-time assembly through software configuration to pre-flight verification and post-flight inspection.*
 
-### 11.1 First-Time Assembly
+### 12.1 First-Time Assembly
 
 - [ ] **HIF-006** Flash the Jetson Orin NX module with JetPack 6.2.2 via NVIDIA SDK Manager (§8.1). Verify it boots to a login prompt before proceeding.
 - [ ] **HIF-005** Verify XT60 polarity before connecting battery. Apply power via bench PSU (current limit 5 A) on first connection.
 - [ ] **HIF-001** Check baseboard for ttyTHS1 ↔ Pixhawk UART B solder jumpers / board revision compatibility. Confirm on Holybro documentation.
 - [ ] **HIF-003** Insert MicroSD cards (Jetson and Pixhawk). Lock the CSI-2 FPC cable into the ZIF connector before applying power.
 - [ ] **HIF-006** Connect USB-C to host PC; verify Jetson appears as USB device. Boot to recovery mode if reflashing OS.
+- [ ] **HIF-007** Connect the gimbal IP camera's JST-GH-to-RJ45 pigtail to ETH port 1 (J15). Verify camera is powered per its own mounting/power documentation (out of scope here).
 
-### 11.2 Software Configuration (one-time, per drone)
+### 12.2 Software Configuration (one-time, per drone)
 
 - [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the dual-IP Netplan config (192.168.10.11/24 + 192.168.12.1/24 on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
 - [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600` via QGroundControl.
 - [ ] **HIF-002** Set PX4 Ethernet IP: `UXRCE_DDS_AG_IP = 3232238593`, `UXRCE_DDS_PORT_CFG = 8888`.
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
+- [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.10.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.10.11/24`.
 
-### 11.3 Pre-Flight Verification (each flight)
+### 12.3 Pre-Flight Verification (each flight)
 
 - [ ] **HIF-001** `ros2 topic hz /fmu/out/vehicle_status` — expect ≥ 5 Hz.
 - [ ] **HIF-002** (if Ethernet fallback active) `ping 192.168.12.2` from Jetson — expect < 1 ms RTT.
 - [ ] **HIF-003** `gst-launch-1.0 nvarguscamerasrc sensor-id=0 num-buffers=10 ! fakesink` — no errors.
 - [ ] **HIF-004** `ping 192.168.10.10` from Jetson — GCS reachable.
+- [ ] **HIF-007** `ping 192.168.10.200` from Jetson — gimbal camera reachable; confirm RTSP stream per §9.5.
 - [ ] **HIF-005** Check `battery_status.remaining` in QGroundControl — > 80% before flight.
 - [ ] **HIF-006** MicroSD (Pixhawk) seated — PX4 log recording active (green SD light on Pixhawk).
 - [ ] **ALL** Run `10b-smoke-test-networking.sh` — all checks pass.
 
-### 11.4 Post-Flight Inspection
+### 12.4 Post-Flight Inspection
 
 - [ ] **HIF-003** Inspect CSI-2 FPC cable and ZIF connector for signs of wear or displacement.
+- [ ] **HIF-007** Inspect the JST-GH-to-RJ45 pigtail and gimbal mount for connector wear or strain.
 - [ ] **HIF-005** Measure battery voltage at XT60 with multimeter. Verify no cell imbalance > 100 mV.
 - [ ] **HIF-004** Copy PX4 flight log from Pixhawk MicroSD for archiving.
 - [ ] **HIF-006** Archive Jetson system log: `journalctl --since "1 hour ago" > flight_YYYYMMDDHHmm.log`.

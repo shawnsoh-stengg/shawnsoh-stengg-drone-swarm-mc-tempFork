@@ -18,10 +18,12 @@
 3. [IFD-001: MC ↔ FCC (uXRCE-DDS + Mission Protocol)](#3-ifd-001-mc--fcc-uxrce-dds--mission-protocol)
 4. [IFD-002: MC ↔ GCS (MAVLink 2/UDP)](#4-ifd-002-mc--gcs-mavlink-2udp)
 5. [IFD-003: MC ↔ Swarm Peers (Swarm Protocol/UDP)](#5-ifd-003-mc--swarm-peers-swarm-protocoludp)
-6. [IFD-004: MC ↔ Camera (CSI / ROS 2)](#6-ifd-004-mc--camera-csi--ros-2)
-7. [IFD-005: Internal ROS 2 Topics](#7-ifd-005-internal-ros-2-topics)
-8. [Enumerations and Constants](#8-enumerations-and-constants)
-9. [Configuration Reference](#9-configuration-reference)
+6. [IFD-004: MC ↔ Downward Camera (CSI / ROS 2)](#6-ifd-004-mc--downward-camera-csi--ros-2)
+7. [IFD-006: MC ↔ Gimbal Camera (Ethernet / RTSP H.265)](#7-ifd-006-mc--gimbal-camera-ethernet--rtsp-h265)
+8. [IFD-007: MC ↔ GCS Video Uplink (RTSP H.265 + Metadata)](#8-ifd-007-mc--gcs-video-uplink-rtsp-h265--metadata)
+9. [IFD-005: Internal ROS 2 Topics](#9-ifd-005-internal-ros-2-topics)
+10. [Enumerations and Constants](#10-enumerations-and-constants)
+11. [Configuration Reference](#11-configuration-reference)
 
 ---
 
@@ -33,14 +35,16 @@ This document defines the data formats, message structures, transport parameters
 
 ### 1.2 Scope
 
-Five interface domains are defined:
+Seven interface domains are defined:
 
 | ID | Interface | Transport |
 |---|---|---|
 | IFD-001 | MC ↔ FCC | uXRCE-DDS (serial / ethernet) + MAVLink mission protocol (UDP :14555, always ethernet) |
 | IFD-002 | MC ↔ GCS | MAVLink 2/UDP via mavlink-router |
 | IFD-003 | MC ↔ Swarm Peers | Custom binary protocol / UDP / MANET |
-| IFD-004 | MC ↔ Camera | CSI → gscam2 → ROS 2 |
+| IFD-004 | MC ↔ Downward Camera | CSI → gscam2 → ROS 2 |
+| IFD-006 | MC ↔ Gimbal Camera | Ethernet (HIF-007) → RTSP/H.265 → `perception_front_node` |
+| IFD-007 | MC ↔ GCS Video Uplink | RTSP/H.265 + metadata (independent of IFD-002) |
 | IFD-005 | Internal (MC-internal) | ROS 2 topics / services (CycloneDDS) |
 
 ### 1.3 Conventions
@@ -65,6 +69,11 @@ Five interface domains are defined:
 │  Camera ──CSI──► gscam2   FCC ──DDS──► fcc_bridge   GCS ──MAV──► │
 │  /camera/         node   ttyTHS1 /    _node        mavlink-      │
 │  image_raw               192.168.12.x              router        │
+│                                                                   │
+│  IFD-006                              IFD-007                    │
+│  Gimbal camera ──eth0(switch)──► perception_ video_mux ─RTSP/H.265─► │
+│  192.168.10.200                    front_node        + metadata      │
+│                                        (:8555)          to GCS        │
 │                                                                   │
 │  IFD-005: Internal ROS 2 topics (/mc/*)                           │
 │  All nodes communicate via CycloneDDS on the shared DDS domain    │
@@ -100,7 +109,7 @@ The Micro XRCE-DDS Agent runs in the `fcc-bridge` container and bridges between 
 | Carried over | The existing HIF-002 Ethernet link (already MAVLink-capable; no new hardware) |
 | Purpose | `upload_mission()` / `update_mission_item()` only — see §3.3 `Mission Protocol` below |
 
-Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side dataman, reachable only through the standard MAVLink mission protocol. This sub-channel is therefore always active on 192.168.12.x regardless of whether `FCC_TRANSPORT` currently routes state/commands over serial or Ethernet (IR-007). It is distinct from the uXRCE-DDS Agent port (`:8888`) and the GCS↔FCC Channel A port (`:14550`, §9.2), and it is bidirectional MC↔FCC only — the MC does not use Channel A (§4).
+Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side dataman, reachable only through the standard MAVLink mission protocol. This sub-channel is therefore always active on 192.168.12.x regardless of whether `FCC_TRANSPORT` currently routes state/commands over serial or Ethernet (IR-007). It is distinct from the uXRCE-DDS Agent port (`:8888`) and the GCS↔FCC Channel A port (`:14550`, §11.2), and it is bidirectional MC↔FCC only — the MC does not use Channel A (§4).
 
 **`mavlink-router` is not involved in IFD-001** — the mission-protocol socket is owned directly by `XrceDdsBackend`/`MavlinkUdpBackend`, not routed.
 
@@ -156,8 +165,8 @@ Rate: ≥ 5 Hz
 | Field | Type | Values | Description |
 |---|---|---|---|
 | `timestamp` | `uint64` | µs | PX4 monotonic timestamp |
-| `nav_state` | `uint8` | See §8.1 | Current navigation state |
-| `arming_state` | `uint8` | See §8.2 | Arming state |
+| `nav_state` | `uint8` | See §10.1 | Current navigation state |
+| `arming_state` | `uint8` | See §10.2 | Arming state |
 | `vehicle_type` | `uint8` | 1=fixed-wing, 2=rotary | Vehicle type |
 | `failure_detector_status` | `uint16` | bitmask | Failure detector flags |
 | `system_id` | `uint8` | — | MAVLink system ID of this FCC |
@@ -176,7 +185,7 @@ Rate: ≥ 2 Hz
 | `voltage_v` | `float32` | V | Battery voltage |
 | `current_a` | `float32` | A | Battery current draw; -1 if unknown |
 | `remaining` | `float32` | 0.0–1.0 | State of charge; -1 if unknown |
-| `warning` | `uint8` | See §8.3 | Battery warning level |
+| `warning` | `uint8` | See §10.3 | Battery warning level |
 | `cell_count` | `uint8` | — | Number of cells |
 | `connected` | `bool` | — | Battery connected |
 
@@ -204,10 +213,10 @@ Rate: ≥ 20 Hz (used by visual localisation for IMU integration)
 |---|---|---|---|
 | `timestamp` | `uint64` | µs | PX4 monotonic timestamp |
 | `timestamp_sample` | `uint64` | µs | Sample timestamp |
-| `pose_frame` | `uint8` | See §8.4 | Reference frame of position/orientation |
+| `pose_frame` | `uint8` | See §10.4 | Reference frame of position/orientation |
 | `position` | `float32[3]` | m | Position `[x, y, z]` in `pose_frame` |
 | `q` | `float32[4]` | — | Attitude quaternion `[w, x, y, z]` |
-| `velocity_frame` | `uint8` | See §8.4 | Reference frame of velocity |
+| `velocity_frame` | `uint8` | See §10.4 | Reference frame of velocity |
 | `velocity` | `float32[3]` | m/s | Velocity `[vx, vy, vz]` in `velocity_frame` |
 | `angular_velocity` | `float32[3]` | rad/s | Angular velocity `[roll, pitch, yaw]` in body frame |
 | `position_variance` | `float32[3]` | m² | Position variance |
@@ -286,7 +295,7 @@ Published by: `fcc_bridge_node` on behalf of `mission_executor_node` or `health_
 | Field | Type | Description |
 |---|---|---|
 | `timestamp` | `uint64` | MC monotonic timestamp (µs) |
-| `command` | `uint32` | MAVLink command ID (see §8.5) |
+| `command` | `uint32` | MAVLink command ID (see §10.5) |
 | `param1`–`param7` | `float32` | Command parameters (MAVLink-defined per command) |
 | `target_system` | `uint8` | PX4 system ID (typically 1) |
 | `target_component` | `uint8` | PX4 component ID (typically 1) |
@@ -439,10 +448,10 @@ All MC-directed commands use `target_system = MC system_id` and `target_componen
 
 | Command | MAV_CMD ID | param1 | param2 | param3–7 | Description |
 |---|---|---|---|---|---|
-| `MC_PHASE_TRANSITION` | 50001¹ | Phase ID (§8.6) | — | — | Command MC to transition to specified mission phase |
+| `MC_PHASE_TRANSITION` | 50001¹ | Phase ID (§10.6) | — | — | Command MC to transition to specified mission phase |
 | `MC_ARM_AUTHORISE` | 50002¹ | Mission upload ID | — | — | Grant ARM authorisation for current mission |
 | `MC_END_MISSION` | 50003¹ | — | — | — | Command transition to RETURN phase |
-| `MC_GCS_OVERRIDE` | 50004¹ | 1=enable, 0=disable | Override type (§8.7) | — | Assert GCS authority override (e.g., suppress low-batt RTL) |
+| `MC_GCS_OVERRIDE` | 50004¹ | 1=enable, 0=disable | Override type (§10.7) | — | Assert GCS authority override (e.g., suppress low-batt RTL) |
 | `MAV_CMD_COMPONENT_ARM_DISARM` | 400 | 0=disarm | — | — | Emergency disarm from GCS |
 | `MAV_CMD_DO_SET_MODE` | 176 | — | — | — | Direct flight mode override (emergency) |
 
@@ -468,9 +477,9 @@ Replaces/supplements the standard `GLOBAL_POSITION_INT` for MC-specific fields. 
 | `groundspeed` | `uint16_t` | cm/s | Groundspeed |
 | `climb_rate` | `int16_t` | cm/s | Climb rate (positive = up) |
 | `battery_remaining` | `uint8_t` | % | Battery state of charge (0–100) |
-| `mission_phase` | `uint8_t` | — | Current phase (§8.6) |
+| `mission_phase` | `uint8_t` | — | Current phase (§10.6) |
 | `localisation_mode` | `uint8_t` | — | 0=GNSS, 1=VisualOdometry |
-| `fault_mask` | `uint16_t` | bitmask | Active faults (§8.8) |
+| `fault_mask` | `uint16_t` | bitmask | Active faults (§10.8) |
 | `peer_count` | `uint8_t` | — | Number of swarm peers currently ALIVE |
 | `isr_role` | `uint8_t` | — | 0=non-ISR, 1=ISR |
 
@@ -523,8 +532,8 @@ Rate: ≥ 1 Hz (FR-071).
 | `disk_used` | `uint8_t` | % | Disk utilisation (primary partition) |
 | `gpu_temp` | `uint8_t` | °C | GPU temperature |
 | `cpu_temp` | `uint8_t` | °C | CPU package temperature |
-| `fault_mask` | `uint16_t` | bitmask | Active faults (§8.8) |
-| `node_alive_mask` | `uint16_t` | bitmask | Node liveness flags (§8.9) |
+| `fault_mask` | `uint16_t` | bitmask | Active faults (§10.8) |
+| `node_alive_mask` | `uint16_t` | bitmask | Node liveness flags (§10.9) |
 | `uptime_s` | `uint32_t` | s | MC uptime in seconds |
 
 ---
@@ -616,11 +625,11 @@ Rate: 1 Hz. Payload: 40 bytes.
 | 20 | 4 | `float32` | `vx` | North velocity (m/s) |
 | 24 | 4 | `float32` | `vy` | East velocity (m/s) |
 | 28 | 4 | `float32` | `vz` | Down velocity (m/s) |
-| 32 | 1 | `uint8` | `mission_phase` | Current phase (§8.6) |
+| 32 | 1 | `uint8` | `mission_phase` | Current phase (§10.6) |
 | 33 | 1 | `uint8` | `battery_pct` | Battery remaining (0–100) |
-| 34 | 1 | `uint8` | `sensor_health` | Sensor health bitmask (§8.10) |
+| 34 | 1 | `uint8` | `sensor_health` | Sensor health bitmask (§10.10) |
 | 35 | 1 | `uint8` | `isr_role` | 0=non-ISR, 1=ISR |
-| 36 | 2 | `uint16` | `fault_mask` | Active faults (§8.8) |
+| 36 | 2 | `uint16` | `fault_mask` | Active faults (§10.8) |
 | 38 | 2 | `uint16` | `reserved` | = 0x0000 |
 
 ---
@@ -633,7 +642,7 @@ Sent by each drone during `ISR_SELECTION` phase. Payload: 12 bytes.
 |---|---|---|---|---|
 | 0 | 8 | `uint64` | `timestamp_us` | UTC timestamp (µs) |
 | 8 | 1 | `uint8` | `battery_pct` | Battery remaining (0–100) |
-| 9 | 1 | `uint8` | `sensor_flags` | Sensor capability flags (§8.10) |
+| 9 | 1 | `uint8` | `sensor_flags` | Sensor capability flags (§10.10) |
 | 10 | 2 | `uint16` | `dist_to_centroid_m` | Distance to search area centroid (m) |
 
 ---
@@ -730,7 +739,7 @@ DEAD:     Peer has been LOST for >30 s. Removed from active set.
 
 ---
 
-## 6. IFD-004: MC ↔ Camera (CSI / ROS 2)
+## 6. IFD-004: MC ↔ Downward Camera (CSI / ROS 2)
 
 **SRS refs:** IR-030 to IR-033
 
@@ -790,13 +799,103 @@ Transform from camera body frame to vehicle body frame is stored in the ROS 2 TF
 
 ---
 
-## 7. IFD-005: Internal ROS 2 Topics
+## 7. IFD-006: MC ↔ Gimbal Camera (Ethernet / RTSP H.265)
+
+**SRS refs:** IR-040, FR-080, FR-081, FR-084
+
+### 7.1 Transport
+
+| Parameter | Value |
+|---|---|
+| Physical interface | HIF-007 — ETH port 1 (JST-GH) on the baseboard's internal Ethernet switch, shared with HIF-002/HIF-004 via Jetson `eth0` |
+| Protocol | RTSP 1.0, video codec H.265/HEVC |
+| Camera address | `192.168.10.200:8554` |
+| Jetson address | `192.168.10.11` (existing `eth0` interface, §HID-007) |
+| Stream URL | `rtsp://192.168.10.200:8554/stream1` |
+| Resolution / rate | 1920×1080 @ 30 FPS (camera-side configurable) |
+| Consumer | `perception_front_node` (`video_uplink` package) via GStreamer `rtspsrc` |
+
+This interface is entirely separate from IFD-004 (downward CSI camera) — different physical link, different node, different package. It does not use `gscam2`.
+
+### 7.2 ROS 2 Topics Published by `perception_front_node`
+
+#### `/mc/perception/front/detections`
+
+Type: `mc_msgs/DetectionArray` (same type as IFD-004's detection message, §9.2 `mc_msgs/Detection`). Event-driven, within 1 s of detection (FR-081).
+
+#### `/mc/perception/front/tracks`
+
+Type: `mc_msgs/TrackArray`. Published at ≥ 5 Hz whenever the gimbal video pipeline is active (FR-081).
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `header` | `std_msgs/Header` | — | Timestamp of the source frame |
+| `tracks` | `mc_msgs/Track[]` | — | Active tracks (§9.2 `mc_msgs/Track`) |
+
+### 7.3 Timing and Error Handling
+
+| Condition | Timeout | Action | SRS Ref |
+|---|---|---|---|
+| Gimbal RTSP link silence | 3 s | Declare `GIMBAL_LINK_LOST`, clear `GIMBAL_OK` sensor flag, `perception_front_node` attempts `rtspsrc` reconnect | FR-084 |
+| Gimbal link loss | — | Does **not** trigger any flight failsafe — perception-only, no effect on FCC control | FR-084 |
+
+---
+
+## 8. IFD-007: MC ↔ GCS Video Uplink (RTSP H.265 + Metadata)
+
+**SRS refs:** IR-041, IR-042, FR-083
+
+### 8.1 Transport
+
+| Parameter | Value |
+|---|---|
+| Protocol | RTSP 1.0 over the existing MANET link (HIF-004), video codec H.265/HEVC, embedded KLV-style metadata track |
+| Server | `video_mux_node` (`video_uplink` package), bound on the MC's GCS-facing address |
+| Stream URL (GCS pulls) | `rtsp://192.168.10.11:8555/mc_video` |
+| Independent of | IFD-002 (MAVLink GCS channel) — separate port, separate process; a stalled video uplink does not affect telemetry or command/ack traffic |
+
+`video_mux_node` subscribes to `perception_front_node`'s decoded/annotated frame stream and `/mc/perception/front/tracks` + `/mc/perception/front/detections`, re-encodes to H.265, muxes in a metadata track (per-frame UTC timestamp, detection class, confidence, track ID, geodetic position), and serves the result as a single RTSP session.
+
+### 8.2 Metadata Track Contents
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `time_usec` | `uint64` | µs | UTC timestamp of muxed frame |
+| `track_id` | `uint32` | — | Track identifier (persists across frames for the same target) |
+| `class_id` | `uint16` | — | Detection class label ID |
+| `confidence` | `uint16` | 0–10000 | Confidence × 10000 |
+| `lat`, `lon` | `int32` | degE7 | Estimated target geodetic position |
+| `alt` | `int32` | mm | Estimated target altitude MSL |
+
+### 8.3 ROS 2 Topics Published by `video_mux_node`
+
+#### `/mc/video/uplink_status`
+
+Type: `mc_msgs/VideoUplinkStatus`. Rate: ≥ 1 Hz.
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `header` | `std_msgs/Header` | — | UTC timestamp |
+| `streaming` | `bool` | — | RTSP session currently serving a connected GCS client |
+| `bitrate_kbps` | `uint32` | kbps | Current output bitrate |
+| `client_connected` | `bool` | — | GCS has an active RTSP session open |
+
+### 8.4 Timing and Error Handling
+
+| Condition | Timeout | Action | SRS Ref |
+|---|---|---|---|
+| `perception_front_node` frame/track silence | 3 s | `video_mux_node` stops serving new frames, sets `streaming=false` in `/mc/video/uplink_status`; existing RTSP session is torn down | FR-083 |
+| GCS RTSP client disconnect | — | `video_mux_node` continues encoding (ready for reconnect); no fault raised | — |
+
+---
+
+## 9. IFD-005: Internal ROS 2 Topics
 
 **SRS refs:** SW-003, SW-004, SW-010 to SW-019
 
 All internal topics use the `/mc/` namespace. All custom message types are defined in the `mc_msgs` ROS 2 package.
 
-### 7.1 Topic Catalogue
+### 9.1 Topic Catalogue
 
 | Topic | Message Type | Publisher | Subscribers | Rate |
 |---|---|---|---|---|
@@ -816,13 +915,16 @@ All internal topics use the `/mc/` namespace. All custom message types are defin
 | `/mc/swarm/voronoi_cell` | `mc_msgs/VoronoiCell` | `swarm_coordinator` | `search_planner`, `mission_executor` | On change |
 | `/mc/swarm/isr_role` | `mc_msgs/IsrRole` | `swarm_coordinator` | `mission_executor` | On change |
 | `/mc/search/coverage_path` | `nav_msgs/Path` | `search_planner` | `mission_executor` | On change |
-| `/mc/local_pose` | `geometry_msgs/PoseWithCovarianceStamped` | `visual_localisation` | `detection_node`, `mission_executor`, `gcs_mavlink` | ≥ 10 Hz |
+| `/mc/local_pose` | `geometry_msgs/PoseWithCovarianceStamped` | `visual_localisation` | `perception_down`, `mission_executor`, `gcs_mavlink` | ≥ 10 Hz |
 | `/mc/localisation_mode` | `mc_msgs/LocalisationMode` | `visual_localisation` | `gcs_mavlink`, `health_monitor` | On change |
-| `/mc/detections` | `mc_msgs/DetectionArray` | `detection_node` | `gcs_mavlink` | Event-driven |
+| `/mc/detections` | `mc_msgs/DetectionArray` | `perception_down` (renamed from `detection_node`) | `gcs_mavlink` | Event-driven |
+| `/mc/perception/front/detections` | `mc_msgs/DetectionArray` | `perception_front` | `video_mux`, `gcs_mavlink` | Event-driven |
+| `/mc/perception/front/tracks` | `mc_msgs/TrackArray` | `perception_front` | `video_mux` | ≥ 5 Hz |
+| `/mc/video/uplink_status` | `mc_msgs/VideoUplinkStatus` | `video_mux` | `health_monitor` | ≥ 1 Hz |
 | `/mc/health` | `mc_msgs/SystemHealth` | `health_monitor` | `gcs_mavlink`, `mission_executor` | ≥ 1 Hz |
 | `/mc/fault` | `mc_msgs/FaultEvent` | `health_monitor` | `mission_executor` | Event-driven |
 
-### 7.2 Custom Message Definitions
+### 9.2 Custom Message Definitions
 
 #### `mc_msgs/VehicleState`
 
@@ -845,12 +947,12 @@ float32 groundspeed     # m/s
 float32 heading         # rad  from North
 float32[4] q            # [w,x,y,z] NED-to-body
 # Status
-uint8   nav_state       # PX4 nav state (see §8.1)
-uint8   arming_state    # PX4 arming state (see §8.2)
+uint8   nav_state       # PX4 nav state (see §10.1)
+uint8   arming_state    # PX4 arming state (see §10.2)
 # Battery
 float32 battery_v       # V
 float32 battery_pct     # 0.0 – 1.0
-uint8   battery_warning # see §8.3
+uint8   battery_warning # see §10.3
 # GNSS
 uint8   fix_type        # 0=no fix, 3=3D, 4=DGPS, 5=RTK float, 6=RTK fixed
 float32 hdop            # horizontal DOP
@@ -903,7 +1005,7 @@ float32[7] params            # param1-param7
 ```
 # Current mission phase
 std_msgs/Header header
-uint8 phase             # See §8.6
+uint8 phase             # See §10.6
 string phase_name       # Human-readable phase name
 uint64 phase_entered_us # UTC us when this phase was entered
 uint8  source           # 0=GCS_COMMAND 1=AUTONOMOUS 2=FAILSAFE
@@ -953,7 +1055,7 @@ mc_msgs/SwarmPeer[] peers
 ```
 uint8  drone_id
 string ip_address
-uint8  mission_phase      # see §8.6
+uint8  mission_phase      # see §10.6
 float64 lat               # deg
 float64 lon               # deg
 float32 alt_msl           # m
@@ -961,8 +1063,8 @@ float32 vx                # m/s NED
 float32 vy
 float32 vz
 float32 battery_pct       # 0.0–1.0
-uint8   sensor_flags      # see §8.10
-uint16  fault_mask        # see §8.8
+uint8   sensor_flags      # see §10.10
+uint16  fault_mask        # see §10.8
 uint8   peer_status       # 0=UNKNOWN 1=ALIVE 2=LOST 3=DEAD
 bool    is_leader
 bool    isr_role
@@ -1007,6 +1109,39 @@ uint32  bbox_w
 uint32  bbox_h
 ```
 
+#### `mc_msgs/Track`
+
+```
+# Single tracked target from perception_front_node (gimbal camera)
+uint32  track_id          # Persists across frames for the same target
+uint16  class_id
+string  class_name
+float32 confidence        # 0.0-1.0
+float64 lat                # deg - estimated target geodetic position
+float64 lon                # deg
+float32 alt_msl           # m
+uint32  frames_tracked     # Consecutive frames this track has been held
+```
+
+#### `mc_msgs/TrackArray`
+
+```
+# Active tracks - published by perception_front_node on
+# /mc/perception/front/tracks (ICD IFD-006 section 7.2)
+std_msgs/Header header
+mc_msgs/Track[] tracks
+```
+
+#### `mc_msgs/VideoUplinkStatus`
+
+```
+# video_mux_node health - published on /mc/video/uplink_status (ICD IFD-007 section 8.3)
+std_msgs/Header header
+bool    streaming
+uint32  bitrate_kbps
+bool    client_connected
+```
+
 #### `mc_msgs/SystemHealth`
 
 ```
@@ -1016,8 +1151,8 @@ uint8   mem_pct           # 0–100
 uint8   disk_pct          # 0–100
 uint8   gpu_temp_c        # °C
 uint8   cpu_temp_c        # °C
-uint16  fault_mask        # see §8.8
-uint16  node_alive_mask   # see §8.9
+uint16  fault_mask        # see §10.8
+uint16  node_alive_mask   # see §10.9
 uint32  uptime_s
 ```
 
@@ -1025,7 +1160,7 @@ uint32  uptime_s
 
 ```
 std_msgs/Header header
-uint16  fault_id          # see §8.8 (single fault bit)
+uint16  fault_id          # see §10.8 (single fault bit)
 uint8   severity          # MAV_SEVERITY level
 string  description
 uint8   failsafe_action   # 0=NONE 1=HOLD 2=RTL 3=LAND
@@ -1055,9 +1190,9 @@ uint32  rx_drop_count
 
 ---
 
-## 8. Enumerations and Constants
+## 10. Enumerations and Constants
 
-### 8.1 PX4 Navigation State (`nav_state`)
+### 10.1 PX4 Navigation State (`nav_state`)
 
 | Value | Name | Description |
 |---|---|---|
@@ -1069,7 +1204,7 @@ uint32  rx_drop_count
 | 17 | `AUTO_TAKEOFF` | Autonomous takeoff |
 | 22 | `AUTO_PRECLAND` | Precision landing |
 
-### 8.2 PX4 Arming State (`arming_state`)
+### 10.2 PX4 Arming State (`arming_state`)
 
 | Value | Name |
 |---|---|
@@ -1080,7 +1215,7 @@ uint32  rx_drop_count
 | 4 | `SHUTDOWN` |
 | 5 | `IN_AIR_RESTORE` |
 
-### 8.3 Battery Warning Level
+### 10.3 Battery Warning Level
 
 | Value | Name | Description |
 |---|---|---|
@@ -1090,7 +1225,7 @@ uint32  rx_drop_count
 | 3 | `EMERGENCY` | Emergency — land immediately |
 | 4 | `FAILED` | Battery failure |
 
-### 8.4 Odometry Reference Frame
+### 10.4 Odometry Reference Frame
 
 | Value | Name |
 |---|---|
@@ -1099,7 +1234,7 @@ uint32  rx_drop_count
 | 2 | `POSE_FRAME_FRD` |
 | 3 | `VELOCITY_FRAME_BODY_FRD` |
 
-### 8.5 Commonly Used MAVLink Command IDs
+### 10.5 Commonly Used MAVLink Command IDs
 
 | ID | Name |
 |---|---|
@@ -1113,7 +1248,7 @@ uint32  rx_drop_count
 | 50003 | `MC_CMD_END_MISSION` (custom) |
 | 50004 | `MC_CMD_GCS_OVERRIDE` (custom) |
 
-### 8.6 Mission Phase IDs
+### 10.6 Mission Phase IDs
 
 | Value | Name |
 |---|---|
@@ -1129,7 +1264,7 @@ uint32  rx_drop_count
 | 9 | `LAND` |
 | 255 | `FAULT` |
 
-### 8.7 GCS Override Types
+### 10.7 GCS Override Types
 
 | Value | Name | Effect |
 |---|---|---|
@@ -1137,7 +1272,7 @@ uint32  rx_drop_count
 | 1 | `OVERRIDE_LOW_BATTERY_RTL` | Suppress low-battery RTL |
 | 2 | `OVERRIDE_GCS_LINK_HOLD` | Suppress GCS-link-loss HOLD |
 
-### 8.8 Fault Mask Bits
+### 10.8 Fault Mask Bits
 
 | Bit | Name | Trigger |
 |---|---|---|
@@ -1151,9 +1286,10 @@ uint32  rx_drop_count
 | 7 | `CAMERA_FAIL` | Camera node not publishing |
 | 8 | `GNSS_DEGRADED` | GNSS fix lost or HDOP > 2.0 |
 | 9 | `VISUAL_ODOM_FAIL` | Visual odometry not publishing when GNSS degraded |
-| 10–15 | Reserved | — |
+| 10 | `GIMBAL_LINK_LOST` | Gimbal camera RTSP link silent > 3 s (perception-only, no flight failsafe) |
+| 11–15 | Reserved | — |
 
-### 8.9 Node Alive Mask Bits
+### 10.9 Node Alive Mask Bits
 
 | Bit | Node |
 |---|---|
@@ -1165,28 +1301,31 @@ uint32  rx_drop_count
 | 5 | `search_planner_node` |
 | 6 | `visual_localisation_node` |
 | 7 | `camera_node` |
-| 8 | `detection_node` |
+| 8 | `perception_down_node` (renamed from `detection_node`) |
 | 9 | `health_monitor_node` |
-| 10–15 | Reserved |
+| 10 | `perception_front_node` |
+| 11 | `video_mux_node` |
+| 12–15 | Reserved |
 
-### 8.10 Sensor Health / Capability Flags
+### 10.10 Sensor Health / Capability Flags
 
 | Bit | Name | Description |
 |---|---|---|
-| 0 | `CAMERA_OK` | Camera publishing |
+| 0 | `CAMERA_OK` | Downward camera publishing |
 | 1 | `AI_INFERENCE_OK` | Detection pipeline running |
 | 2 | `VISUAL_ODOM_OK` | Visual odometry running |
 | 3 | `GNSS_OK` | GNSS fix adequate |
 | 4 | `IMU_OK` | IMU data flowing |
-| 5–7 | Reserved | — |
+| 5 | `GIMBAL_OK` | Gimbal camera RTSP link alive |
+| 6–7 | Reserved | — |
 
 ---
 
-## 9. Configuration Reference
+## 11. Configuration Reference
 
 All deployment parameters are set via environment variables in the Docker Compose or systemd environment files. No runtime configuration changes require code recompilation.
 
-### 9.1 Network Configuration (Fixed)
+### 11.1 Network Configuration (Fixed)
 
 | Parameter | Value |
 |---|---|
@@ -1195,8 +1334,9 @@ All deployment parameters are set via environment variables in the Docker Compos
 | GCS IP | `192.168.10.10` |
 | MC ↔ FCC internal subnet | `192.168.12.x` |
 | Swarm peer IPs | `192.168.10.12` … `192.168.10.1N` |
+| Gimbal IP camera (HIF-007, shared switch — reuses MC IP `192.168.10.11` on `eth0`) | `192.168.10.200` (first of the `.200`+ range reserved for camera/gimbal peripherals) |
 
-### 9.2 Port Reference
+### 11.2 Port Reference
 
 | Port | Protocol | Interface | Direction |
 |---|---|---|---|
@@ -1208,8 +1348,10 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `14555` | UDP | MAVLink mission protocol — MC ↔ FCC | Bidirectional, always on `192.168.12.x` (IR-007) |
 | `14900` | UDP | Swarm heartbeat | Broadcast among peers |
 | `14901` | UDP | Swarm coordination | Unicast among peers |
+| `8554` | TCP/UDP | RTSP — Gimbal camera source stream | Gimbal camera → `perception_front_node`, on `192.168.10.200` (HIF-007, shared switch) |
+| `8555` | TCP/UDP | RTSP — MC video uplink | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007) |
 
-### 9.3 Serial Configuration
+### 11.3 Serial Configuration
 
 | Parameter | Value |
 |---|---|
@@ -1220,7 +1362,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | Stop bits | 1 |
 | Flow control | None |
 
-### 9.4 Deployment Environment Variables
+### 11.4 Deployment Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
