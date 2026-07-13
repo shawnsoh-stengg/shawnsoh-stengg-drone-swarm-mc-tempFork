@@ -9,9 +9,9 @@ PASS=0; FAIL=0
 check() {
     local desc="$1"; shift
     if "$@" &>/dev/null; then
-        printf "PASS: %s\n" "$desc"; ((PASS++))
+        printf "PASS: %s\n" "$desc"; PASS=$((PASS+1))
     else
-        printf "FAIL: %s\n" "$desc"; ((FAIL++))
+        printf "FAIL: %s\n" "$desc"; FAIL=$((FAIL+1))
     fi
 }
 
