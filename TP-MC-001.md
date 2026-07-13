@@ -65,6 +65,7 @@ This plan covers:
 | VO drift causing incorrect geolocation | Drift bound tested in HIL; unit test validates geolocation geometry against ground-truth pose |
 | Watchdog restart causing mission state loss | Mission upload persistence to disk tested; recovery sequence tested in SITL |
 | GPU thermal throttling degrading inference latency | HIL endurance test measures latency under sustained load at operating temperature |
+| Gimbal RTSP link flapping incorrectly triggering a flight failsafe | `GIMBAL_LINK_LOST` is explicitly excluded from the failsafe decision tree (SDD §10.3, FR-084); TP-ST-013 verifies no HOLD/RTL occurs on gimbal link loss |
 
 ---
 
@@ -98,6 +99,7 @@ Hardware-facing nodes (`fcc_bridge_node`, `camera_node`) are replaced by mock no
 |---|---|
 | `fcc_bridge_node` (uXRCE-DDS) | `mock_fcc_node` — publishes `VehicleState`, `IMU`, `Odometry` from bag; accepts trajectory setpoints |
 | `camera_node` (CSI) | `mock_camera_node` — publishes `Image` + `CameraInfo` from bag at ≥15 FPS |
+| Gimbal IP camera (RTSP/H.265) | `mock_gimbal_node` — local RTSP test server (e.g. `rtsp-simple-server`) looping a bag-derived clip at `rtsp://127.0.0.1:8554/stream1`, replacing the physical 192.168.10.200 camera for `perception_front_node` tests |
 | Swarm UDP peers | `mock_peer_node` — sends/receives swarm protocol UDP packets on loopback |
 | GCS MAVLink | `mock_gcs_node` — sends/receives MAVLink 2 on UDP loopback |
 
@@ -148,6 +150,7 @@ Drone instances communicate over `127.0.0.x` (instance 1 = `.11`, instance 2 = `
 | `test_data/search_polygon_500m.json` | 500 m × 500 m convex search polygon | TP-UT boustrophedon, TP-ST SEARCH phase |
 | `test_data/mission_upload_3drone.yaml` | Full mission upload: ingress wpt, muster, formation offsets, search polygon, 3 peers | TP-ST full mission test |
 | `test_data/detection_ground_truth.json` | Known target positions and expected geolocation output (within tolerance) | TP-NI detection geolocation |
+| `bags/gimbal_outdoor.mp4` | 3-min RTSP/H.265 clip, front gimbal view: 1920×1080 @ 30 FPS, looped by `mock_gimbal_node` | TP-NI perception_front_node, TP-NI video_mux_node |
 
 ---
 
@@ -448,6 +451,23 @@ Unit tests are implemented in `test/` within each package, using `gtest`. Run wi
 
 ---
 
+### TP-UT-019: perception_front_node — IoU Tracker Continuity
+
+**SRS ref:** FR-081  
+**SDD ref:** §9a.1  
+**Package:** `video_uplink`
+
+**Description:** Verify the IoU-based greedy tracker maintains a stable `track_id` across frames for a slowly-moving detection, and drops a track after `track_miss_limit` consecutive misses.
+
+**Test inputs:** A synthetic 25-frame detection sequence: frames 1–10 contain a bounding box drifting 2 px/frame (IoU vs. previous frame ≥ 0.3 throughout); frames 11–25 contain no detection in that region (15 consecutive misses, exceeding `track_miss_limit=10`).
+
+**Pass criteria:**
+- `track_id` is identical across frames 1–10; `frames_tracked == 10` at frame 10.
+- The track is still present (not yet dropped) at frame 20 (10th miss).
+- The track is dropped (absent from output) by frame 21 (11th consecutive miss).
+
+---
+
 ## 5. Node Integration Tests — TP-NI
 
 Node integration tests use `launch_testing` and `rclpy`. Each test launches the node under test plus the relevant mock nodes, then asserts on topic traffic and message content. Run with `colcon test --packages-select <pkg>`.
@@ -660,7 +680,7 @@ Default timeout per test: 30 s unless specified.
 
 ---
 
-### TP-NI-013: detection_node — Inference Latency
+### TP-NI-013: perception_down_node — Inference Latency
 
 **SRS ref:** PR-007  
 **Package:** `vision`
@@ -727,6 +747,79 @@ Default timeout per test: 30 s unless specified.
 - Mode changes `GNSS_PRIMARY → VISUAL_ODOMETRY` within 3 bag messages of GNSS quality drop
 - Mode changes `VISUAL_ODOMETRY → GNSS_PRIMARY` within 3 bag messages of GNSS recovery (with 3-reading hysteresis)
 - `/mc/local_pose` is published continuously through both transitions (no gap > 200 ms)
+
+---
+
+### TP-NI-017: perception_front_node — Detection/Track Publication Rate
+
+**SRS ref:** FR-081, IR-040  
+**Package:** `video_uplink`
+
+**Preconditions:** `mock_gimbal_node` serving `bags/gimbal_outdoor.mp4` over RTSP at `rtsp://127.0.0.1:8554/stream1`. TensorRT engine pre-built.
+
+**Procedure:**
+1. Launch `perception_front_node` pointed at the mock RTSP URL.
+2. Subscribe to `/mc/perception/front/tracks` for 10 s.
+3. Count messages.
+
+**Pass criteria:** `msg_count / 10.0 ≥ 5.0 Hz`
+
+---
+
+### TP-NI-018: perception_front_node — Link Loss Detected, No Flight Fault
+
+**SRS ref:** FR-084, IR-040  
+**Package:** `video_uplink`
+
+**Preconditions:** `perception_front_node` running against `mock_gimbal_node`; `/mc/fault` subscriber active.
+
+**Procedure:**
+1. Stop `mock_gimbal_node` (halt the RTSP stream).
+2. Wait 3.5 s.
+3. Check the node's liveness heartbeat/alive topic for silence.
+4. Check `/mc/fault` for the absence of any flight-affecting fault (`FCC_LINK_LOST`, `GCS_LINK_LOST`, etc.).
+
+**Pass criteria:**
+- `perception_front_node` liveness silence detected within 3.5 s (feeds `health_monitor_node`'s `GIMBAL_LINK_LOST`/`GIMBAL_OK` bits, HM-002/HM-003, not tested here)
+- `/mc/fault` contains **no** flight-failsafe event as a result of this link loss (FR-084)
+
+---
+
+### TP-NI-019: video_mux_node — Metadata Mux Accuracy
+
+**SRS ref:** IR-041  
+**Package:** `video_uplink`
+
+**Preconditions:** `perception_front_node` publishing known synthetic detections/tracks (fixed `track_id`, `class_id`, `confidence`, `lat`/`lon`/`alt`); `video_mux_node` running; a mock RTSP client connected.
+
+**Procedure:**
+1. Publish one synthetic `Track` with known field values.
+2. Capture the corresponding muxed frame's metadata track at the mock RTSP client.
+3. Decode and compare fields.
+
+**Pass criteria:**
+- Decoded `track_id`, `class_id` match exactly
+- `|decoded_confidence - sent_confidence| < 1e-4` (×10000 fixed-point)
+- `|decoded_lat_deg - sent_lat_deg| < 1e-5°`, same for `lon`
+
+---
+
+### TP-NI-020: video_mux_node — Source Silence → streaming=false
+
+**SRS ref:** FR-083, IR-042  
+**Package:** `video_uplink`
+
+**Preconditions:** `video_mux_node` running with `perception_front_node` publishing normally; a mock RTSP client connected (`streaming=true`).
+
+**Procedure:**
+1. Stop `perception_front_node` (halt frame/track publication).
+2. Wait 3.5 s.
+3. Subscribe to `/mc/video/uplink_status`.
+
+**Pass criteria:**
+- `streaming == false` within 3.5 s of source silence
+- No fault raised on `/mc/fault` (perception-only degradation, not a flight concern)
+- Resuming `perception_front_node` publication restores `streaming == true` within 1 s, without restarting `video_mux_node`
 
 ---
 
@@ -983,6 +1076,28 @@ SITL tests run a full MC stack against PX4 SITL (Gazebo). Each test is a `pytest
 
 ---
 
+### TP-ST-013: Gimbal Camera Link Loss During SEARCH — No Flight Impact
+
+**SRS ref:** FR-084  
+**Timeout:** 3 min
+
+**Preconditions:** MC instance in SEARCH phase; `perception_front_node`/`video_mux_node` running against `mock_gimbal_node` (RTSP loopback source, substituting for the physical gimbal camera in this SITL-level test).
+
+**Procedure:**
+1. Stop `mock_gimbal_node` (simulates gimbal RTSP link loss).
+2. Wait 5 s.
+3. Monitor `/mc/health` (`fault_mask & GIMBAL_LINK_LOST`, `sensor_flags & GIMBAL_OK` cleared).
+4. Monitor FCC `nav_state` and `/mc/mission_phase` throughout.
+5. Restore `mock_gimbal_node`.
+
+**Pass criteria:**
+- `GIMBAL_LINK_LOST` set in `fault_mask` within 3.5 s of link loss (FR-084)
+- FCC `nav_state` and `/mc/mission_phase` are **unaffected** — no HOLD, no RTL, mission phase remains `SEARCH` throughout (this is the negative assertion the ticket exists to verify)
+- `/mc/detections` (downward camera pipeline) continues publishing normally, unaffected by the gimbal link loss
+- On restore, `GIMBAL_LINK_LOST` clears and `GIMBAL_OK` sets within 5 s
+
+---
+
 ## 7. Hardware-in-the-Loop Tests — TP-HW
 
 HIL tests run on physical Jetson Orin NX + Pixhawk 6X. The FCC is connected via ttyTHS1. No airframe is attached; the propellers are removed. All tests are conducted with the system powered by bench supply.
@@ -1026,7 +1141,7 @@ HIL tests require one engineer operating the GCS and one engineer observing DUT 
 ### TP-HW-003: TensorRT Inference Latency — Sustained Load
 
 **SRS ref:** PR-007  
-**Preconditions:** `detection_node` running with engine pre-built; `camera_node` running at 15 FPS.
+**Preconditions:** `perception_down_node` (renamed from `detection_node`) running with engine pre-built; `camera_node` running at 15 FPS.
 
 **Procedure:**
 1. Run inference continuously for 10 min.
@@ -1081,6 +1196,23 @@ HIL tests require one engineer operating the GCS and one engineer observing DUT 
 
 ---
 
+### TP-HW-007: Gimbal RTSP Pipeline — Sustained Round-Trip Latency
+
+**SRS ref:** FR-081, FR-083  
+**Preconditions:** Physical gimbal IP camera connected and powered (HIF-007, 192.168.10.200); `perception_front_node` and `video_mux_node` running; a GCS-side RTSP client connected to `rtsp://192.168.10.11:8555/mc_video`.
+
+**Procedure:**
+1. Run the gimbal ingest → inference/tracking → re-encode → GCS uplink pipeline continuously for 10 min.
+2. Record per-frame round-trip latency: gimbal camera frame timestamp to muxed-frame arrival at the GCS client.
+3. Record GPU temperature every 30 s alongside `perception_down_node`'s concurrent load (both pipelines active).
+
+**Pass criteria:**
+- `p99(round_trip_latency_ms) ≤ 1000` for the full 10-min run
+- No thermal throttling causes `perception_down_node`'s latency (TP-HW-003) to exceed its own 500 ms bound while both pipelines run concurrently (PR-010, FR-082)
+- Zero `GIMBAL_LINK_LOST` events during the run (stable RTSP link)
+
+---
+
 ## 8. Deployment Smoke Tests — TP-SM
 
 Smoke tests are companion scripts to each installation script. They verify the installation without requiring a full system boot. Run after each script and again as a full suite before TP-NI.
@@ -1132,6 +1264,11 @@ The table below maps each SRS functional requirement to at least one test case. 
 | FR-073 | GCS link loss → HOLD | — | — | TP-ST-002 | — |
 | FR-074 | Executor heartbeat watchdog | — | TP-NI-012 | TP-ST-004 | — |
 | FR-075 | 3× restart → RTL | — | — | TP-ST-004 (ext.) | — |
+| FR-080 | Gimbal ingest + inference | — | TP-NI-017 | — | TP-HW-007 |
+| FR-081 | Gimbal detection/track publish | TP-UT-019 | TP-NI-017, TP-NI-018 | — | TP-HW-007 |
+| FR-082 | Concurrent GPU budget (both pipelines) | — | — | — | TP-HW-007 |
+| FR-083 | GCS video uplink | — | TP-NI-019, TP-NI-020 | — | TP-HW-007 |
+| FR-084 | Gimbal link loss — no flight failsafe | — | TP-NI-018 | TP-ST-013 | — |
 | IR-001 | ttyTHS1 serial | — | — | — | TP-HW-004 |
 | IR-003 | VehicleState ≥10 Hz | — | TP-NI-001, TP-NI-002 | — | — |
 | IR-004 | Trajectory setpoint ≥5 Hz | — | TP-NI-004 | — | — |
@@ -1141,6 +1278,9 @@ The table below maps each SRS functional requirement to at least one test case. 
 | IR-014 | MC_STATUS ≥2 Hz | — | TP-NI-014 | TP-ST-011 | — |
 | IR-023 | Peer LOST after 3 s | — | TP-NI-006, TP-NI-007 | TP-ST-005 | — |
 | IR-030 | Camera ≥15 FPS | — | — | — | TP-HW-002 |
+| IR-040 | Gimbal camera RTSP ingest | — | TP-NI-017, TP-NI-018 | — | TP-HW-007 |
+| IR-041 | GCS video uplink RTSP + metadata | — | TP-NI-019 | — | TP-HW-007 |
+| IR-042 | Uplink status, independent of MAVLink | — | TP-NI-020 | — | — |
 | PR-007 | Detection latency ≤500 ms | — | TP-NI-013 | — | TP-HW-003 |
 | PR-008 | Path generation ≤5 s | TP-UT-005 | TP-NI-008 | — | — |
 | PR-009 | CPU usage budget | — | — | TP-ST-012 | — |
@@ -1161,10 +1301,10 @@ Tests are aligned with the 6-month project milestones.
 | Milestone | Month | Test activities |
 |---|---|---|
 | M1 — Architecture complete | 1 | TP-SM-001–005 (OS, JetPack, Docker, ROS 2, colcon) |
-| M2 — Core nodes integrated | 2 | TP-UT-001–018 · TP-NI-001–007 · TP-SM-006–010 · TP-HW-001–002 |
+| M2 — Core nodes integrated | 2 | TP-UT-001–019 · TP-NI-001–007 · TP-SM-006–010 · TP-HW-001–002 |
 | M3 — SITL single-drone | 3 | TP-ST-001 (single drone) · TP-ST-003 · TP-ST-006 · TP-ST-007 |
-| M4 — SITL multi-drone | 4 | TP-NI-008–016 · TP-ST-001–012 (full suite) · TP-HW-003–004 |
-| M5 — HIL integration | 5 | TP-HW-001–006 (all HIL tests on physical hardware) |
+| M4 — SITL multi-drone | 4 | TP-NI-008–020 · TP-ST-001–013 (full suite) · TP-HW-003–004 |
+| M5 — HIL integration | 5 | TP-HW-001–007 (all HIL tests on physical hardware) |
 | M6 — System acceptance | 6 | Full regression: TP-SM + TP-UT + TP-NI + TP-ST · TP-HW repeat |
 
 **CI gates (automated, every PR):**
@@ -1174,7 +1314,7 @@ Tests are aligned with the 6-month project milestones.
 
 **Nightly CI:**
 - All TP-NI
-- TP-ST-001, TP-ST-002, TP-ST-003, TP-ST-006, TP-ST-007
+- TP-ST-001, TP-ST-002, TP-ST-003, TP-ST-006, TP-ST-007, TP-ST-013
 
 ---
 

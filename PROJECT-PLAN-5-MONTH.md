@@ -13,10 +13,18 @@ sizing is left as story points only, sequenced by dependency order (grouped
 into phases). Total point count is summarized at the end for reference.
 
 **Ticket ID prefixes:** `FCC-*` (fcc_bridge), `ME-*` (mission_exec), `SC-*`
-(swarm_coord), `VIS-*` (vision), `GCS-*` (gcs_comms), `MAVR-*`
-(mavlink-router), `HM-*` (health_monitor), `DEP-*` (deployment/Docker/config),
-`TEST-*` (test infrastructure). Continues the informal `FCC-XXX` convention
-already used in `fcc_bridge` code comments.
+(swarm_coord), `VIS-*` (vision), `VU-*` (video_uplink), `GCS-*` (gcs_comms),
+`MAVR-*` (mavlink-router), `HM-*` (health_monitor), `DEP-*`
+(deployment/Docker/config), `TEST-*` (test infrastructure). Continues the
+informal `FCC-XXX` convention already used in `fcc_bridge` code comments.
+
+**Update (2026-07-13):** the gimbal camera + GCS video uplink feature
+(HID-MC-001 HIF-007, ICD-MC-001 IFD-006/IFD-007, SRS-MC-001 IR-040–042/
+FR-080–084, SDD-MC-001 §9a) landed as design docs plus a constructor-only
+`video_uplink` package scaffold (`perception_front_node`, `video_mux_node`).
+This revision adds the corresponding backlog (Track E, `VU-*`) and rolls the
+`detection_node`→`perception_down_node` rename through the `vision` row
+below. Everything else in this plan is unchanged from the 2026-07-12 audit.
 
 ---
 
@@ -28,7 +36,8 @@ already used in `fcc_bridge` code comments.
 | `mc_msgs` | **Partial.** 5 of ~19 required message types exist (`VehicleState`, `FaultEvent`, `FccMission`, `FccMissionItem`, `FccCommand`). |
 | `mission_exec` | **Stub.** Both nodes (`mission_executor_node`, `search_planner_node`) are constructor-only. |
 | `swarm_coord` | **Stub.** Both nodes (`swarm_coordinator_node`, `formation_controller_node`) are constructor-only. |
-| `vision` | **Stub.** Both nodes (`visual_localisation_node`, `detection_node`) are constructor-only. |
+| `vision` | **Stub.** Both nodes (`visual_localisation_node`, `perception_down_node` — renamed from `detection_node`) are constructor-only. |
+| `video_uplink` | **Stub, new 2026-07-13.** Both nodes (`perception_front_node`, `video_mux_node`) are constructor-only, scaffolded alongside the gimbal camera design docs. Not yet in the dependency graph before this revision. |
 | `gcs_comms` | **Stub.** `gcs_mavlink_node` is constructor-only; no MAVROS dependency even declared. |
 | `health_monitor` | **Stub.** `health_monitor_node` is constructor-only. |
 | `mavlink-router` | **Not in-tree.** Only a systemd unit (`drone-mc-mavlink-router.service`) referencing an external prebuilt image; no source, build, or `.conf` file in the repo. |
@@ -57,6 +66,11 @@ Phase 2 — Core node logic (parallel tracks once Phase 1 lands)
     VIS-001 (VO core) ──> VIS-002 (GNSS/VO handover)
     VIS-003 (detection inference) ──> VIS-004 (geolocation, needs VIS-001/002 for pose)
 
+  Track E (gimbal video — independent package, no dependency on Track B):
+    VU-001 (perception_front_node: RTSP ingest + inference + tracking,
+            reuses VIS-003's engine pattern but not blocked by it)
+      ──> VU-002 (video_mux_node: GCS video re-encode + metadata uplink)
+
   Track C (GCS):
     GCS-001 (MAVROS + channel + link status) ──> GCS-002 (mission upload FSM)
                                               └──> GCS-003 (telemetry mux, needs VIS-004, HM-001)
@@ -67,7 +81,7 @@ Phase 2 — Core node logic (parallel tracks once Phase 1 lands)
                                  ──> HM-003 (failsafe tree, needs FCC-004 fault signals, GCS-001 link status)
 
 Phase 3 — Deployment
-  DEP-001, DEP-002, DEP-003 (Dockerfiles) — each needs its node's package.xml/CMake stable
+  DEP-001, DEP-002, DEP-003, DEP-005 (Dockerfiles) — each needs its node's package.xml/CMake stable
   DEP-004 (params/config population) — needs every node's tunables finalized
 
 Phase 4 — Test infrastructure
@@ -337,25 +351,34 @@ a simple relay, not a hard dependency on VIS-002's internal logic).
 
 ---
 
-#### VIS-003: detection_node — YOLOv8n TensorRT inference pipeline
+#### VIS-003: perception_down_node — YOLOv8n TensorRT inference pipeline
 
 **Points:** 10
 
-**Description:** As a developer, I want `detection_node` to run real-time
-object detection on the camera stream via a TensorRT-optimized YOLOv8n
-model, so the swarm can surface visual detections during `SEARCH`.
+**Description:** As a developer, I want `perception_down_node` (renamed
+from `detection_node` — SDD §9, ICD §9.2, HID/ICD gimbal-camera revision) to
+run real-time object detection on the downward camera stream via a
+TensorRT-optimized YOLOv8n model, so the swarm can surface visual
+detections during `SEARCH`.
 
 **Acceptance Criteria:**
+- Renames the existing `detection_node.{hpp,cpp}` stub (class, file names,
+  and the `Node("detection_node")` constructor argument) to
+  `perception_down_node` throughout `ws/src/vision/` — CMakeLists.txt,
+  package.xml, and the existing gtest stub (`test_detection_node.cpp` →
+  `test_perception_down_node.cpp`) all follow.
 - ONNX→TensorRT engine build/cache on first run (SDD §9.2) — subsequent
   starts load the cached engine rather than rebuilding.
 - 640×640 input preprocessing; dedicated inference thread with a frame
   queue of max depth 2, dropping the oldest frame on backpressure (SDD §9.1)
   rather than blocking capture.
 - Post-processing applies IoU 0.45 / confidence 0.5 NMS thresholds.
-- GPU utilization throttled to ≤80% (SDD §9.4) to leave headroom for VO.
+- GPU utilization throttled to ≤80% (SDD §9.4) to leave headroom for VO and
+  for `perception_front_node` (VU-001, `video_uplink` package — a separate
+  process that independently reuses this same TensorRT engine/model).
 
 **Deliverables:**
-- `detection_node.{hpp,cpp}` — TensorRT engine loading/inference,
+- `perception_down_node.{hpp,cpp}` — TensorRT engine loading/inference,
   frame-queue management, NMS post-processing.
 - CMake/package.xml updated with the TensorRT/CUDA dependency (currently
   absent).
@@ -363,17 +386,18 @@ model, so the swarm can surface visual detections during `SEARCH`.
   bounding boxes within IoU tolerance of ground truth.
 
 **Relationships:** No blockers. Blocks VIS-004 (geolocation consumes raw
-detections).
+detections). VU-001 (`perception_front_node`) reuses this ticket's engine-
+loading pattern but does not block on it landing first.
 
 ---
 
-#### VIS-004: detection_node — target geolocation and GPU resource management
+#### VIS-004: perception_down_node — target geolocation and GPU resource management
 
 **Points:** 6
 
-**Description:** As a developer, I want `detection_node` to convert each
-raw 2D detection into a geolocated target position, so downstream consumers
-(GCS, mission planning) get actionable lat/lon rather than pixel
+**Description:** As a developer, I want `perception_down_node` to convert
+each raw 2D detection into a geolocated target position, so downstream
+consumers (GCS, mission planning) get actionable lat/lon rather than pixel
 coordinates.
 
 **Acceptance Criteria:**
@@ -382,7 +406,7 @@ coordinates.
   with uncertainty propagation into `pos_uncertainty_m`.
 - Consumes `/mc/local_pose` (VIS-001/002) for the drone-pose half of the
   geolocation calculation.
-- Publishes `/mc/detections` (`mc_msgs/DetectionArray`, ICD §7.2 already
+- Publishes `/mc/detections` (`mc_msgs/DetectionArray`, ICD §9.2 already
   specifies `Detection`/`DetectionArray` fields) event-driven, one message
   per processed frame with detections.
 - GPU resource management: detection inference backs off if VO (VIS-001)
@@ -390,7 +414,7 @@ coordinates.
   consumers (SDD §9.4).
 
 **Deliverables:**
-- `detection_node.{hpp,cpp}` extended with geolocation math and GPU
+- `perception_down_node.{hpp,cpp}` extended with geolocation math and GPU
   coordination with `visual_localisation_node`.
 - `mc_msgs/msg/Detection.msg`, `DetectionArray.msg`.
 - Node integration test: known detection + known pose/intrinsics → expected
@@ -398,6 +422,97 @@ coordinates.
 
 **Relationships:** Depends on VIS-003 (raw detections) and VIS-001/002
 (`/mc/local_pose`). Blocks GCS-003 (telemetry mux relays `/mc/detections`).
+
+---
+
+### Track E — Gimbal Video Perception (`video_uplink` package)
+
+#### VU-001: perception_front_node — RTSP ingest, inference, and tracking
+
+**Points:** 10
+
+**Description:** As a developer, I want `perception_front_node` to ingest
+the front gimbal camera's RTSP/H.265 stream, run AI inference reusing the
+same TensorRT engine as the downward pipeline, and track detections
+frame-to-frame, so the swarm has continuous gimbal-mounted target tracking
+independent of the downward camera (SDD §9a.1, FR-080–082, IR-040).
+
+**Acceptance Criteria:**
+- GStreamer `rtspsrc` pipeline connects to `rtsp://192.168.10.200:8554/stream1`
+  (HIF-007, reached via the Jetson's existing `eth0` — the gimbal camera
+  shares the baseboard's internal switch, not a second Jetson interface),
+  decodes H.265, and feeds the same frame-queue/preprocessing/TensorRT/NMS
+  pattern VIS-003/004 established, reusing the loaded engine rather than a
+  second copy.
+- IoU-based greedy tracker (SDD §9a.1: `track_iou_threshold=0.3`,
+  `track_miss_limit=10`) assigns/maintains `track_id` across frames.
+- Publishes `/mc/perception/front/detections` (event, ≤1 s) and
+  `/mc/perception/front/tracks` (≥5 Hz) using the new `mc_msgs/Track`/
+  `TrackArray` types.
+- `rtspsrc` auto-reconnects on error; link silence > 3 s is observable via
+  the node's liveness heartbeat, which `health_monitor_node` (HM-002/HM-003)
+  uses to set `GIMBAL_LINK_LOST`/clear `GIMBAL_OK` — explicitly excluded
+  from the flight failsafe tree (FR-084).
+- Runs as a separate node/process from `perception_down_node` (different
+  package, `video_uplink` not `vision`) — a stall in one does not affect the
+  other, subject to the shared ≤80% GPU budget (PR-010, FR-082).
+
+**Deliverables:**
+- `perception_front_node.{hpp,cpp}` — rtspsrc pipeline, inference reuse, IoU
+  tracker.
+- `mc_msgs/msg/Track.msg`, `TrackArray.msg` (ICD §9.2 already specifies
+  fields — not yet created as files).
+- `video_uplink/CMakeLists.txt`/`package.xml` updated with GStreamer RTSP
+  client plugins + TensorRT/CUDA dependencies (currently absent — the
+  package is a constructor-only scaffold as of the diagram/docs commit).
+- Node integration test: new `mock_gimbal_node` (RTSP test server looping a
+  bag-derived clip, TP-MC-001 §2.4) → expected detections/tracks within
+  tolerance; simulated link loss → heartbeat silence detected, no fault
+  raised on the flight side.
+
+**Relationships:** Reuses VIS-003's TensorRT engine-loading pattern but is
+not blocked by it landing first — can build against a standalone engine
+instance and de-duplicate later if desired. Blocks VU-002 (needs this
+node's frame/track output).
+
+---
+
+#### VU-002: video_mux_node — GCS video re-encode and metadata uplink
+
+**Points:** 8
+
+**Description:** As a developer, I want `video_mux_node` to re-encode
+`perception_front_node`'s frame stream to H.265, mux in a per-frame
+metadata track, and serve it to the GCS over a dedicated RTSP session, so
+the operator gets a live annotated video feed independent of the MAVLink
+telemetry channel (SDD §9a.2, FR-083–084, IR-041–042).
+
+**Acceptance Criteria:**
+- GStreamer encode pipeline (`nvv4l2h265enc`) re-encodes frames from
+  `perception_front_node`; muxes a KLV-style metadata track (ICD IFD-007
+  §8.2: `time_usec`, `track_id`, `class_id`, `confidence`, `lat`/`lon`/`alt`)
+  sourced from `/mc/perception/front/detections` + `/tracks`.
+- Serves the muxed stream via its own RTSP server at
+  `rtsp://192.168.10.11:8555/mc_video` — no dependency on
+  `gcs_mavlink_node`/mavlink-router.
+- Publishes `/mc/video/uplink_status` (`mc_msgs/VideoUplinkStatus`) at
+  ≥1 Hz reflecting `streaming`, `client_connected`, `bitrate_kbps`.
+- On `perception_front_node` frame/track silence > 3 s, stops serving new
+  frames and sets `streaming=false`, tearing down the active RTSP session
+  but keeping the encode pipeline warm for reconnect (ICD IFD-007 §8.4). A
+  GCS client disconnect alone does not raise a fault.
+
+**Deliverables:**
+- `video_mux_node.{hpp,cpp}` — encode/mux pipeline, RTSP server, status
+  publisher.
+- `mc_msgs/msg/VideoUplinkStatus.msg`.
+- Node integration test: synthetic frame+track input → mock RTSP client
+  receives a valid stream with correctly-muxed metadata; source silence →
+  `streaming=false` within 3 s, no fault escalation.
+
+**Relationships:** Depends on VU-001 (`perception_front_node`'s output).
+Blocks nothing further in this plan — GCS-side consumption of the uplink is
+out of scope for this repo.
 
 ---
 
@@ -672,8 +787,8 @@ pipeline.
 - `docker/camera/Dockerfile` wraps `gscam2` (external package, not built
   from this repo's `ws/src`) — no CMake/colcon build needed for it.
 - `docker/vision/Dockerfile` builds `visual_localisation_node` and
-  `detection_node`, including the TensorRT/CUDA runtime dependencies
-  VIS-003 introduces.
+  `perception_down_node` (renamed from `detection_node`), including the
+  TensorRT/CUDA runtime dependencies VIS-003 introduces.
 
 **Deliverables:**
 - `docker/camera/Dockerfile`, `docker/vision/Dockerfile`.
@@ -709,6 +824,37 @@ needing both GCS channels live.
 
 ---
 
+#### DEP-005: video_uplink Dockerfile
+
+**Points:** 3
+
+**Description:** As a developer, I want the `video_uplink` package
+(`perception_front_node` + `video_mux_node`) containerized, following the
+`docker/vision/Dockerfile` pattern (DEP-002) but with GStreamer RTSP
+server/client plugins added, so a `drone-mc-video-uplink.service` (SDD
+§12.3/§12.4 describe it; the unit file itself doesn't exist yet in
+`config/systemd/`) runs a real image.
+
+**Acceptance Criteria:**
+- `docker/video-uplink/Dockerfile` follows the existing two-stage colcon
+  pattern, adding the GStreamer RTSP client/server plugins
+  (`gst-rtsp-server` or equivalent) to the runtime stage alongside the
+  TensorRT/CUDA deps VU-001 introduces.
+- Image `CMD` runs both `perception_front_node` and `video_mux_node`
+  (matching how DEP-001 bundles multiple nodes per container where SDD
+  groups them into one service).
+
+**Deliverables:**
+- `docker/video-uplink/Dockerfile`.
+- `config/systemd/drone-mc-video-uplink.service` + `be.slice` membership
+  (SDD §12.3/§12.4 already describe this service).
+- Build script matching the `08-build-fcc-bridge-image.sh` pattern.
+
+**Relationships:** Depends on VU-001/VU-002 being buildable (GStreamer/
+TensorRT deps declared). Blocks TEST-003 (HIL smoke test for this service).
+
+---
+
 #### DEP-004: params/config population across all nodes
 
 **Points:** 4
@@ -722,8 +868,9 @@ doesn't start every node with undocumented default behavior.
 - Every package's `params/default.yaml` (and `params/sitl.yaml` where
   applicable, per `CLAUDE.md`'s tooling decisions) has real values for every
   tunable its Phase 2 ticket introduced (PD gains, election weights,
-  failsafe timeouts, TensorRT engine path, etc.) — not empty
-  `ros__parameters: {}` blocks.
+  failsafe timeouts, TensorRT engine path, `video_uplink`'s
+  `track_iou_threshold`/`track_miss_limit`/`gimbal_link_timeout_s`, etc.) —
+  not empty `ros__parameters: {}` blocks.
 - `config/camera_calibration.yaml` (SDD §12.5, referenced but absent) is
   added with real or placeholder-but-documented camera intrinsics.
 
@@ -815,7 +962,7 @@ after installation the same way `fcc_bridge`/`ros2-core`/colcon already are.
 
 **Acceptance Criteria:**
 - One smoke-test script per new service container (gcs-comms,
-  health-monitor, swarm-coord, mission-exec, camera, vision,
+  health-monitor, swarm-coord, mission-exec, camera, vision, video-uplink,
   mavlink-router) verifying the container starts, the node(s) inside are
   alive, and (where applicable) the FCC-008-style transport/config
   selection took effect.
@@ -824,7 +971,7 @@ after installation the same way `fcc_bridge`/`ros2-core`/colcon already are.
 - `scripts/0Xb-smoke-test-<service>.sh` per new service, following the
   numbering/naming convention already established.
 
-**Relationships:** Depends on DEP-001/002/003 (containers must exist to
+**Relationships:** Depends on DEP-001/002/003/005 (containers must exist to
 smoke-test). Last ticket in the plan — closes the loop back to
 deployability.
 
@@ -837,13 +984,14 @@ deployability.
 | 1 — FCC completion | FCC-006, 007, 008 | 20 |
 | 2A — Mission/Swarm | SC-002, 003, 004, ME-001, 002, SC-001 | 55 |
 | 2B — Vision | VIS-001, 002, 003, 004 | 34 |
+| 2E — Gimbal Video | VU-001, 002 | 18 |
 | 2C — GCS | GCS-001, 002, 003, MAVR-001 | 24 |
 | 2D — Health | HM-001, 002, 003 | 17 |
-| 3 — Deployment | DEP-001, 002, 003, 004 | 14 |
+| 3 — Deployment | DEP-001, 002, 003, 004, 005 | 17 |
 | 4 — Test infra | TEST-001, 002, 003 | 27 |
-| **Total** | **27 tickets** | **191 pts ≈ 764 hrs ≈ 95.5 person-days** |
+| **Total** | **30 tickets** | **212 pts ≈ 848 hrs ≈ 106 person-days** |
 
-At ~21 working days/month, 191 points ≈ 4.5 person-months for a single
+At ~21 working days/month, 212 points ≈ 5.0 person-months for a single
 developer working this backlog alone — roughly in line with the 5-month
 horizon, with some slack for the unplanned work that always surfaces (SITL
 environment quirks, hardware bring-up issues, ICD gaps discovered mid-ticket
