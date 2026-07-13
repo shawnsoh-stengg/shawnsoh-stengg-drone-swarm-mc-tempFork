@@ -45,6 +45,7 @@ participant "MISSION COMPUTER (MC)\n192.168.10.11  ·  Jetson Orin NX 16GB" as M
 participant "GCS\nQGroundControl\n192.168.10.10" as GCS #B8DCA8
 participant "Swarm Peers\n192.168.10.12+\n(MANET)" as PEERS #D8C0F0
 participant "IMX219\nCamera" as CAM #EDE0F8
+participant "Gimbal\nIP Camera\n192.168.10.200" as GIMCAM #EDE0F8
 
 ' ═══════════════════════════════════════════════════
 ' IFD-001: MC ↔ FCC  (uXRCE-DDS)
@@ -150,7 +151,34 @@ CAM -[#5050C0]> MC : <color:#5050C0>/camera/camera_info</color>  ≥15 FPS\n  se
 note over CAM, MC #EDE0F8
   GStreamer: nvarguscamerasrc → nvvidconv → BGR8 → appsink
   Static TF: camera_optical → base_link  (published at startup)
-  Used by: visual_localisation_node (VO)  ·  detection_node (AI inference)
+  Used by: visual_localisation_node (VO)  ·  perception_down_node (AI inference, renamed from detection_node)
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-006: Gimbal Camera → MC  (RTSP/H.265)
+' ═══════════════════════════════════════════════════
+== IFD-006 · Gimbal Camera → MC · RTSP/H.265 · 192.168.10.200:8554 (shared switch, HIF-007) ==
+
+GIMCAM -[#20A070]> MC : <color:#20A070>RTSP/H.265 stream</color>  ·  rtsp://192.168.10.200:8554/stream1\n  1920×1080 @ 30 FPS  →  perception_front_node (rtspsrc)
+
+note over GIMCAM, MC #C8E8D8
+  Independent of IFD-004 (downward CSI camera) — different physical link,
+  different node (perception_front_node), different package (video_uplink).
+  Link silence > 3 s → GIMBAL_LINK_LOST, clears GIMBAL_OK  [FR-084]
+  Perception-only — never triggers a flight failsafe.
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-007: MC → GCS Video Uplink  (RTSP/H.265 + metadata)
+' ═══════════════════════════════════════════════════
+== IFD-007 · MC → GCS Video Uplink · RTSP/H.265 + metadata · 192.168.10.11:8555 ==
+
+MC -[#107850]> GCS : <color:#107850>RTSP/H.265 + KLV-style metadata</color>  ·  rtsp://192.168.10.11:8555/mc_video\n  time_usec  ·  track_id  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)\n  served by video_mux_node, re-encoding perception_front_node's frames + tracks/detections
+
+note over MC, GCS #A8D8C0
+  Independent of IFD-002 (MAVLink GCS channel) — separate RTSP server,
+  separate port. A stalled video uplink never affects telemetry/command
+  traffic.  MC publishes /mc/video/uplink_status (≥1 Hz)  [IR-041, IR-042]
 end note
 
 ' ═══════════════════════════════════════════════════
@@ -179,9 +207,12 @@ note over FCC, CAM #E8E8F8
   mission_executor  →  /mc/executor/heartbeat (≥1 Hz)        →  health_monitor_node (watchdog)
 
   search_planner    →  /mc/search/coverage_path (event)      →  mission_executor_node
-  visual_localisation  →  /mc/local_pose (≥10 Hz)            →  detection_node · gcs_mavlink
+  visual_localisation  →  /mc/local_pose (≥10 Hz)            →  perception_down_node · gcs_mavlink
   visual_localisation  →  /mc/localisation_mode (event)      →  gcs_mavlink · health_monitor
-  detection_node    →  /mc/detections (event)                →  gcs_mavlink_node
+  perception_down_node (renamed from detection_node)  →  /mc/detections (event)  →  gcs_mavlink_node
+  perception_front_node  →  /mc/perception/front/detections (event)  →  video_mux · gcs_mavlink
+  perception_front_node  →  /mc/perception/front/tracks (≥5 Hz)      →  video_mux_node
+  video_mux_node    →  /mc/video/uplink_status (≥1 Hz)        →  health_monitor
   health_monitor    →  /mc/health (≥1 Hz)                    →  gcs_mavlink · mission_executor
   health_monitor    →  /mc/fault (event)                     →  mission_executor_node
 end note

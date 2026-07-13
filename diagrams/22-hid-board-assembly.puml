@@ -44,6 +44,7 @@ skinparam arrow {
 rectangle "LiPo Battery\n4S–6S  14.8–25.2 V\nXT60 female" as BAT #FFD4A8
 rectangle "IMX219 Camera\n22-pin FPC cable" as CAM #D8C0F0
 rectangle "MANET Radio\n(Air Unit)\nRJ45 Cat5e" as AU #B8DCA8
+rectangle "Gimbal IP Camera\n192.168.10.200\nRJ45 via JST-GH pigtail" as GIMCAM #EDE0F8
 rectangle "USB-C Debug Host\n(laptop / bench PC)" as USB #D8D8F8
 rectangle "UART Console\n(FTDI USB-UART)\nJST-GH 6-pin" as CONS #D8D8F8
 
@@ -67,7 +68,7 @@ package "Holybro Pixhawk Jetson Baseboard  (120 × 40 mm)" as BB #E4EEF8 {
 
   rectangle "Power Regulator\nVBAT → 5V_SYS (5A)\nVBAT → 5V_FC (2A)\n3.3V_PERIPH · 1.8V_PERIPH\nINA226 power monitor" as PWR #F4C88A
 
-  rectangle "Ethernet Switch\n100BASE-T\nJetson eth0 ↔ Pixhawk\n↔ External RJ45" as SW #C0D8C0
+  rectangle "Ethernet Switch\n100BASE-T\nJetson eth0 ↔ Pixhawk\n↔ External RJ45 ↔ Gimbal cam (J15)\n(single switch, no 2nd PHY)" as SW #C0D8C0
 
   rectangle "UART Bridge\nOn-board PCB trace\nJetson ttyTHS1\n↔ Pixhawk UART B\n(no cable required)" as UART_BRIDGE #C0D0E8
 
@@ -82,6 +83,7 @@ package "Holybro Pixhawk Jetson Baseboard  (120 × 40 mm)" as BB #E4EEF8 {
   rectangle "J7\nMicroSD slot\nJetson OS / logs" as J7 #E0E0E0
   rectangle "J8\nMicroSD slot\nPX4 flight logs" as J8 #E0E0E0
   rectangle "J9–J14\nJST-GH (4–10 pin)\nGPS · RC · TELEM1\nAUX · I²C · CAN" as J9 #F0C890
+  rectangle "J15\n6-pin JST-GH\nETH port 1\n(shared switch port)" as J15 #B8DCA8
 }
 
 ' ═══════════════════════════════════════════════════
@@ -91,6 +93,7 @@ package "Holybro Pixhawk Jetson Baseboard  (120 × 40 mm)" as BB #E4EEF8 {
 BAT   -[#E07000,thickness=3]-> J1 : VBAT\n14.8–25.2 V
 CAM   -[#7030A0,thickness=2]-> J2 : MIPI CSI-2\n22-pin FPC
 AU    -[#208040,thickness=2]-> J3 : 1000BASE-T\nCat 5e STP
+GIMCAM -[#208040,thickness=2]-> J15 : 100BASE-TX\nJST-GH→RJ45 pigtail ≤2m
 USB   -[#3050C0,thickness=1]-> J4 : USB-C
 CONS  -[#3050C0,thickness=1]-> J5 : 3.3 V UART\n115200 bps
 
@@ -110,6 +113,7 @@ UART_BRIDGE -[#3D5A80,thickness=2]--> PX4_CORE  : UART B
 SW          -[#208040]--> JET_CORE  : eth0\n192.168.10.11\n192.168.12.1
 SW          -[#208040]--> PX4_CORE  : Ethernet\n192.168.10.31\n192.168.12.2
 SW          -[#208040]--> J3         : external port
+SW          -[#208040]--> J15        : ETH port 1\n(gimbal camera)
 
 J2     -[#7030A0]--> JET_CORE : CSI-2 + I2C + CLKIN
 J4     -[#3050C0]--> JET_CORE : USB 3.2

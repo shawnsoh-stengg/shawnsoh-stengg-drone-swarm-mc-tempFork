@@ -86,11 +86,14 @@ package "MANET Subnet  192.168.10.0/24\n(L2 bridge via MANET Air Units — all p
   rectangle "Peer AU #2\n(Drone 2 Air Unit)" as AU2 #C8E0C8
 
   rectangle "Peer AU #3\n(Drone 3 Air Unit)" as AU3 #C8E0C8
+
+  rectangle "Gimbal IP Camera\n192.168.10.200\n(HIF-007, shared switch)\nRTSP/H.265 :8554" as GIMCAM #EDE0F8
 }
 
 ' ── Wired connections on drone assembly ──────────
 JET_EXT <-[#208040,thickness=2]-> AU_DUT  : 1000BASE-T · Cat 5e · ≤ 3 m\nJ3 RJ45 (HIF-004)
 PX4_EXT <-[#208040,dashed]-> AU_DUT       : (optional: FCC Ethernet\nvia baseboard switch)
+JET_EXT <-[#20A070,thickness=2]-> GIMCAM  : 100BASE-TX · JST-GH→RJ45 ≤2m\nJ15 (HIF-007, shared switch)
 
 ' ── MANET wireless links ─────────────────────────
 AU_DUT  <-[#408040,thickness=2,dashed]-> AU_GCS  : MANET mesh\n(wireless)
@@ -118,6 +121,10 @@ package "UDP Port Map  (on 192.168.10.x)" as PORTS #F4F8FF {
   rectangle "Swarm Heartbeat\nSrc/Dst: .11↔.12↔.13 :14900\n1 Hz SWARM_HEARTBEAT\n40-byte binary protocol" as PSH #E8D4F0
 
   rectangle "Swarm Coordination\nSrc/Dst: .11↔.12↔.13 :14901\nISR_CANDIDATE · ISR_RESULT\nVORONOI_PROPOSAL · VORONOI_ACCEPT\nPEER_STATE" as PSC #E8D4F0
+
+  rectangle "Gimbal Camera Source Stream\nMC (client) → .200:8554\nRTSP/H.265 · perception_front_node\n(IFD-006, HIF-007)" as PGIM #C8E8D8
+
+  rectangle "GCS Video Uplink\nMC .11:8555 → GCS\nRTSP/H.265 + metadata · video_mux_node\nIndependent of Channel A/B  (IFD-007)" as PVID #A8D8C0
 }
 
 note bottom of PORTS
@@ -139,11 +146,17 @@ note right of JET_EXT
     192.168.12.1  / 24  → internal FCC subnet
   Same physical port, same NIC.
   Linux IP aliases handle the routing.
+  ─────────────────────────────────
+  The gimbal camera (192.168.10.200) is just
+  another host on the 192.168.10.0/24 segment,
+  reached through the SAME eth0/switch — it is
+  NOT a second Jetson interface (no eth1).
 end note
 
 legend right
   | Line | Description |
   | <#208040><b>───</b> | Wired Ethernet (100/1000BASE-T) |
+  | <#20A070><b>───</b> | Gimbal camera (shared switch, HIF-007) |
   | <#408040><b>- - -</b> | MANET wireless (L2 bridge) |
   | <#3D5A80><b>- - -</b> | Optional / fallback link |
 endlegend

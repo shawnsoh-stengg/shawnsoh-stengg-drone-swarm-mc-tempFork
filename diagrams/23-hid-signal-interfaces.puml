@@ -1,7 +1,7 @@
 @startuml 23-hid-signal-interfaces
 ' ─────────────────────────────────────────────────────────────
-' Diagram 23: Signal Interface Block Diagram — All Six HIFs
-' MC-HID-001 §3–§8
+' Diagram 23: Signal Interface Block Diagram — All Seven HIFs
+' MC-HID-001 §3–§9
 ' ─────────────────────────────────────────────────────────────
 
 title "23 — Signal Interface Block Diagram\nAll Hardware Interfaces · Electrical Parameters  ·  MC-HID-001"
@@ -58,6 +58,8 @@ package "Swarm Peer Drone MCs" as PEER_PKG #F0E8F8 {
 }
 
 rectangle "Debug Host\nUbuntu x86_64\nlaptop / bench PC" as DBG #D8D8F8
+
+rectangle "Gimbal IP Camera\n192.168.10.200\nRTSP/H.265 · RJ45 via JST-GH pigtail" as GIMCAM #EDE0F8
 
 ' ═══════════════════════════════════════════════════
 ' MISSION COMPUTER ASSEMBLY
@@ -123,6 +125,20 @@ note on link #E8F4E8
   GCS↔MC MAVLink 2/UDP
   GCS↔FCC MAVLink 2/UDP (routed)
   Swarm heartbeat/coordination UDP
+end note
+
+' ═══════════════════════════════════════════════════
+' HIF-007: GIMBAL IP CAMERA (shared internal switch)
+' ═══════════════════════════════════════════════════
+
+GIMCAM -[#20A070,thickness=2]-> BB : **HIF-007**  100BASE-TX\nJST-GH 6-pin → RJ45 pigtail ≤ 2 m\n192.168.10.200 · RTSP/H.265 :8554
+
+note on link #E0F4EC
+  Shares the SAME internal Ethernet switch as
+  HIF-002/HIF-004 — not a second Jetson PHY.
+  Reached via Jetson's existing eth0 (192.168.10.11).
+  Link silence > 3 s → GIMBAL_LINK_LOST
+  (perception-only, no flight failsafe)  [FR-084]
 end note
 
 ' ═══════════════════════════════════════════════════

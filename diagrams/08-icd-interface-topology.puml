@@ -1,7 +1,7 @@
 @startuml 08-icd-interface-topology
 ' ─────────────────────────────────────────────────────────────
 ' Diagram 08: ICD Interface Topology
-' All five interface domains — IFD-001 to IFD-005
+' All seven interface domains — IFD-001 to IFD-007
 ' MC-ICD-001
 ' ─────────────────────────────────────────────────────────────
 
@@ -60,6 +60,8 @@ package "Swarm Peers" as PEER_PKG #F0E8F8 {
 
 rectangle "IMX219 CSI Camera\nSensor-id 0  ·  MIPI CSI-2" as CAM #EDE0F8
 
+rectangle "Gimbal IP Camera\n192.168.10.200  ·  shared switch (HIF-007)" as GIMCAM #EDE0F8
+
 ' ═══════════════════════════════════════════════════
 ' MISSION COMPUTER
 ' ═══════════════════════════════════════════════════
@@ -71,13 +73,18 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
 
   rectangle "IFD-003\nswarm_coordinator_node\n─────────────────\nUDP :14900 heartbeat\nUDP :14901 coordination\nSwarm binary protocol v1" as IFD003 #C8A8E8
 
-  rectangle "IFD-004\ncamera_node (gscam2)\n─────────────────\nCSI-2 · GStreamer pipeline\n1280×720 · ≥15 FPS · BGR8" as IFD004 #D0B8F8
+  rectangle "IFD-004\ncamera_node (gscam2)  ·  downward\n─────────────────\nCSI-2 · GStreamer pipeline\n1280×720 · ≥15 FPS · BGR8" as IFD004 #D0B8F8
+
+  rectangle "IFD-006\nperception_front_node\n─────────────────\nRTSP/H.265  ·  192.168.10.200:8554\nshared switch (HIF-007)" as IFD006 #C8E8D8
+
+  rectangle "IFD-007\nvideo_mux_node\n─────────────────\nRTSP/H.265 + metadata  ·  192.168.10.11:8555\nindependent of IFD-002 MAVLink" as IFD007 #A8D8C0
 
   package "IFD-005  ·  Internal ROS 2 Topics  ·  CycloneDDS  ·  Domain 0" as IFD005 #E8E8F8 {
     rectangle "/mc/fcc/*\nvehicle_state · odometry · imu\nmission_upload · mission_item_update · send_command" as T_FCC #D8E8F8
     rectangle "/mc/swarm/*\npeer_states · voronoi_cell · isr_role" as T_SWARM #E0D0F8
     rectangle "/mc/gcs/*\ncommand · mission_upload · link_status" as T_GCS #D0E8D0
     rectangle "/mc/search/*  ·  /mc/local_pose\n/mc/detections  ·  /mc/health\n/mc/mission_phase  ·  /mc/fault" as T_MISC #E8E8D0
+    rectangle "/mc/perception/front/*\ndetections · tracks\n/mc/video/uplink_status" as T_VIDEO #C8E8D8
   }
 
 }
@@ -170,12 +177,43 @@ note on link #EDE0F8
 end note
 
 ' ═══════════════════════════════════════════════════
+' IFD-006: Gimbal Camera → MC
+' ═══════════════════════════════════════════════════
+GIMCAM -[#20A070]-> IFD006
+
+note on link #C8E8D8
+  <b>Gimbal camera → MC  (unidirectional)</b>
+  RTSP/H.265  ·  192.168.10.200:8554
+  1920×1080 @ 30 FPS (configurable)
+  Independent of IFD-004 (downward camera)
+  Link silence > 3 s → GIMBAL_LINK_LOST
+  (perception-only, no flight failsafe)
+end note
+
+' ═══════════════════════════════════════════════════
+' IFD-007: MC → GCS Video Uplink
+' ═══════════════════════════════════════════════════
+GCS <-[#107850]- IFD007
+
+note on link #A8D8C0
+  <b>MC → GCS  (unidirectional, independent of IFD-002)</b>
+  RTSP/H.265 + KLV-style metadata
+  192.168.10.11:8555/mc_video
+  metadata: time_usec · track_id · class_id
+  confidence · lat/lon/alt
+end note
+
+IFD006 -[#20A070]-> IFD007 : "frames + detections/tracks"
+
+' ═══════════════════════════════════════════════════
 ' IFD-005 internal connections
 ' ═══════════════════════════════════════════════════
 IFD001 ..[#C0D0E8].. T_FCC
 IFD002 ..[#A0C8A0].. T_GCS
 IFD003 ..[#C0A0D8].. T_SWARM
 IFD004 ..[#C0A0E8].. T_MISC
+IFD006 ..[#20A070].. T_VIDEO
+IFD007 ..[#20A070].. T_VIDEO
 
 ' ═══════════════════════════════════════════════════
 ' LEGEND
@@ -185,7 +223,8 @@ legend right
   | <#E07000> Orange  | IFD-001  MC ↔ FCC  (uXRCE-DDS) |
   | <#208040> Green   | IFD-002  MC ↔ GCS  (MAVLink 2/UDP) |
   | <#7030A0> Purple  | IFD-003  MC ↔ Peers  (Swarm/UDP) |
-  | <#5050C0> Blue    | IFD-004  Camera → MC  (CSI) |
+  | <#5050C0> Blue    | IFD-004  Downward Camera → MC  (CSI) |
+  | <#20A070> Teal    | IFD-006 / IFD-007  Gimbal Camera / GCS Video Uplink (RTSP) |
   | <#A0A0C0> Gray    | IFD-005  Internal  (CycloneDDS) |
 endlegend
 

@@ -1,11 +1,12 @@
 @startuml 14-sdd-detection-pipeline
 ' ─────────────────────────────────────────────────────────────
 ' Diagram 14: Detection and Geolocation Pipeline
-' SDD §9 — detection_node
+' SDD §9 — perception_down_node (renamed from detection_node)
+' SDD §9a — perception_front_node reuses this same engine + geolocation math
 ' MC-SDD-001
 ' ─────────────────────────────────────────────────────────────
 
-title "14 — Detection and Geolocation Pipeline\ndetection_node  ·  TensorRT Inference + Ray-Cast Geolocation  ·  SDD §9"
+title "14 — Detection and Geolocation Pipeline\nperception_down_node (renamed from detection_node)  ·  TensorRT Inference + Ray-Cast Geolocation  ·  SDD §9"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -111,6 +112,23 @@ package "→ gcs_mavlink_node" as GCSOUT #E8F4E8 {
 }
 
 ' ═══════════════════════════════════════════════════
+' GIMBAL PERCEPTION (perception_front_node · SDD §9a)
+' independent node instance, same engine/geolocation math
+' ═══════════════════════════════════════════════════
+
+package "perception_front_node  ·  SDD §9a  (video_uplink package)" as GIMPKG #E0F4EC {
+  rectangle "RTSP/H.265 stream\nrtsp://192.168.10.200:8554/stream1\n(gimbal camera, shared switch, HIF-007)\nvia rtspsrc → same Frame Queue /\nPreprocessing / TensorRT / NMS pattern\nas the boxes above (independent instance)" as GIMIN #A8E0C8
+
+  rectangle "IoU Tracker  (CPU)\nGreedy frame-to-frame bbox IoU match\n(track_iou_threshold=0.3)\nframes_tracked++ on match\ndropped after track_miss_limit=10 misses" as TRACKER #90D0B0
+
+  rectangle "/mc/perception/front/detections\nmc_msgs/DetectionArray  (event, ≤1 s)\n/mc/perception/front/tracks\nmc_msgs/TrackArray  (≥5 Hz)" as GIMOUT #78C0A0
+}
+
+package "→ video_mux_node" as VMUXOUT #D0EFE0 {
+  rectangle "GCS video uplink\nRTSP/H.265 + metadata mux\n:8555/mc_video  (IFD-007)" as VMUXBOX #A8E0C8
+}
+
+' ═══════════════════════════════════════════════════
 ' FLOW
 ' ═══════════════════════════════════════════════════
 
@@ -134,6 +152,13 @@ UNCERT    --> DETOUT  : assembled Detection msg
 DETOUT    --> GCSOUT  : forwarded by gcs_mavlink_node
 
 MGMT     --> TRT      : loaded engine
+
+' Gimbal perception branch (independent node/instance, reuses TRT + geolocation)
+GIMIN     ..> TRT      : reuses same engine\n(independent instance)
+GIMIN     ..> UNPROJ   : reuses same geolocation math\n(gimbal-mount TF)
+NMS       ..> TRACKER : (analogous NMS output\nfor the gimbal instance)
+TRACKER   --> GIMOUT   : tracks + detections
+GIMOUT    --> VMUXOUT  : frames + /mc/perception/front/*
 
 ' ═══════════════════════════════════════════════════
 ' NOTES
@@ -167,6 +192,14 @@ note right of UNCERT
   1. Pixel FOV at slant range (geometric)
   2. VO position covariance trace (localisation)
   Combined 1-sigma published as position_uncertainty_cm.
+end note
+
+note bottom of GIMPKG
+  perception_front_node is a separate node/process (video_uplink package,
+  not vision) with its own Frame Queue / TensorRT context — it reuses the
+  same model and geolocation algorithm as perception_down_node above
+  (SDD §9.2, §9.3) rather than sharing runtime state. Both are subject to
+  the shared ≤80% GPU throughput budget (PR-010, FR-082).
 end note
 
 @enduml

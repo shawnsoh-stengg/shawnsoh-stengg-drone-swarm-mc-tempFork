@@ -97,7 +97,12 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
       package "vision.service" as SVC_VIS #D8F0D8 {
         component "camera_node  (gscam2)" as N_CAM
         component "visual_localisation_node" as N_VIS
-        component "detection_node" as N_DET
+        component "perception_down_node\n(renamed from detection_node)" as N_DET
+      }
+
+      package "video-uplink.service" as SVC_VIDEO #D8F0D8 {
+        component "perception_front_node" as N_PFRONT
+        component "video_mux_node" as N_VMUX
       }
 
       package "health-monitor.service" as SVC_HM #D8F0D8 {
@@ -117,6 +122,7 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
     artifact "/dev/video*\n(CSI camera)" as VIDDEV
     artifact "192.168.12.x\n(internal ethernet → FCC)" as ETH_INT
     artifact "192.168.10.x\n(MANET mesh)" as ETH_MESH
+    artifact "192.168.10.200\n(gimbal camera, shared switch, HIF-007)" as ETH_GIMCAM
   }
 
 }
@@ -140,6 +146,7 @@ BASE <.. SVC_SWARM : "extends"
 BASE <.. SVC_GCS : "extends"
 BASE <.. SVC_EXEC : "extends"
 BASE <.. SVC_VIS : "extends"
+BASE <.. SVC_VIDEO : "extends"
 BASE <.. SVC_HM : "extends"
 
 WS --> SVC_FCC : "bind mount"
@@ -147,15 +154,18 @@ WS --> SVC_SWARM : "bind mount"
 WS --> SVC_GCS : "bind mount"
 WS --> SVC_EXEC : "bind mount"
 WS --> SVC_VIS : "bind mount"
+WS --> SVC_VIDEO : "bind mount"
 WS --> SVC_HM : "bind mount"
 
 TTY --> SVC_FCC : "DeviceAllow"
 VIDDEV --> SVC_VIS : "DeviceAllow"
 ETH_INT --> SVC_FCC
+ETH_GIMCAM --> SVC_VIDEO : "DeviceAllow (network_mode=host)"
 
 SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
 SVC_MLR --> GCS_HW : "MAVLink 2/UDP"
 SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
+SVC_VIDEO --> GCS_HW : "RTSP/H.265 + metadata\n:8555 (independent of MAVLink)"
 
 note right of SVC_FCC
   DeviceAllow=ttyTHS1
@@ -169,6 +179,13 @@ note right of SVC_VIS
   DeviceAllow=/dev/nvidia*
   MemoryMax=6G
   CPUQuota=100%
+  GPUAccess=all
+end note
+
+note right of SVC_VIDEO
+  network_mode=host (RTSP :8554/:8555)
+  DeviceAllow=/dev/nvidia*
+  MemoryMax=4G
   GPUAccess=all
 end note
 

@@ -63,6 +63,8 @@ package "Swarm Peers  (MANET · 192.168.10.x)" as PEER_PKG #F5ECF5 {
 
 database "IMX219 CSI Camera" as CAM #EDE0F8
 
+database "Gimbal IP Camera\n192.168.10.200 (shared switch)" as GIMCAM #EDE0F8
+
 ' ═══════════════════════════════════════════════════
 ' CONTAINER: fcc-bridge
 ' ═══════════════════════════════════════════════════
@@ -100,7 +102,15 @@ package "mission-exec" as C_EXEC #FFF0E0 {
 package "vision" as C_VIS #F4EEF8 {
   component "camera_node\n(gscam2)\nIMX219 CSI driver\n/camera/image_raw ≥15 FPS" as CAMNODE #E0C8F8
   component "visual_localisation_node\nVisual odometry + IMU fusion\n6-DoF pose ≥10 Hz\nGNSS-denied fallback" as VISLOC #D0B0F0
-  component "detection_node\nAI inference (GPU)\nTarget detection\n≤500 ms latency" as DET #C0A0E8
+  component "perception_down_node\n(renamed from detection_node)\nAI inference (GPU)\nTarget detection\n≤500 ms latency" as DET #C0A0E8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: video-uplink
+' ═══════════════════════════════════════════════════
+package "video-uplink" as C_VIDEO #E8F4F0 {
+  component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nIndependent of vision pipeline" as PFRONT #A8E0C8
+  component "video_mux_node\nRe-encode + metadata mux\nRTSP uplink to GCS :8555" as VMUX #90D0B0
 }
 
 ' ═══════════════════════════════════════════════════
@@ -118,6 +128,7 @@ QGC <--> MLR : "MAVLink 2/UDP\nGCS↔MC channel"
 MLR <--> GCS_NODE
 PEERS <--> SWARM : "Swarm protocol/UDP\nMANET · 192.168.10.x"
 CAM --> CAMNODE : "CSI"
+GIMCAM --> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)"
 
 ' ═══════════════════════════════════════════════════
 ' INTERNAL ROS 2 TOPIC FLOWS
@@ -155,6 +166,12 @@ VISLOC -up-> FCC_BRIDGE : "(vehicle_visual_odometry)"
 ' Detections → GCS
 DET --> GCS_NODE : "/mc/detections"
 
+' Gimbal video pipeline (independent of vision pipeline and GCS MAVLink channel)
+PFRONT --> VMUX : "/mc/perception/front/detections\n/mc/perception/front/tracks"
+VMUX --> QGC : "RTSP/H.265 + metadata\n:8555 (independent of MAVLink)"
+PFRONT --> HEALTH : "(liveness heartbeat)"
+VMUX --> HEALTH : "/mc/video/uplink_status"
+
 ' Health → GCS + executor
 HEALTH --> GCS_NODE : "/mc/health"
 HEALTH --> EXEC : "/mc/fault (failsafe trigger)"
@@ -166,6 +183,7 @@ legend right
   | <#C8A8E8> | swarm-coord |
   | <#FFD090> | mission-exec |
   | <#C0A0E8> | vision |
+  | <#90D0B0> | video-uplink |
   | <#D0D0D0> | health-monitor |
 endlegend
 
