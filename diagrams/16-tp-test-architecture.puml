@@ -51,7 +51,7 @@ package "TP-HW — Hardware-in-the-Loop  (Milestone M5, M6)" as HW #FFE8C0 {
 ' ═══════════════════════════════════════════════════
 package "TP-ST — SITL System Tests  (M3 partial, M4 full, nightly CI)" as ST #D8EED8 {
   rectangle "Environment\nPX4 SITL + Gazebo (x86_64 host)\nMC Docker stack: SIMULATION_MODE=true\n2–3 MC instances on loopback LAN\nQGroundControl / mock_gcs_node" as ST_ENV #B8DCA8
-  rectangle "Scope\n12 tests: nominal 2-drone mission · GCS loss HOLD\nbattery RTL · executor crash · peer loss re-partition\nFCC comms loss · mission upload · detection geolocation\nVO mode · ISR failover · telemetry · resource usage" as ST_SCOPE #B8DCA8
+  rectangle "Scope\n12 tests: nominal 2-drone mission · GCS loss HOLD\nbattery RTL · manager crash · peer loss re-partition\nFCC comms loss · mission upload · detection geolocation\nVO mode · ISR failover · telemetry · resource usage" as ST_SCOPE #B8DCA8
   rectangle "Tools\npytest + rclpy assertions\niptables (link injection) · docker kill (fault injection)\nros2 topic echo / hz / delay" as ST_TOOLS #B8DCA8
 }
 

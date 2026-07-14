@@ -19,7 +19,7 @@
 1. [Introduction](#1-introduction)
 2. [Architectural Design](#2-architectural-design)
 3. [FccBackend — MC↔FCC Abstraction](#3-fccbackend--mcfcc-abstraction)
-4. [mission_executor_node — Mission Phase State Machine](#4-mission_executor_node--mission-phase-state-machine)
+4. [mission_manager_node — Mission Phase State Machine](#4-mission_manager_node--mission-phase-state-machine)
 5. [formation_controller_node — Formation Keeping](#5-formation_controller_node--formation-keeping)
 6. [swarm_coordinator_node — Swarm Management](#6-swarm_coordinator_node--swarm-management)
 7. [search_planner_node — Coverage Path Planning](#7-search_planner_node--coverage-path-planning)
@@ -47,7 +47,7 @@ Four principles govern the design:
 
 2. **Transport agnosticism at the FCC boundary.** The `FccBackend` abstraction ensures that no application node knows whether the FCC is reached via uXRCE-DDS or MAVLink UDP. This is the single most important seam in the architecture.
 
-3. **Single source of truth per domain.** One node owns each domain: `mission_executor_node` owns mission phase; `swarm_coordinator_node` owns peer state and cell assignment; `health_monitor_node` owns system health. Others subscribe, never assert.
+3. **Single source of truth per domain.** One node owns each domain: `mission_manager_node` owns mission phase; `swarm_coordinator_node` owns peer state and cell assignment; `health_monitor_node` owns system health. Others subscribe, never assert.
 
 4. **Fail toward safety.** Every timeout, every lost link, every unrecoverable node failure drives the system toward a known-safe state (HOLD or RTL). The design never silently degrades.
 
@@ -79,7 +79,7 @@ Four principles govern the design:
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Layer 4 — Mission Intelligence                              │
-│  swarm_coordinator · mission_executor · search_planner       │
+│  swarm_coordinator · mission_manager · search_planner       │
 │  visual_localisation · perception_down · perception_front    │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 3 — GCS and Swarm Communication                       │
@@ -107,7 +107,7 @@ Layers only communicate downward via well-defined interfaces. Layer 4 nodes neve
          /mc/gcs/command   │
                  │    /mc/gcs/mission_upload
                  ▼         ▼
-          mission_executor_node ◄── /mc/executor/heartbeat (self)
+          mission_manager_node ◄── /mc/manager/heartbeat (self)
            │       │       │
     /mc/   │  /mc/ │  /mc/ │
    mission │  fcc/ │  swarm│
@@ -130,7 +130,7 @@ Layers only communicate downward via well-defined interfaces. Layer 4 nodes neve
                    │ setp  ▼           ▼
                    └──► fcc_bridge_node (aggregated)
                               │
-                    health_monitor_node ◄── /mc/executor/heartbeat
+                    health_monitor_node ◄── /mc/manager/heartbeat
                          │
                     /mc/health  /mc/fault
                          │
@@ -275,7 +275,7 @@ The node does **no business logic** — it is purely an adapter.
 
 ---
 
-## 4. mission_executor_node — Mission Phase State Machine
+## 4. mission_manager_node — Mission Phase State Machine
 
 **SRS refs:** FR-001–005, FR-010–016, FR-060–064  
 **Package:** `mission_exec`
@@ -336,7 +336,7 @@ Any failed check generates a `STATUSTEXT` with the specific reason. The node doe
 
 ### 4.3 GCS Authority Model
 
-The GCS retains authority to command phase transitions at any time (FR-003). GCS commands arrive as `/mc/gcs/command` messages. The executor processes them before evaluating autonomous transitions. The priority order is:
+The GCS retains authority to command phase transitions at any time (FR-003). GCS commands arrive as `/mc/gcs/command` messages. The manager processes them before evaluating autonomous transitions. The priority order is:
 
 1. **Emergency commands** (`DISARM`, `RTL`): bypass transition table, execute immediately.
 2. **Phase commands** (`PHASE_TRANSITION`): validated against the transition table; rejected if guard fails.
@@ -344,7 +344,7 @@ The GCS retains authority to command phase transitions at any time (FR-003). GCS
 
 ### 4.4 Watchdog Heartbeat
 
-The executor publishes `std_msgs/Header` to `/mc/executor/heartbeat` at ≥ 1 Hz inside its main timer callback. If the node hangs or crashes, this topic goes silent. The `health_monitor_node` detects the silence within 5 s and initiates restart (SFR-003).
+The manager publishes `std_msgs/Header` to `/mc/manager/heartbeat` at ≥ 1 Hz inside its main timer callback. If the node hangs or crashes, this topic goes silent. The `health_monitor_node` detects the silence within 5 s and initiates restart (SFR-003).
 
 The heartbeat is the last thing published in each timer cycle — if it is published, all preceding logic in that cycle completed successfully.
 
@@ -409,7 +409,7 @@ Target motion between consecutive cycles is clamped to `max_vel_xy` / `max_vel_z
 
 ### 5.3 Update Cadence and Mission-Mode Safety
 
-Unlike OFFBOARD, PX4's `MISSION` mode does not exit autonomously if mission item updates stop arriving — the FCC simply continues toward the last-written item indefinitely. The 5 Hz cadence above is therefore a tracking-quality target, not a mode-retention requirement (contrast the old `trajectory_setpoint` ≥ 2 Hz floor). The staleness safety net moves entirely into `formation_controller_node`: if its own `WallTimer` stalls (no leader state, no FCC link, or the node itself hangs), the watchdog in §5.4 and the executor heartbeat (§4.4) are what command HOLD — PX4 will not do it for us.
+Unlike OFFBOARD, PX4's `MISSION` mode does not exit autonomously if mission item updates stop arriving — the FCC simply continues toward the last-written item indefinitely. The 5 Hz cadence above is therefore a tracking-quality target, not a mode-retention requirement (contrast the old `trajectory_setpoint` ≥ 2 Hz floor). The staleness safety net moves entirely into `formation_controller_node`: if its own `WallTimer` stalls (no leader state, no FCC link, or the node itself hangs), the watchdog in §5.4 and the manager heartbeat (§4.4) are what command HOLD — PX4 will not do it for us.
 
 ### 5.4 Leader State Staleness
 
@@ -472,7 +472,7 @@ void check_peer_liveness() {
         auto age = (node_->now() - peer.last_heartbeat).seconds();
         if (peer.state == PeerState::ALIVE && age > 3.0) {
             peer.state = PeerState::LOST;
-            publish_peer_lost_event(id);      // → mission_executor, GCS
+            publish_peer_lost_event(id);      // → mission_manager, GCS
         } else if (peer.state == PeerState::LOST && age > 30.0) {
             peer.state = PeerState::DEAD;
         }
@@ -496,7 +496,7 @@ Default weights: `w_bat = 0.4`, `w_prox = 0.4`, `w_sens = 0.2`
 
 `sensor_ok()` returns 1.0 if bits `CAMERA_OK` and `AI_INFERENCE_OK` are both set in `sensor_flags`, else 0.0.
 
-Drones are ranked by score. The top `ceil(N/2)` drones (where N = ALIVE peer count) are elected to the ISR subset. The coordinator broadcasts `ISR_RESULT` and collects `ISR_RESULT_ACK` from all peers within 5 s. If any ACK is missing, the result is re-broadcast once. After two failed re-broadcasts, the mission executor is notified of a coordination fault.
+Drones are ranked by score. The top `ceil(N/2)` drones (where N = ALIVE peer count) are elected to the ISR subset. The coordinator broadcasts `ISR_RESULT` and collects `ISR_RESULT_ACK` from all peers within 5 s. If any ACK is missing, the result is re-broadcast once. After two failed re-broadcasts, the mission manager is notified of a coordination fault.
 
 If the coordinator drone itself is LOST, the next-lowest-ID ALIVE drone assumes coordinator role. This is detected by each drone monitoring whether any `ISR_RESULT` is received within 8 s of entering `ISR_SELECTION`; if not, the next-lowest-ID drone initiates the election.
 
@@ -526,7 +526,7 @@ voronoi_partition(sites, polygon):
 
 A `rclcpp::WallTimer` at 1 Hz builds and sends a `SWARM_HEARTBEAT` packet to each peer's IP at port 14900. The packet is constructed from the latest `/mc/fcc/vehicle_state` and `/mc/mission_phase` data.
 
-The coordinator also publishes `/mc/swarm/peer_states` (a `SwarmPeerArray`) at 1 Hz for internal consumption by `formation_controller_node` and `mission_executor_node`.
+The coordinator also publishes `/mc/swarm/peer_states` (a `SwarmPeerArray`) at 1 Hz for internal consumption by `formation_controller_node` and `mission_manager_node`.
 
 ---
 
@@ -577,9 +577,9 @@ boustrophedon_path(cell_polygon, footprint_width, overlap):
 On receiving a new `/mc/swarm/voronoi_cell`, the planner:
 1. Computes the path (≤ 5 s, PR-008).
 2. Publishes the path to `/mc/search/coverage_path`.
-3. The `mission_executor_node` receives the path, formats it as PX4 mission items, and uploads via `fcc_bridge_node`.
+3. The `mission_manager_node` receives the path, formats it as PX4 mission items, and uploads via `fcc_bridge_node`.
 
-On cell update (re-partition), the planner re-runs immediately. The executor cancels the active FCC mission and uploads the new path. The starting waypoint is chosen as the path waypoint nearest to the drone's current position to minimise dead transit.
+On cell update (re-partition), the planner re-runs immediately. The manager cancels the active FCC mission and uploads the new path. The starting waypoint is chosen as the path waypoint nearest to the drone's current position to minimise dead transit.
 
 ### 7.3 Coordinate Projection
 
@@ -843,7 +843,7 @@ Critical nodes and timeouts:
 
 | Node | Heartbeat topic | Timeout |
 |---|---|---|
-| `mission_executor_node` | `/mc/executor/heartbeat` | 5 s |
+| `mission_manager_node` | `/mc/manager/heartbeat` | 5 s |
 | `fcc_bridge_node` | `/mc/fcc/vehicle_state` | 2 s |
 | `gcs_mavlink_node` | `/mc/gcs/link_status` | 2 s |
 | `swarm_coordinator_node` | `/mc/swarm/peer_states` | 3 s |
@@ -862,9 +862,9 @@ every 1 s:
     → command HOLD (if FCC responds); else declare FAULT, command RTL
     → abort: cannot RTL without FCC link
 
-  if EXECUTOR_DEAD in fault_mask:
-    restart_count[executor]++
-    if restart_count[executor] <= 3:
+  if MANAGER_DEAD in fault_mask:
+    restart_count[manager]++
+    if restart_count[manager] <= 3:
       → systemd_restart("mission-exec.service")
     else:
       → command RTL via fcc_bridge_node directly
@@ -1065,7 +1065,7 @@ All configuration lives in `/etc/drone-mc/` (bind-mounted read-only into every c
     fcc_bridge.yaml
     formation_controller.yaml
     swarm_coordinator.yaml
-    mission_executor.yaml
+    mission_manager.yaml
     search_planner.yaml
     visual_localisation.yaml
     perception_down.yaml       ← renamed from detection.yaml

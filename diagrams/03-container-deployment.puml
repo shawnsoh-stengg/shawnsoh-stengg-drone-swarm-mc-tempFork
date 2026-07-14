@@ -89,7 +89,7 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
       }
 
       package "mission-exec.service" as SVC_EXEC #D8F0D8 {
-        component "mission_executor_node" as N_EXEC
+        component "mission_manager_node" as N_EXEC
         component "search_planner_node" as N_PLAN
         component "watchdog supervisor" as WD
       }

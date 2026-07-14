@@ -264,9 +264,9 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | FR-071 | MUST | Test | The health monitor shall publish a `/mc/health` message at ≥ 1 Hz containing resource metrics and a bitmask of active health flags, and stream it to the GCS. |
 | FR-072 | MUST | Test | The MC shall command FCC RTL when battery remaining falls below the configurable `LOW_BATTERY_THRESHOLD` (default: 20%), unless an active GCS override is in effect. |
 | FR-073 | MUST | Test | The MC shall command FCC HOLD if the GCS link is lost for > 10 s while the drone is in any autonomous mission phase (INGRESS, MUSTER, ISR_SELECTION, VORONOI_PARTITION, SEARCH). |
-| FR-074 | MUST | Test | A watchdog shall monitor the `mission_executor_node` heartbeat. If no heartbeat is received for > 5 s, the watchdog shall trigger a node restart via systemd and notify the GCS. |
+| FR-074 | MUST | Test | A watchdog shall monitor the `mission_manager_node` heartbeat. If no heartbeat is received for > 5 s, the watchdog shall trigger a node restart via systemd and notify the GCS. |
 | FR-075 | MUST | Test | After 3 consecutive failed restart attempts on any critical node, the health monitor shall declare a critical fault and command FCC RTL via the FccBackend. |
-| FR-076 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous executor / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
+| FR-076 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous manager / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
 
 #### 4.1.9 Front Gimbal Perception and Video Uplink
 
@@ -361,10 +361,10 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 |---|---|---|---|
 | SFR-001 | MUST | Test | The MC shall not command FCC ARM without explicit GCS ARM authorisation present in the current uploaded mission. Unauthorised arm attempts shall be rejected and logged. |
 | SFR-002 | MUST | Test | The MC shall not disable, suppress, or override any PX4 failsafe configuration. All MC-commanded actions shall remain within the safety envelope defined by the PX4 v1.14 failsafe configuration. |
-| SFR-003 | MUST | Test | The `mission_executor_node` watchdog shall trigger FCC HOLD and notify the GCS if the executor's heartbeat is silent for > 5 s. |
+| SFR-003 | MUST | Test | The `mission_manager_node` watchdog shall trigger FCC HOLD and notify the GCS if the manager's heartbeat is silent for > 5 s. |
 | SFR-004 | MUST | Test | After 3 consecutive failed systemd restart attempts on any node declared critical, the health monitor shall command FCC RTL via the FccBackend and set mission phase to FAULT. |
 | SFR-005 | MUST | Inspection | The MC shall validate the schema and parameter ranges of all incoming MAVLink messages and swarm protocol messages before acting on their content. Malformed messages shall be discarded and logged. |
-| SFR-006 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous executor / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
+| SFR-006 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous manager / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
 | SFR-007 | MUST | Test | The MC shall command FCC HOLD if the GCS datalink is lost for > 10 s while in any autonomous phase (INGRESS, MUSTER, ISR_SELECTION, VORONOI_PARTITION, SEARCH). |
 | SFR-008 | MUST | Test | The MC shall command FCC RTL when battery remaining falls below `LOW_BATTERY_THRESHOLD` (default: 20%). This shall not be suppressible unless a GCS override command is active and the GCS link is healthy. |
 
@@ -430,13 +430,13 @@ Receives formation leader state from swarm coordinator. Computes NED position ta
 
 **Req:** SW-013 · MUST · Test
 
-#### mission_executor_node
+#### mission_manager_node
 
 Top-level mission phase state machine. Arbitrates between GCS commands and autonomous triggers. Emits watchdog heartbeat at ≥ 1 Hz. Single point of truth for current mission phase.
 
 | Direction | Topics |
 |---|---|
-| Publishes | `/mc/mission_phase`, `/mc/executor/heartbeat` |
+| Publishes | `/mc/mission_phase`, `/mc/manager/heartbeat` |
 
 **Req:** SW-014 · MUST · Test
 
@@ -523,7 +523,7 @@ Monitors CPU, memory, disk, GPU temperature, and node liveness via ROS 2 alive c
 | SW-032 | `mavlink-router` | mavlink-router v4 daemon, routing config | `network_mode=host` |
 | SW-033 | `gcs-comms` | gcs_mavlink_node, MAVROS | `network_mode=host` |
 | SW-034 | `swarm-coord` | swarm_coordinator_node, formation_controller_node | `network_mode=host` |
-| SW-035 | `mission-exec` | mission_executor_node, search_planner_node, watchdog supervisor | — |
+| SW-035 | `mission-exec` | mission_manager_node, search_planner_node, watchdog supervisor | — |
 | SW-036 | `vision` | camera_node (gscam2), visual_localisation_node, perception_down_node (renamed from detection_node) | GPU device, `/dev/video*` |
 | SW-037 | `health-monitor` | health_monitor_node | Read-only `/sys`, `/proc` |
 | SW-038 | `video-uplink` | perception_front_node, video_mux_node | GPU device, `network_mode=host` (RTSP ports 8554/8555) |

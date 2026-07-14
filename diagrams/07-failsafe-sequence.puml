@@ -38,7 +38,7 @@ skinparam sequence {
 participant "GCS" as GCS #D8EED8
 participant "health_monitor\n_node" as HM #D0D0D0
 participant "watchdog\nsupervisor" as WD #E8E0C0
-participant "mission_executor\n_node" as EXEC #A8CCEE
+participant "mission_manager\n_node" as EXEC #A8CCEE
 participant "FccBackend\n(fcc_bridge)" as FCC_BE #C8E0F0
 participant "FCC\n(PX4)" as FCC #FFD4A8
 
@@ -48,28 +48,28 @@ participant "FCC\n(PX4)" as FCC #FFD4A8
 == Scenario A — Normal Watchdog Operation ==
 
 loop Every 1 s  [FR-074]
-  EXEC -> WD : /mc/executor/heartbeat
+  EXEC -> WD : /mc/manager/heartbeat
   WD -> HM : heartbeat received ✓
 end
 
 HM -> GCS : /mc/health (all nominal)
 
 ' ═══════════════════════════════════════════════════
-' SCENARIO B: Executor node crash → restart
+' SCENARIO B: Manager node crash → restart
 ' ═══════════════════════════════════════════════════
-== Scenario B — Executor Crash: Restart Attempt  [FR-074, SFR-003] ==
+== Scenario B — Manager Crash: Restart Attempt  [FR-074, SFR-003] ==
 
-EXEC ->X WD : (executor crashes — heartbeat stops)
+EXEC ->X WD : (manager crashes — heartbeat stops)
 
 note over WD
-  Watchdog polls /mc/executor/heartbeat.
+  Watchdog polls /mc/manager/heartbeat.
   Timeout threshold: 5 s  [FR-074]
 end note
 
 WD -> WD : heartbeat timeout\n(5 s silence detected)
 
-WD -> HM : EXECUTOR_UNRESPONSIVE
-HM -> GCS : MAVLink: STATUSTEXT\n"WARN: executor unresponsive, restarting"
+WD -> HM : MANAGER_UNRESPONSIVE
+HM -> GCS : MAVLink: STATUSTEXT\n"WARN: manager unresponsive, restarting"
 
 WD -> FCC_BE : vehicle_command: HOLD
 FCC_BE -> FCC : vehicle_command: HOLD
@@ -81,30 +81,30 @@ WD -> WD : systemd restart: mission-exec.service\n(attempt 1 of 3)
 note right of WD
   systemctl restart mission-exec.service
   → Docker container restart
-  → mission_executor_node relaunches
+  → mission_manager_node relaunches
 end note
 
-EXEC -> WD : /mc/executor/heartbeat (resumed ✓)
-WD -> HM : executor recovered (attempt 1)
-HM -> GCS : STATUSTEXT "INFO: executor recovered"
+EXEC -> WD : /mc/manager/heartbeat (resumed ✓)
+WD -> HM : manager recovered (attempt 1)
+HM -> GCS : STATUSTEXT "INFO: manager recovered"
 
 ' ═══════════════════════════════════════════════════
 ' SCENARIO C: 3× restart failure → RTL
 ' ═══════════════════════════════════════════════════
 == Scenario C — 3× Restart Failure: Critical Fault → RTL  [FR-075, SFR-004] ==
 
-EXEC ->X WD : (executor fails again)
+EXEC ->X WD : (manager fails again)
 WD -> WD : timeout (5 s)
 WD -> WD : restart attempt 1 → FAILED
 WD -> WD : restart attempt 2 → FAILED
 WD -> WD : restart attempt 3 → FAILED
 
-HM <- WD : CRITICAL_FAULT\n{node=mission_executor, restarts=3}
+HM <- WD : CRITICAL_FAULT\n{node=mission_manager, restarts=3}
 
 HM -> HM : declare FAULT phase\nset /mc/mission_phase = FAULT
 
-HM -> GCS : MAVLink: STATUSTEXT\n"CRITICAL: executor failed ×3, commanding RTL"
-HM -> GCS : /mc/health {fault_mask=EXECUTOR_DEAD}
+HM -> GCS : MAVLink: STATUSTEXT\n"CRITICAL: manager failed ×3, commanding RTL"
+HM -> GCS : /mc/health {fault_mask=MANAGER_DEAD}
 
 HM -> FCC_BE : vehicle_command: RTL
 FCC_BE -> FCC : vehicle_command: NAV_RETURN_TO_LAUNCH

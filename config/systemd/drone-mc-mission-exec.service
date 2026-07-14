@@ -1,9 +1,9 @@
-# drone-mc-mission-exec.service — mission_executor_node + search_planner_node
+# drone-mc-mission-exec.service — mission_manager_node + search_planner_node
 # (mission state machine, SDD §7/§12.4). Depends on swarm-coord (ISR/Voronoi
 # roles), fcc-bridge (vehicle_state) and gcs-comms (GCS override authority,
 # FR-003). Installed by scripts/02-install-systemd-units.sh.
 [Unit]
-Description=Drone MC — Mission Executor
+Description=Drone MC — Mission Manager
 PartOf=drone-mc.target
 After=docker.service drone-mc-health-monitor.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service drone-mc-swarm-coord.service
 Requires=docker.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service drone-mc-swarm-coord.service

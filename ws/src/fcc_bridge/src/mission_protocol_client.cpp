@@ -47,7 +47,7 @@ void MissionProtocolClient::send_mission_item_int(const MissionItem & item)
   mavlink_message_t msg;
   // current=0: PX4 does not (re)activate the item on write; a separate
   // MAV_CMD_DO_SET_MISSION_CURRENT / MISSION_START drives activation
-  // (mission_executor_node, SDD §7.2). autocontinue=1: proceed to next item.
+  // (mission_manager_node, SDD §7.2). autocontinue=1: proceed to next item.
   mavlink_msg_mission_item_int_pack(
     system_id_, component_id_, &msg, kTargetSystem, kTargetComponent, item.seq, item.frame,
     item.command, /*current=*/0, /*autocontinue=*/1, /*param1 hold_time=*/0.0F,

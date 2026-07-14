@@ -67,7 +67,7 @@ package "MC Instance 1  ·  Docker stack  ·  192.168.10.11" as MC1 #E4EEF8 {
 
   rectangle "fcc_bridge_node\n[MavlinkUdpBackend]\nUDP → 192.168.10.50:14540" as MC1_FCC #A8CCEE
 
-  rectangle "mission_executor_node\nswarm_coordinator_node\nformation_controller_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node\nvisual_localisation_node\ndetection_node" as MC1_NODES #B8D0E8
+  rectangle "mission_manager_node\nswarm_coordinator_node\nformation_controller_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node\nvisual_localisation_node\ndetection_node" as MC1_NODES #B8D0E8
 
   rectangle "mock_camera_node\n(replaces CSI camera_node)\nreplays bags/camera_outdoor.bag\n1280×720 BGR8 ≥15 FPS" as MC1_CAM #D0E0F8
 
@@ -82,7 +82,7 @@ package "MC Instance 2  ·  Docker stack  ·  192.168.10.12" as MC2 #EEE4F8 {
 
   rectangle "fcc_bridge_node\n[MavlinkUdpBackend]\nUDP → 192.168.10.50:14541" as MC2_FCC #C0A0E0
 
-  rectangle "mission_executor_node\nswarm_coordinator_node\nformation_controller_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node\nvisual_localisation_node\ndetection_node" as MC2_NODES #C8B8E0
+  rectangle "mission_manager_node\nswarm_coordinator_node\nformation_controller_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node\nvisual_localisation_node\ndetection_node" as MC2_NODES #C8B8E0
 
   rectangle "mock_camera_node\n(replays bags/camera_outdoor.bag)" as MC2_CAM #D8C8F0
 

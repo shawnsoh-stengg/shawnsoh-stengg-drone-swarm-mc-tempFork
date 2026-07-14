@@ -314,7 +314,7 @@ Unit tests are implemented in `test/` within each package, using `gtest`. Run wi
 
 ---
 
-### TP-UT-010: Mission Executor — Invalid Transition Rejected
+### TP-UT-010: Mission Manager — Invalid Transition Rejected
 
 **SRS ref:** FR-001  
 **SDD ref:** §4.1  
@@ -330,7 +330,7 @@ Unit tests are implemented in `test/` within each package, using `gtest`. Run wi
 
 ---
 
-### TP-UT-011: Mission Executor — Pre-Arm Check Fails on Low Battery
+### TP-UT-011: Mission Manager — Pre-Arm Check Fails on Low Battery
 
 **SRS ref:** FR-001, SFR-005  
 **Package:** `mission_exec`
@@ -343,7 +343,7 @@ Unit tests are implemented in `test/` within each package, using `gtest`. Run wi
 
 ---
 
-### TP-UT-012: Mission Executor — GCS Emergency Command Bypasses Guards
+### TP-UT-012: Mission Manager — GCS Emergency Command Bypasses Guards
 
 **SRS ref:** FR-003  
 **SDD ref:** §4.3  
@@ -629,7 +629,7 @@ Default timeout per test: 30 s unless specified.
 
 ---
 
-### TP-NI-010: mission_executor_node — GCS Mission Upload Processing
+### TP-NI-010: mission_manager_node — GCS Mission Upload Processing
 
 **SRS ref:** IR-010, IR-011  
 **Package:** `mission_exec`
@@ -646,15 +646,15 @@ Default timeout per test: 30 s unless specified.
 
 ---
 
-### TP-NI-011: mission_executor_node — Heartbeat Continuity
+### TP-NI-011: mission_manager_node — Heartbeat Continuity
 
 **SRS ref:** FR-074  
 **Package:** `mission_exec`
 
-**Preconditions:** `mission_executor_node` running in PREFLIGHT.
+**Preconditions:** `mission_manager_node` running in PREFLIGHT.
 
 **Procedure:**
-1. Subscribe to `/mc/executor/heartbeat` for 10 s.
+1. Subscribe to `/mc/manager/heartbeat` for 10 s.
 2. Record all timestamps.
 3. Compute maximum inter-message gap.
 
@@ -662,20 +662,20 @@ Default timeout per test: 30 s unless specified.
 
 ---
 
-### TP-NI-012: health_monitor_node — Executor Heartbeat Loss Detection
+### TP-NI-012: health_monitor_node — Manager Heartbeat Loss Detection
 
 **SRS ref:** FR-074, SFR-003  
 **Package:** `health_monitor`
 
-**Preconditions:** `health_monitor_node` running; `mock_executor_node` publishing `/mc/executor/heartbeat` at 1 Hz.
+**Preconditions:** `health_monitor_node` running; `mock_manager_node` publishing `/mc/manager/heartbeat` at 1 Hz.
 
 **Procedure:**
-1. Stop `mock_executor_node`.
+1. Stop `mock_manager_node`.
 2. Wait 5.5 s.
-3. Check `/mc/health` for `EXECUTOR_UNRESPONSIVE` in `fault_mask`.
+3. Check `/mc/health` for `MANAGER_UNRESPONSIVE` in `fault_mask`.
 
 **Pass criteria:**
-- `fault_mask & EXECUTOR_UNRESPONSIVE != 0` within 5.5 s
+- `fault_mask & MANAGER_UNRESPONSIVE != 0` within 5.5 s
 - Systemd restart request sent to watchdog socket (mock socket records the request)
 
 ---
@@ -901,7 +901,7 @@ SITL tests run a full MC stack against PX4 SITL (Gazebo). Each test is a `pytest
 
 ---
 
-### TP-ST-004: Executor Crash and Restart During SEARCH
+### TP-ST-004: Manager Crash and Restart During SEARCH
 
 **SRS ref:** FR-074, FR-075, SFR-003, SFR-004  
 **Timeout:** 3 min
@@ -910,21 +910,21 @@ SITL tests run a full MC stack against PX4 SITL (Gazebo). Each test is a `pytest
 
 **Procedure:**
 1. Kill `mission-exec.service` container: `docker kill mc-mission-exec`.
-2. Monitor `/mc/executor/heartbeat` (should stop).
+2. Monitor `/mc/manager/heartbeat` (should stop).
 3. Wait 5.5 s for watchdog to detect silence.
 4. Verify systemd restarts `mission-exec.service`.
-5. Monitor `/mc/executor/heartbeat` resumes.
+5. Monitor `/mc/manager/heartbeat` resumes.
 6. Verify FCC held in HOLD during restart.
-7. Verify GCS receives `STATUSTEXT WARN "executor restarting"`.
+7. Verify GCS receives `STATUSTEXT WARN "manager restarting"`.
 
 **Pass criteria:**
 - Heartbeat resumes within 15 s of kill (5 s watchdog + restart time)
 - FCC does not leave HOLD during restart window
 - `STATUSTEXT` received by GCS
 
-**Extension — 3× failure (manual):** Kill executor 3 times without allowing recovery. Verify:
+**Extension — 3× failure (manual):** Kill manager 3 times without allowing recovery. Verify:
 - After 3rd failed restart, RTL commanded via `fcc_bridge_node`
-- `fault_mask & EXECUTOR_DEAD != 0`
+- `fault_mask & MANAGER_DEAD != 0`
 - `STATUSTEXT CRITICAL` received
 
 ---
@@ -1176,7 +1176,7 @@ HIL tests require one engineer operating the GCS and one engineer observing DUT 
 
 **Procedure:**
 1. Apply power to DUT.
-2. Record time from power-on to `mission_executor_node` heartbeat first received on ROS 2.
+2. Record time from power-on to `mission_manager_node` heartbeat first received on ROS 2.
 3. Repeat 5 times.
 
 **Pass criteria:** `mean_boot_time_s ≤ 60`
@@ -1262,7 +1262,7 @@ The table below maps each SRS functional requirement to at least one test case. 
 | FR-063 | GCS telemetry | — | TP-NI-014, TP-NI-015 | TP-ST-011 | — |
 | FR-072 | Low battery RTL | TP-UT-016, TP-UT-017 | — | TP-ST-003 | — |
 | FR-073 | GCS link loss → HOLD | — | — | TP-ST-002 | — |
-| FR-074 | Executor heartbeat watchdog | — | TP-NI-012 | TP-ST-004 | — |
+| FR-074 | Manager heartbeat watchdog | — | TP-NI-012 | TP-ST-004 | — |
 | FR-075 | 3× restart → RTL | — | — | TP-ST-004 (ext.) | — |
 | FR-080 | Gimbal ingest + inference | — | TP-NI-017 | — | TP-HW-007 |
 | FR-081 | Gimbal detection/track publish | TP-UT-019 | TP-NI-017, TP-NI-018 | — | TP-HW-007 |
@@ -1286,7 +1286,7 @@ The table below maps each SRS functional requirement to at least one test case. 
 | PR-009 | CPU usage budget | — | — | TP-ST-012 | — |
 | PR-010 | GPU usage budget | — | — | TP-ST-012 | TP-HW-003 |
 | SFR-001 | FCC link watchdog | TP-UT-015 | TP-NI-003 | TP-ST-006 | — |
-| SFR-003 | Executor restart | — | TP-NI-012 | TP-ST-004 | — |
+| SFR-003 | Manager restart | — | TP-NI-012 | TP-ST-004 | — |
 | SFR-004 | 3× restart → RTL | — | — | TP-ST-004 (ext.) | — |
 | SFR-007 | GCS loss → HOLD | — | — | TP-ST-002 | — |
 | SFR-008 | Low battery RTL (non-suppressible) | TP-UT-016, TP-UT-017 | — | TP-ST-003 | — |

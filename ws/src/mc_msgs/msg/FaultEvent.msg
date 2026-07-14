@@ -4,7 +4,7 @@
 # same bit values are OR-ed together into mc_msgs/SystemHealth.fault_mask.
 uint16 FCC_LINK_LOST    = 1
 uint16 GCS_LINK_LOST    = 2
-uint16 EXECUTOR_DEAD    = 4
+uint16 MANAGER_DEAD     = 4
 uint16 LOW_BATTERY      = 8
 uint16 PEER_LOST        = 16
 uint16 GPU_OVERTEMP     = 32

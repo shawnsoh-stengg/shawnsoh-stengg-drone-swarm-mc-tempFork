@@ -54,8 +54,8 @@ TEST -> MC1  : docker start drone-mc.target (SIMULATION_MODE=true DRONE_ID=1)
 TEST -> MC2  : docker start drone-mc.target (SIMULATION_MODE=true DRONE_ID=2)
 TEST -> GCS  : launch mock_gcs_node
 
-MC1 --> TEST : /mc/executor/heartbeat visible ✓
-MC2 --> TEST : /mc/executor/heartbeat visible ✓
+MC1 --> TEST : /mc/manager/heartbeat visible ✓
+MC2 --> TEST : /mc/manager/heartbeat visible ✓
 
 note over TEST #C8EEC8
   ASSERT: Both MC instances reach PREFLIGHT phase

@@ -12,17 +12,17 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 
-add_library(mission_executor_node_lib
-  src/mission_executor_node.cpp
+add_library(mission_manager_node_lib
+  src/mission_manager_node.cpp
 )
-target_include_directories(mission_executor_node_lib PUBLIC
+target_include_directories(mission_manager_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(mission_executor_node_lib PUBLIC rclcpp)
+ament_target_dependencies(mission_manager_node_lib PUBLIC rclcpp)
 
-add_executable(mission_executor_node src/mission_executor_node_main.cpp)
-target_link_libraries(mission_executor_node mission_executor_node_lib)
+add_executable(mission_manager_node src/mission_manager_node_main.cpp)
+target_link_libraries(mission_manager_node mission_manager_node_lib)
 
 add_library(search_planner_node_lib
   src/search_planner_node.cpp
@@ -41,13 +41,13 @@ install(
   DESTINATION include
 )
 install(
-  TARGETS mission_executor_node_lib search_planner_node_lib
+  TARGETS mission_manager_node_lib search_planner_node_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 install(
-  TARGETS mission_executor_node search_planner_node
+  TARGETS mission_manager_node search_planner_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(
@@ -66,8 +66,8 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
 
-  ament_add_gtest(test_mission_executor_node test/test_mission_executor_node.cpp)
-  target_link_libraries(test_mission_executor_node mission_executor_node_lib)
+  ament_add_gtest(test_mission_manager_node test/test_mission_manager_node.cpp)
+  target_link_libraries(test_mission_manager_node mission_manager_node_lib)
 
   ament_add_gtest(test_search_planner_node test/test_search_planner_node.cpp)
   target_link_libraries(test_search_planner_node search_planner_node_lib)

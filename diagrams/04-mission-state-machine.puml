@@ -1,11 +1,11 @@
 @startuml 04-mission-state-machine
 ' ─────────────────────────────────────────────────────────────
 ' Diagram 04: Mission Phase State Machine
-' mission_executor_node — Swarm Search Drone MC
+' mission_manager_node — Swarm Search Drone MC
 ' MC-SRS-001  FR-001, FR-002, FR-003
 ' ─────────────────────────────────────────────────────────────
 
-title "04 — Mission Phase State Machine\nmission_executor_node"
+title "04 — Mission Phase State Machine\nmission_manager_node"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -106,7 +106,7 @@ FAULT --> [*] : RTL complete\nSystem shutdown
 
 note right of FAULT
   SFR-003: Watchdog → HOLD on
-  executor silence >5 s
+  manager silence >5 s
   SFR-004: 3× restart failure → RTL
 end note
 

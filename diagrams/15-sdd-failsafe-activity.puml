@@ -64,14 +64,14 @@ fork
   endif
 
 fork again
-  ' ─── Branch B: Executor node liveness ────────────
-  :Check /mc/executor/heartbeat age;
+  ' ─── Branch B: Manager node liveness ────────────
+  :Check /mc/manager/heartbeat age;
   if (age > 5 s?) then (yes)
-    :restart_count[executor]++;
+    :restart_count[manager]++;
     if (restart_count > 3?) then (yes)
-      :<color:#C02020>CRITICAL_FAULT — executor dead</color>;
-      :Command RTL via fcc_bridge_node directly\n(bypass mission_executor);
-      :Publish /mc/health {EXECUTOR_DEAD};
+      :<color:#C02020>CRITICAL_FAULT — manager dead</color>;
+      :Command RTL via fcc_bridge_node directly\n(bypass mission_manager);
+      :Publish /mc/health {MANAGER_DEAD};
       :Notify GCS: STATUSTEXT CRITICAL;
       note right
         Restart attempts exhausted.
@@ -81,7 +81,7 @@ fork again
       end note
     else (no)
       :Trigger systemd restart\n(via watchdog.sock);\n→ docker restart mission-exec.service;
-      :Notify GCS: STATUSTEXT WARN\n"executor restarting (attempt N/3)";
+      :Notify GCS: STATUSTEXT WARN\n"manager restarting (attempt N/3)";
     endif
   else (no)
   endif
@@ -94,7 +94,7 @@ fork again
       ' INGRESS, MUSTER, ISR_SELECTION,
       ' VORONOI_PARTITION, SEARCH
       if (GCS override HOLD active?) then (no)
-        :Signal mission_executor:\n  command HOLD via /mc/fault;
+        :Signal mission_manager:\n  command HOLD via /mc/fault;
         :Log fault: GCS_TIMEOUT;
         note right
           On GCS recovery:

@@ -7,7 +7,7 @@ channel (SDD §3.1–§3.4, ICD IR-007) — the dedicated MAVLink 2/UDP
 `192.168.12.31:14555` link used for mission upload/update, since stock PX4
 has no DDS-writable mission topic. This doc collects the gaps found while
 tracing that channel end to end, from `fcc_bridge_node`'s missing topic
-subscriptions down to the two consumer nodes (`mission_executor_node`,
+subscriptions down to the two consumer nodes (`mission_manager_node`,
 `formation_controller_node`) that are still empty stubs with nothing
 calling the channel at all.
 
@@ -20,7 +20,7 @@ software-only.
 **Dependency order:**
 
 ```
-FCC-005 (mission forwarding) ──> FCC-006 (ack feedback) ──┬──> ME-001 (mission_executor_node)
+FCC-005 (mission forwarding) ──> FCC-006 (ack feedback) ──┬──> ME-001 (mission_manager_node)
                                                             └──> SC-001 (formation_controller_node)
 
 FCC-007 (MavlinkUdpBackend / SITL) — independent, no dependency on the above
@@ -45,7 +45,7 @@ convention in this repo (informal, from code comments in `fcc_bridge`);
 
 **As a** developer, **I want** `fcc_bridge_node` to forward mission upload,
 mission-item-update, and command requests from application nodes to the FCC
-via `FccBackend`, **so that** `mission_executor_node` and
+via `FccBackend`, **so that** `mission_manager_node` and
 `formation_controller_node` can drive PX4 missions without touching
 transport-specific code (SDD §3.4 item 2, ICD §7.1).
 
@@ -65,7 +65,7 @@ transport-specific code (SDD §3.4 item 2, ICD §7.1).
   invocation, so back-to-back updates arriving faster than the ≤500 ms ACK
   handshake (IR-007) must queue, not race.
 - Subscribes `/mc/fcc/send_command` (`mc_msgs/FccCommand`) and calls
-  `FccBackend::send_command()` — event-driven, from `mission_executor` and
+  `FccBackend::send_command()` — event-driven, from `mission_manager` and
   `health_monitor`.
 - `mc_msgs/FccMission`, `FccMissionItem`, `FccCommand` are added, mirroring
   the existing `FccBackend::upload_mission()`/`update_mission_item()`/
@@ -99,7 +99,7 @@ transport-specific code (SDD §3.4 item 2, ICD §7.1).
   callers (see FCC-006).
 - `MavlinkUdpBackend` (SITL) — mission forwarding through it stays
   unimplemented until that backend lands (see FCC-007).
-- Actual mission-building logic in `mission_executor_node`/
+- Actual mission-building logic in `mission_manager_node`/
   `formation_controller_node` — both are still stubs; this ticket only
   gives them somewhere to publish to (see ME-001, SC-001).
 
@@ -114,7 +114,7 @@ exist as a call site).
 mission upload/item-update actually reached the FCC (`MISSION_ACK`
 success/failure), **so that** `formation_controller_node` can implement its
 FR-024 self-supervision (command HOLD after its own mission-item updates
-stop landing) and `mission_executor_node` can detect a failed mission
+stop landing) and `mission_manager_node` can detect a failed mission
 upload before advancing its state machine.
 
 ### Background
@@ -144,7 +144,7 @@ signal through, rather than inventing new failure-detection logic.
   its own).
 - `fcc_bridge_node` stays zero-business-logic: it reports raw
   success/failure only. Deciding HOLD/RTL/mission-abort from repeated
-  failures remains `mission_executor`'s/`formation_controller`'s job — same
+  failures remains `mission_manager`'s/`formation_controller`'s job — same
   ownership split SDD §10.3 already establishes for `FCC_LINK_LOST`.
 - Existing `FccBackend` callers/tests are updated for the new signature:
   `FakeBackend` (`test_fcc_backend_contract.cpp`) and `XrceDdsBackend`
@@ -237,12 +237,12 @@ to in SITL.
 
 ---
 
-## ME-001: mission_executor_node — mission phase state machine
+## ME-001: mission_manager_node — mission phase state machine
 
 **Depends on:** FCC-005 (mission upload/item-update/command forwarding),
 FCC-006 (mission ack feedback).
 
-**As a** developer, **I want** `mission_executor_node` to drive the drone
+**As a** developer, **I want** `mission_manager_node` to drive the drone
 through its full mission lifecycle via the documented phase transition
 table, **so that** GCS commands, FCC state, and swarm signals reliably
 advance (or fault) the mission without ad hoc logic scattered across nodes.
@@ -268,7 +268,7 @@ advance (or fault) the mission without ad hoc logic scattered across nodes.
   acted on within 500 ms of receipt regardless of current phase (FR-003) —
   verified with a latency-bounded test, not just "eventually handled."
 - Publishes `/mc/mission_phase` (`mc_msgs/MissionPhase`) on every phase
-  change plus a 1 Hz keepalive while steady, and `/mc/executor/heartbeat`
+  change plus a 1 Hz keepalive while steady, and `/mc/manager/heartbeat`
   at ≥1 Hz for `health_monitor`'s watchdog (FR-074).
 - Consumes `/mc/fault` (`FCC_LINK_LOST` at minimum) to trigger the
   `FAULT→RTL` escape — does not independently re-derive link health from
@@ -284,14 +284,14 @@ advance (or fault) the mission without ad hoc logic scattered across nodes.
 
 ### Deliverables
 
-- `mission_executor_node.{hpp,cpp}` with the transition-table
+- `mission_manager_node.{hpp,cpp}` with the transition-table
   implementation.
 - Node integration tests: one per documented transition (guard true/false,
   correct entry action dispatched, correct topic published), plus the
   500 ms GCS-override latency test and the mission-ack-blocks-advancement
   test.
 - `params/default.yaml` populated with the currently-placeholder
-  `mission_executor_node` tunables (phase timeouts, retry counts).
+  `mission_manager_node` tunables (phase timeouts, retry counts).
 
 ### Explicitly out of scope
 
@@ -322,7 +322,7 @@ reaching the FCC.
 - Runs its PD control loop (SDD §5.2) only while `/mc/mission_phase`
   reports `INGRESS` — no separate enable/disable topic; the loop is a
   no-op (or fully stopped) in every other phase, matching the entry/exit
-  actions already assigned to `mission_executor_node`'s
+  actions already assigned to `mission_manager_node`'s
   `TAKEOFF→INGRESS`/`INGRESS→MUSTER` transitions.
 - Computes `target_pos_ned` from the leader's `PEER_STATE`
   (`/mc/swarm/peer_states`) plus the formation offset (from the GCS mission
@@ -358,7 +358,7 @@ reaching the FCC.
 
 - Formation offset validation/geometry checks on the GCS-uploaded mission
   data — assumed valid by the time it reaches this node (upstream
-  validation, if needed, is `gcs_mavlink_node`'s or `mission_executor_node`
+  validation, if needed, is `gcs_mavlink_node`'s or `mission_manager_node`
   's concern).
 
 ---

@@ -250,7 +250,7 @@ Rate: ≥ 100 Hz
 
 #### Mission Protocol (MAVLink 2/UDP `192.168.12.31:14555`)
 
-Driven by: `fcc_bridge_node`'s `FccBackend` implementation, on behalf of `search_planner_node`/`mission_executor_node` (full upload) or `formation_controller_node` (single-item replace). Neither exchange has a PX4-imposed minimum rate — a gap does not cause a mode change (contrast the old OFFBOARD `trajectory_setpoint`, which required ≥ 2 Hz to avoid a PX4-initiated mode exit).
+Driven by: `fcc_bridge_node`'s `FccBackend` implementation, on behalf of `search_planner_node`/`mission_manager_node` (full upload) or `formation_controller_node` (single-item replace). Neither exchange has a PX4-imposed minimum rate — a gap does not cause a mode change (contrast the old OFFBOARD `trajectory_setpoint`, which required ≥ 2 Hz to avoid a PX4-initiated mode exit).
 
 **`MissionItem` fields** (payload of each `MISSION_ITEM_INT`):
 
@@ -263,7 +263,7 @@ Driven by: `fcc_bridge_node`'s `FccBackend` implementation, on behalf of `search
 | `alt` | `float32` | m MSL | Target altitude |
 | `acceptance_radius` | `float32` | m | See SDD §5.2 for the widened radius used on `FORMATION_SLOT` |
 
-**`upload_mission(items)` — full handshake** (`search_planner_node` via `mission_executor_node`, FR-013; infrequent, on mission change only):
+**`upload_mission(items)` — full handshake** (`search_planner_node` via `mission_manager_node`, FR-013; infrequent, on mission change only):
 
 ```
 MC  → FCC : MISSION_COUNT(count = items.size())
@@ -290,7 +290,7 @@ FCC → MC  : MISSION_ACK(MAV_MISSION_ACCEPTED)
 
 #### `vehicle_command`
 
-Published by: `fcc_bridge_node` on behalf of `mission_executor_node` or `health_monitor_node`
+Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_monitor_node`
 
 | Field | Type | Description |
 |---|---|---|
@@ -899,30 +899,30 @@ All internal topics use the `/mc/` namespace. All custom message types are defin
 
 | Topic | Message Type | Publisher | Subscribers | Rate |
 |---|---|---|---|---|
-| `/mc/fcc/vehicle_state` | `mc_msgs/VehicleState` | `fcc_bridge_node` | `mission_executor`, `formation_controller`, `gcs_mavlink`, `health_monitor` | ≥ 10 Hz |
+| `/mc/fcc/vehicle_state` | `mc_msgs/VehicleState` | `fcc_bridge_node` | `mission_manager`, `formation_controller`, `gcs_mavlink`, `health_monitor` | ≥ 10 Hz |
 | `/mc/fcc/odometry` | `nav_msgs/Odometry` | `fcc_bridge_node` | `visual_localisation` | ≥ 20 Hz |
 | `/mc/fcc/imu` | `sensor_msgs/Imu` | `fcc_bridge_node` | `visual_localisation` | ≥ 100 Hz |
-| `/mc/fcc/mission_upload` | `mc_msgs/FccMission` | `mission_executor` | `fcc_bridge_node` | On change (path replace) |
+| `/mc/fcc/mission_upload` | `mc_msgs/FccMission` | `mission_manager` | `fcc_bridge_node` | On change (path replace) |
 | `/mc/fcc/mission_item_update` | `mc_msgs/FccMissionItem` | `formation_controller` | `fcc_bridge_node` | ≥ 5 Hz (MISSION, INGRESS) |
-| `/mc/fcc/send_command` | `mc_msgs/FccCommand` | `mission_executor`, `health_monitor` | `fcc_bridge_node` | Event-driven |
+| `/mc/fcc/send_command` | `mc_msgs/FccCommand` | `mission_manager`, `health_monitor` | `fcc_bridge_node` | Event-driven |
 | `/mc/fcc/visual_odometry` | `mc_msgs/VisualOdometry` | `visual_localisation` | `fcc_bridge_node` | ≥ 10 Hz (GNSS-denied) |
-| `/mc/mission_phase` | `mc_msgs/MissionPhase` | `mission_executor` | `swarm_coordinator`, `gcs_mavlink`, `health_monitor`, `formation_controller` | On change + 1 Hz keepalive |
-| `/mc/executor/heartbeat` | `std_msgs/Header` | `mission_executor` | `health_monitor` (watchdog) | ≥ 1 Hz |
-| `/mc/gcs/command` | `mc_msgs/GcsCommand` | `gcs_mavlink_node` | `mission_executor` | Event-driven |
-| `/mc/gcs/mission_upload` | `mc_msgs/MissionUpload` | `gcs_mavlink_node` | `mission_executor`, `swarm_coordinator` | Event-driven |
-| `/mc/gcs/link_status` | `mc_msgs/LinkStatus` | `gcs_mavlink_node` | `mission_executor`, `health_monitor` | 1 Hz |
-| `/mc/swarm/peer_states` | `mc_msgs/SwarmPeerArray` | `swarm_coordinator` | `formation_controller`, `mission_executor` | 1 Hz + on change |
-| `/mc/swarm/voronoi_cell` | `mc_msgs/VoronoiCell` | `swarm_coordinator` | `search_planner`, `mission_executor` | On change |
-| `/mc/swarm/isr_role` | `mc_msgs/IsrRole` | `swarm_coordinator` | `mission_executor` | On change |
-| `/mc/search/coverage_path` | `nav_msgs/Path` | `search_planner` | `mission_executor` | On change |
-| `/mc/local_pose` | `geometry_msgs/PoseWithCovarianceStamped` | `visual_localisation` | `perception_down`, `mission_executor`, `gcs_mavlink` | ≥ 10 Hz |
+| `/mc/mission_phase` | `mc_msgs/MissionPhase` | `mission_manager` | `swarm_coordinator`, `gcs_mavlink`, `health_monitor`, `formation_controller` | On change + 1 Hz keepalive |
+| `/mc/manager/heartbeat` | `std_msgs/Header` | `mission_manager` | `health_monitor` (watchdog) | ≥ 1 Hz |
+| `/mc/gcs/command` | `mc_msgs/GcsCommand` | `gcs_mavlink_node` | `mission_manager` | Event-driven |
+| `/mc/gcs/mission_upload` | `mc_msgs/MissionUpload` | `gcs_mavlink_node` | `mission_manager`, `swarm_coordinator` | Event-driven |
+| `/mc/gcs/link_status` | `mc_msgs/LinkStatus` | `gcs_mavlink_node` | `mission_manager`, `health_monitor` | 1 Hz |
+| `/mc/swarm/peer_states` | `mc_msgs/SwarmPeerArray` | `swarm_coordinator` | `formation_controller`, `mission_manager` | 1 Hz + on change |
+| `/mc/swarm/voronoi_cell` | `mc_msgs/VoronoiCell` | `swarm_coordinator` | `search_planner`, `mission_manager` | On change |
+| `/mc/swarm/isr_role` | `mc_msgs/IsrRole` | `swarm_coordinator` | `mission_manager` | On change |
+| `/mc/search/coverage_path` | `nav_msgs/Path` | `search_planner` | `mission_manager` | On change |
+| `/mc/local_pose` | `geometry_msgs/PoseWithCovarianceStamped` | `visual_localisation` | `perception_down`, `mission_manager`, `gcs_mavlink` | ≥ 10 Hz |
 | `/mc/localisation_mode` | `mc_msgs/LocalisationMode` | `visual_localisation` | `gcs_mavlink`, `health_monitor` | On change |
 | `/mc/detections` | `mc_msgs/DetectionArray` | `perception_down` (renamed from `detection_node`) | `gcs_mavlink` | Event-driven |
 | `/mc/perception/front/detections` | `mc_msgs/DetectionArray` | `perception_front` | `video_mux`, `gcs_mavlink` | Event-driven |
 | `/mc/perception/front/tracks` | `mc_msgs/TrackArray` | `perception_front` | `video_mux` | ≥ 5 Hz |
 | `/mc/video/uplink_status` | `mc_msgs/VideoUplinkStatus` | `video_mux` | `health_monitor` | ≥ 1 Hz |
-| `/mc/health` | `mc_msgs/SystemHealth` | `health_monitor` | `gcs_mavlink`, `mission_executor` | ≥ 1 Hz |
-| `/mc/fault` | `mc_msgs/FaultEvent` | `health_monitor` | `mission_executor` | Event-driven |
+| `/mc/health` | `mc_msgs/SystemHealth` | `health_monitor` | `gcs_mavlink`, `mission_manager` | ≥ 1 Hz |
+| `/mc/fault` | `mc_msgs/FaultEvent` | `health_monitor` | `mission_manager` | Event-driven |
 
 ### 9.2 Custom Message Definitions
 
@@ -1278,7 +1278,7 @@ uint32  rx_drop_count
 |---|---|---|
 | 0 | `FCC_LINK_LOST` | uXRCE-DDS silent > 1 s |
 | 1 | `GCS_LINK_LOST` | GCS MAVLink silent > 10 s |
-| 2 | `EXECUTOR_DEAD` | Executor heartbeat silent > 5 s after 3 restarts |
+| 2 | `MANAGER_DEAD` | Manager heartbeat silent > 5 s after 3 restarts |
 | 3 | `LOW_BATTERY` | Battery remaining < threshold |
 | 4 | `PEER_LOST` | ≥ 1 peer declared LOST |
 | 5 | `GPU_OVERTEMP` | GPU temperature > 85 °C |
@@ -1297,7 +1297,7 @@ uint32  rx_drop_count
 | 1 | `gcs_mavlink_node` |
 | 2 | `swarm_coordinator_node` |
 | 3 | `formation_controller_node` |
-| 4 | `mission_executor_node` |
+| 4 | `mission_manager_node` |
 | 5 | `search_planner_node` |
 | 6 | `visual_localisation_node` |
 | 7 | `camera_node` |
@@ -1382,7 +1382,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `LOW_BATTERY_THRESHOLD` | `0.20` | RTL trigger (0.0–1.0) |
 | `GCS_LINK_TIMEOUT_S` | `10` | GCS link-loss HOLD trigger (s) |
 | `FCC_LINK_TIMEOUT_S` | `1` | FCC link-loss fault trigger (s) |
-| `EXECUTOR_WD_TIMEOUT_S` | `5` | Executor watchdog timeout (s) |
+| `MANAGER_WD_TIMEOUT_S` | `5` | Manager watchdog timeout (s) |
 | `SIMULATION_MODE` | `false` | `true` replaces hardware with SITL equivalents |
 | `ROS_DOMAIN_ID` | `0` | CycloneDDS domain ID |
 | `CYCLONEDDS_URI` | `/etc/drone-mc/cyclonedds.xml` | CycloneDDS config file |

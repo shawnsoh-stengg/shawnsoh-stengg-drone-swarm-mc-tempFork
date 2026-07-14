@@ -92,7 +92,7 @@ package "swarm-coord" as C_SWARM #F0E8F8 {
 ' CONTAINER: mission-exec
 ' ═══════════════════════════════════════════════════
 package "mission-exec" as C_EXEC #FFF0E0 {
-  component "mission_executor_node\n[State machine]\nPREFLIGHT → FAULT\nGCS authority · Autonomous triggers\nWatchdog heartbeat ≥1 Hz" as EXEC #FFD090
+  component "mission_manager_node\n[State machine]\nPREFLIGHT → FAULT\nGCS authority · Autonomous triggers\nWatchdog heartbeat ≥1 Hz" as EXEC #FFD090
   component "search_planner_node\nBoustrophedon path\nVoronoi cell → waypoints" as PLAN #FFE0A8
 }
 
@@ -139,11 +139,11 @@ FCC_BRIDGE -down-> EXEC : "/mc/fcc/vehicle_state"
 FCC_BRIDGE -down-> FORM : "/mc/fcc/vehicle_state"
 FCC_BRIDGE -down-> VISLOC : "(IMU data)"
 
-' Mission executor → all
+' Mission manager → all
 EXEC -right-> GCS_NODE : "/mc/mission_phase"
-EXEC --> HEALTH : "/mc/executor/heartbeat"
+EXEC --> HEALTH : "/mc/manager/heartbeat"
 
-' GCS node → executor
+' GCS node → manager
 GCS_NODE -left-> EXEC : "/mc/gcs/command\n/mc/gcs/mission_upload"
 
 ' Swarm → consumers
@@ -154,7 +154,7 @@ SWARM --> EXEC : "/mc/swarm/isr_role"
 ' Formation → FCC
 FORM -up-> FCC_BRIDGE : "/mc/fcc/mission_item_update\n(MISSION mode)"
 
-' Search planner → executor
+' Search planner → manager
 PLAN --> EXEC : "/mc/search/coverage_path"
 
 ' Vision pipeline
@@ -172,7 +172,7 @@ VMUX --> QGC : "RTSP/H.265 + metadata\n:8555 (independent of MAVLink)"
 PFRONT --> HEALTH : "(liveness heartbeat)"
 VMUX --> HEALTH : "/mc/video/uplink_status"
 
-' Health → GCS + executor
+' Health → GCS + manager
 HEALTH --> GCS_NODE : "/mc/health"
 HEALTH --> EXEC : "/mc/fault (failsafe trigger)"
 

@@ -103,13 +103,13 @@ note right of SEARCH #FFE0E0
   Assert: nav_state = AUTO_RTL
   Assert: STATUSTEXT WARN received
   ─────────────────────────
-  <b>TP-ST-004</b>  Executor Crash
+  <b>TP-ST-004</b>  Manager Crash
   Inject: docker kill mc-mission-exec
   Trigger: 5 s watchdog → restart
   Assert: heartbeat resumes < 15 s
   Assert: FCC holds during restart
   Extension: 3× crash → RTL
-  Assert: fault_mask = EXECUTOR_DEAD
+  Assert: fault_mask = MANAGER_DEAD
   ─────────────────────────
   <b>TP-ST-005</b>  Peer Drone Lost
   Inject: stop Drone 2 MC stack
@@ -161,8 +161,8 @@ legend right
   | Test | Injection Phase | Injected Fault | Expected outcome |
   | <b>TP-ST-002</b> | SEARCH | GCS link DROP | HOLD until recovery |
   | <b>TP-ST-003</b> | SEARCH | battery = 18% | RTL immediately |
-  | <b>TP-ST-004</b> | SEARCH | executor kill | restart < 15 s; HOLD |
-  | <b>TP-ST-004 ext.</b> | SEARCH | 3× executor kill | RTL; EXECUTOR_DEAD |
+  | <b>TP-ST-004</b> | SEARCH | manager kill | restart < 15 s; HOLD |
+  | <b>TP-ST-004 ext.</b> | SEARCH | 3× manager kill | RTL; MANAGER_DEAD |
   | <b>TP-ST-005</b> | SEARCH | peer MC stop | re-partition → new path |
   | <b>TP-ST-006</b> | SEARCH | fcc-bridge kill | FAULT; STATUSTEXT CRITICAL |
   | <b>TP-ST-010</b> | ISR_SELECTION | coordinator kill | Drone 2 takes over |

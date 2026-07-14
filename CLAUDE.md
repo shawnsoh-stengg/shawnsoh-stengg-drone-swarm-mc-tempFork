@@ -84,7 +84,7 @@ cd mavlink-router && meson setup build && ninja -C build
 
 ```
 Layer 4 — Mission Intelligence
-  swarm_coordinator_node, mission_executor_node, search_planner_node,
+  swarm_coordinator_node, mission_manager_node, search_planner_node,
   visual_localisation_node, perception_down_node (renamed from detection_node),
   perception_front_node
 
@@ -108,7 +108,7 @@ Layer 1 — Hardware & Transport
 
 **MAVLink channel separation** — Three distinct channels: GCS→FCC (standard PX4 autopilot), GCS→MC (separate MAVROS channel), MC↔FCC (uXRCE-DDS for vehicle state/commands — mavlink-router routes between the first two). MC↔FCC also carries one MAVLink exception: the standard mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`, plus `MISSION_WRITE_PARTIAL_LIST` for single-item replace) on a dedicated UDP port (`192.168.12.31:14555`, always ethernet, not routed by mavlink-router) — stock PX4 has no DDS-writable mission topic, so this is the only way to get waypoints into FCC-side dataman (ICD IR-007).
 
-**Mission state machine** — 11 states in `mission_executor_node`: PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND, with FAULT → RTL escape. GCS retains override authority at all times (500 ms response requirement, FR-003).
+**Mission state machine** — 11 states in `mission_manager_node`: PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND, with FAULT → RTL escape. GCS retains override authority at all times (500 ms response requirement, FR-003).
 
 **Deployment** — Not Docker Compose. Seven Docker containers each managed as systemd units under `drone-mc.target`. RT services (`fcc_bridge`, `swarm_coord`) in `rt.slice`; best-effort (including the new `video-uplink` container) in `be.slice`. Shared colcon workspace bind-mounted to all containers.
 

@@ -70,7 +70,7 @@ package "TP-UT — Unit Tests  (gtest, colcon test)" as UT_PKG #F4F0FF {
 
 package "TP-NI — Node Integration Tests  (launch_testing + rclpy)" as NI_PKG #F4F8FF {
 
-  rectangle "<b>Nodes under test (real code)</b>\nfcc_bridge_node\nformation_controller_node\nswarm_coordinator_node\nmission_executor_node\nsearch_planner_node\nvisual_localisation_node\ndetection_node\ngcs_mavlink_node\nhealth_monitor_node" as NI_REAL #C8EEC8
+  rectangle "<b>Nodes under test (real code)</b>\nfcc_bridge_node\nformation_controller_node\nswarm_coordinator_node\nmission_manager_node\nsearch_planner_node\nvisual_localisation_node\ndetection_node\ngcs_mavlink_node\nhealth_monitor_node" as NI_REAL #C8EEC8
 
   rectangle "<b>Mock nodes (test stubs)</b>\nmock_fcc_node\n  ← bags/fcc_nominal.bag replayed\n  → accepts /mc/fcc/mission_upload\n  → accepts /mc/fcc/mission_item_update\n\nmock_camera_node\n  ← bags/camera_outdoor.bag replayed\n  ← bags/gnss_lost.bag for VO tests\n\nmock_peer_node\n  UDP loopback swarm heartbeats\n\nmock_gcs_node\n  MAVLink 2 on UDP loopback\n  sends cmds · records ACKs" as NI_MOCK #FFD4A8
 

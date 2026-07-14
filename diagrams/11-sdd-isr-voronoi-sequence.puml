@@ -37,11 +37,11 @@ skinparam sequence {
   NoteFontSize 9
 }
 
-participant "mission_executor\n[Drone 1 — Coordinator]" as ME1 #B8D4F0
+participant "mission_manager\n[Drone 1 — Coordinator]" as ME1 #B8D4F0
 participant "swarm_coordinator\n[Drone 1 — Coordinator]" as SC1 #C8A8E8
 participant "swarm_coordinator\n[Drone 2]" as SC2 #D0B8F0
 participant "swarm_coordinator\n[Drone 3]" as SC3 #D0B8F0
-participant "mission_executor\n[Drone 2/3]" as ME23 #C8D8E8
+participant "mission_manager\n[Drone 2/3]" as ME23 #C8D8E8
 
 ' ═══════════════════════════════════════════════════
 ' PHASE ENTRY
@@ -107,7 +107,7 @@ else ACK missing after 5 s → re-broadcast once
   SC1 -> SC3 : ISR_RESULT (0x11)  [retry]
   note right of SC1 #FFEECC
     If second attempt also times out:
-    notify mission_executor of coordination fault.
+    notify mission_manager of coordination fault.
   end note
 end
 

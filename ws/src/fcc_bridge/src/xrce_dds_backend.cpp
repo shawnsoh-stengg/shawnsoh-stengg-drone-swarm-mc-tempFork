@@ -232,8 +232,9 @@ void XrceDdsBackend::send_command(uint32_t cmd, const std::array<float, 7> & par
   // needs the extra precision for lat/lon-carrying commands e.g.
   // DO_REPOSITION, SET_HOME). FccBackend::send_command()'s float32[7]
   // signature (inherited from SDD §3.1, predating this ticket) loses that
-  // precision. None of the commands currently issued by mission_executor_
-  // node/health_monitor_node (ARM_DISARM, DO_SET_MODE, TAKEOFF, RTL, HOLD)
+  // precision. None of the commands currently issued by
+  // mission_manager_node/health_monitor_node (ARM_DISARM, DO_SET_MODE,
+  // TAKEOFF, RTL, HOLD)
   // use param5/6 as coordinates, so this is latent, not active, and is
   // flagged here rather than silently widening the abstract interface.
   msg.param5 = params[4];

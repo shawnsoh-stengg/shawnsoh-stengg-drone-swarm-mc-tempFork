@@ -956,7 +956,7 @@ td.muted { color: var(--muted); }
       </div>
       <div class="req-card">
         <div class="req-header"><span class="req-id">FR·074</span><span class="badge must">MUST</span><span class="verify">Test</span></div>
-        <p class="req-text">A watchdog shall monitor the mission_executor_node heartbeat. If no heartbeat is received for &gt; 5 s, the watchdog shall trigger a node restart via systemd and notify the GCS.</p>
+        <p class="req-text">A watchdog shall monitor the mission_manager_node heartbeat. If no heartbeat is received for &gt; 5 s, the watchdog shall trigger a node restart via systemd and notify the GCS.</p>
       </div>
       <div class="req-card">
         <div class="req-header"><span class="req-id">FR·075</span><span class="badge must">MUST</span><span class="verify">Test</span></div>
@@ -1137,7 +1137,7 @@ td.muted { color: var(--muted); }
       </div>
       <div class="req-card">
         <div class="req-header"><span class="req-id">SFR·003</span><span class="badge must">MUST</span><span class="verify">Test</span></div>
-        <p class="req-text">The mission_executor_node watchdog shall trigger FCC HOLD and notify the GCS if the executor's heartbeat topic is silent for &gt; 5 s.</p>
+        <p class="req-text">The mission_manager_node watchdog shall trigger FCC HOLD and notify the GCS if the manager's heartbeat topic is silent for &gt; 5 s.</p>
       </div>
       <div class="req-card">
         <div class="req-header"><span class="req-id">SFR·004</span><span class="badge must">MUST</span><span class="verify">Test</span></div>
@@ -1149,7 +1149,7 @@ td.muted { color: var(--muted); }
       </div>
       <div class="req-card">
         <div class="req-header"><span class="req-id">SFR·006</span><span class="badge must">MUST</span><span class="verify">Inspection</span></div>
-        <p class="req-text">All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous executor / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart.</p>
+        <p class="req-text">All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous manager / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart.</p>
       </div>
       <div class="req-card">
         <div class="req-header"><span class="req-id">SFR·007</span><span class="badge must">MUST</span><span class="verify">Test</span></div>
@@ -1294,14 +1294,14 @@ td.muted { color: var(--muted); }
     </div>
 
     <div class="node-card">
-      <div class="node-name">mission_executor_node</div>
+      <div class="node-name">mission_manager_node</div>
       <div class="node-desc">Top-level mission phase state machine. Arbitrates between GCS commands and autonomous transition triggers. Emits a watchdog heartbeat at ≥ 1 Hz. The single point of truth for current mission phase.</div>
       <div class="node-topics">
         <div class="topic-group">
           <div class="topic-label">Publishes</div>
           <div class="topic-list">
             <span class="topic-item">/mc/mission_phase</span>
-            <span class="topic-item">/mc/executor/heartbeat</span>
+            <span class="topic-item">/mc/manager/heartbeat</span>
           </div>
         </div>
       </div>
@@ -1408,7 +1408,7 @@ td.muted { color: var(--muted); }
           <tr><td class="mono">SW·032</td><td><strong>mavlink-router</strong></td><td>mavlink-router v4 daemon, routing config</td><td>network_mode=host</td></tr>
           <tr><td class="mono">SW·033</td><td><strong>gcs-comms</strong></td><td>gcs_mavlink_node, MAVROS</td><td>network_mode=host</td></tr>
           <tr><td class="mono">SW·034</td><td><strong>swarm-coord</strong></td><td>swarm_coordinator_node, formation_controller_node</td><td>network_mode=host</td></tr>
-          <tr><td class="mono">SW·035</td><td><strong>mission-exec</strong></td><td>mission_executor_node, search_planner_node, watchdog supervisor</td><td class="muted">—</td></tr>
+          <tr><td class="mono">SW·035</td><td><strong>mission-exec</strong></td><td>mission_manager_node, search_planner_node, watchdog supervisor</td><td class="muted">—</td></tr>
           <tr><td class="mono">SW·036</td><td><strong>vision</strong></td><td>camera_node (gscam2), visual_localisation_node, detection_node</td><td>GPU device, /dev/video*</td></tr>
           <tr><td class="mono">SW·037</td><td><strong>health-monitor</strong></td><td>health_monitor_node</td><td>Read-only /sys, /proc</td></tr>
         </tbody>

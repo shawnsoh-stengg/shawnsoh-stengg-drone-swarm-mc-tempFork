@@ -4,7 +4,7 @@
   <name>mission_exec</name>
   <version>0.1.0</version>
   <description>
-    Mission-level intelligence nodes: mission_executor_node, the mission
+    Mission-level intelligence nodes: mission_manager_node, the mission
     phase state machine (SDD-MC-001 §4, FR-001-005, FR-010-016,
     FR-060-064), and search_planner_node, boustrophedon coverage path
     planning (SDD-MC-001 §7, FR-040-046).

@@ -34,7 +34,7 @@ below. Everything else in this plan is unchanged from the 2026-07-12 audit.
 |---|---|
 | `fcc_bridge` | **Mostly done.** `FccBackend`/`XrceDdsBackend`/`fcc_bridge_node` implemented (FCC-001–005: factory, backend, mission forwarding all wired and tested). Gaps: ack feedback (FCC-006), SITL backend (FCC-007), DDS-agent lifecycle (FCC-008) — see `FCC-MISSION-CHANNEL-BACKLOG.md`. |
 | `mc_msgs` | **Partial.** 5 of ~19 required message types exist (`VehicleState`, `FaultEvent`, `FccMission`, `FccMissionItem`, `FccCommand`). |
-| `mission_exec` | **Stub.** Both nodes (`mission_executor_node`, `search_planner_node`) are constructor-only. |
+| `mission_exec` | **Stub.** Both nodes (`mission_manager_node`, `search_planner_node`) are constructor-only. |
 | `swarm_coord` | **Stub.** Both nodes (`swarm_coordinator_node`, `formation_controller_node`) are constructor-only. |
 | `vision` | **Stub.** Both nodes (`visual_localisation_node`, `perception_down_node` — renamed from `detection_node`) are constructor-only. |
 | `video_uplink` | **Stub, new 2026-07-13.** Both nodes (`perception_front_node`, `video_mux_node`) are constructor-only, scaffolded alongside the gimbal camera design docs. Not yet in the dependency graph before this revision. |
@@ -222,7 +222,7 @@ concern, so this isn't a hard blocker for SC-001 itself).
 
 ---
 
-#### ME-001: mission_executor_node — mission phase state machine
+#### ME-001: mission_manager_node — mission phase state machine
 
 Already fully specified in `FCC-MISSION-CHANNEL-BACKLOG.md`.
 
@@ -263,7 +263,7 @@ Voronoi cell, so the drone has concrete waypoints to fly during `SEARCH`.
 
 **Relationships:** Depends on SC-004 (needs a cell to plan within) and
 ME-001 (phase gating — only active `VORONOI_PARTITION`→`SEARCH`). Blocks
-nothing further in this plan (its output feeds `mission_executor`'s
+nothing further in this plan (its output feeds `mission_manager`'s
 `VORONOI_PARTITION→SEARCH` transition, already scoped as ME-001's
 responsibility to consume).
 
@@ -581,7 +581,7 @@ actually be initiated from the ground station.
 - Node integration test: simulated multi-item upload sequence (including a
   dropped/retried item) → correctly assembled `MissionUpload`.
 
-**Relationships:** Depends on GCS-001. Feeds `mission_executor`/
+**Relationships:** Depends on GCS-001. Feeds `mission_manager`/
 `swarm_coordinator` (consumers per ICD §7.1) but doesn't block ME-001/SC-002
 directly — those tickets can develop against a hand-built `MissionUpload`
 fixture in their own tests and integrate once this lands.
@@ -673,19 +673,19 @@ same node), GCS-003 (`/mc/health` consumer).
 
 ---
 
-#### HM-002: health_monitor_node — node liveness tracking and executor watchdog
+#### HM-002: health_monitor_node — node liveness tracking and manager watchdog
 
 **Points:** 5
 
 **Description:** As a developer, I want `health_monitor_node` to track
 whether each critical node is alive, and specifically watchdog
-`mission_executor_node`'s heartbeat, so a hung/crashed node triggers a
+`mission_manager_node`'s heartbeat, so a hung/crashed node triggers a
 restart rather than a silent stall (FR-074).
 
 **Acceptance Criteria:**
 - Tracks liveness of the 7 critical topics/nodes (SDD §10.2) into
   `node_alive_mask` (bit layout per ICD §8.9), folded into `SystemHealth`.
-- Consumes `/mc/executor/heartbeat`; if no heartbeat for >5 s, triggers the
+- Consumes `/mc/manager/heartbeat`; if no heartbeat for >5 s, triggers the
   FR-074 restart path (systemd restart trigger, see HM-003) and notifies GCS
   via a fault event.
 
@@ -697,7 +697,7 @@ restart rather than a silent stall (FR-074).
   the restart path.
 
 **Relationships:** Depends on HM-001 and ME-001 (needs
-`/mc/executor/heartbeat` to exist). Blocks HM-003.
+`/mc/manager/heartbeat` to exist). Blocks HM-003.
 
 ---
 
@@ -712,13 +712,13 @@ without operator intervention.
 
 **Acceptance Criteria:**
 - Implements the failsafe decision tree (SDD §10.3) exactly:
-  `FCC_LINK_LOST`→HOLD/RTL, `EXECUTOR_DEAD`→restart-then-RTL,
+  `FCC_LINK_LOST`→HOLD/RTL, `MANAGER_DEAD`→restart-then-RTL,
   `LOW_BATTERY`→RTL, `GCS_LINK_LOST`→HOLD, `GPU_OVERTEMP`→throttle.
 - Publishes `/mc/fault` (`mc_msgs/FaultEvent`, already exists) on each
   triggered condition, with the corresponding `failsafe_action`.
 - Implements the systemd-restart interface (SDD §10.4) — a Unix socket or
   equivalent mechanism health_monitor uses to request a node restart from
-  the host, matching the `EXECUTOR_DEAD` path's "restart-then-RTL" behavior.
+  the host, matching the `MANAGER_DEAD` path's "restart-then-RTL" behavior.
 - Edge-triggered: does not repeatedly re-fire the same fault/action every
   tick while the condition persists (matches the pattern
   `formation_controller_node`'s SC-001 ticket already establishes for its
@@ -759,7 +759,7 @@ already establishes, so all services can actually run under
 - `docker/gcs-comms/Dockerfile`, `docker/health-monitor/Dockerfile`,
   `docker/swarm-coord/Dockerfile` (builds both `swarm_coordinator_node` and
   `formation_controller_node`), `docker/mission-exec/Dockerfile` (builds
-  both `mission_executor_node` and `search_planner_node`).
+  both `mission_manager_node` and `search_planner_node`).
 - A build script per image following the `08-build-fcc-bridge-image.sh`
   pattern, or a generalized version of that script parameterized by
   package (avoid 4 near-duplicate scripts if a shared one is

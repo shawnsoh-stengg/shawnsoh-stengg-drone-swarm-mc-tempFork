@@ -95,7 +95,7 @@ repeat while (more sweep lines?) is (yes)
 
 if (row_list empty?) then (yes)
   :Log error: cell too small for footprint width;
-  :Publish empty coverage_path (executor retains HOLD);
+  :Publish empty coverage_path (manager retains HOLD);
   stop
 else (no)
 endif
@@ -143,7 +143,7 @@ note right
   Computation time ≤ 5 s  [PR-008]
 end note
 
-|mission_executor_node|
+|mission_manager_node|
 
 :Receive  /mc/search/coverage_path;
 

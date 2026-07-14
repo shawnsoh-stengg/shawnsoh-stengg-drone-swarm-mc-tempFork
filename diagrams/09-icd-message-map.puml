@@ -189,32 +189,32 @@ end note
 note over FCC, CAM #E8E8F8
   <b>Key /mc/* topics and flows</b>
 
-  fcc_bridge_node  →  /mc/fcc/vehicle_state (≥10 Hz)  →  mission_executor · formation_controller · gcs_mavlink · health_monitor
+  fcc_bridge_node  →  /mc/fcc/vehicle_state (≥10 Hz)  →  mission_manager · formation_controller · gcs_mavlink · health_monitor
   fcc_bridge_node  →  /mc/fcc/imu  (≥100 Hz)          →  visual_localisation_node
   formation_controller  →  /mc/fcc/mission_item_update (≥5 Hz)  →  fcc_bridge_node (→ FCC mission, seq 0)
-  mission_executor  →  /mc/fcc/mission_upload (on change)  →  fcc_bridge_node (→ FCC mission, full replace)
-  mission_executor  →  /mc/fcc/send_command (event)  →  fcc_bridge_node (→ FCC vehicle_command)
+  mission_manager  →  /mc/fcc/mission_upload (on change)  →  fcc_bridge_node (→ FCC mission, full replace)
+  mission_manager  →  /mc/fcc/send_command (event)  →  fcc_bridge_node (→ FCC vehicle_command)
 
-  gcs_mavlink_node  →  /mc/gcs/command (event)        →  mission_executor_node
-  gcs_mavlink_node  →  /mc/gcs/mission_upload (event) →  mission_executor · swarm_coordinator
-  gcs_mavlink_node  →  /mc/gcs/link_status (1 Hz)     →  mission_executor · health_monitor
+  gcs_mavlink_node  →  /mc/gcs/command (event)        →  mission_manager_node
+  gcs_mavlink_node  →  /mc/gcs/mission_upload (event) →  mission_manager · swarm_coordinator
+  gcs_mavlink_node  →  /mc/gcs/link_status (1 Hz)     →  mission_manager · health_monitor
 
-  swarm_coordinator →  /mc/swarm/peer_states (1 Hz)   →  formation_controller · mission_executor
-  swarm_coordinator →  /mc/swarm/voronoi_cell (event) →  search_planner_node · mission_executor
-  swarm_coordinator →  /mc/swarm/isr_role (event)     →  mission_executor_node
+  swarm_coordinator →  /mc/swarm/peer_states (1 Hz)   →  formation_controller · mission_manager
+  swarm_coordinator →  /mc/swarm/voronoi_cell (event) →  search_planner_node · mission_manager
+  swarm_coordinator →  /mc/swarm/isr_role (event)     →  mission_manager_node
 
-  mission_executor  →  /mc/mission_phase (on-change + 1 Hz)  →  swarm_coordinator · gcs_mavlink · health_monitor
-  mission_executor  →  /mc/executor/heartbeat (≥1 Hz)        →  health_monitor_node (watchdog)
+  mission_manager  →  /mc/mission_phase (on-change + 1 Hz)  →  swarm_coordinator · gcs_mavlink · health_monitor
+  mission_manager  →  /mc/manager/heartbeat (≥1 Hz)        →  health_monitor_node (watchdog)
 
-  search_planner    →  /mc/search/coverage_path (event)      →  mission_executor_node
+  search_planner    →  /mc/search/coverage_path (event)      →  mission_manager_node
   visual_localisation  →  /mc/local_pose (≥10 Hz)            →  perception_down_node · gcs_mavlink
   visual_localisation  →  /mc/localisation_mode (event)      →  gcs_mavlink · health_monitor
   perception_down_node (renamed from detection_node)  →  /mc/detections (event)  →  gcs_mavlink_node
   perception_front_node  →  /mc/perception/front/detections (event)  →  video_mux · gcs_mavlink
   perception_front_node  →  /mc/perception/front/tracks (≥5 Hz)      →  video_mux_node
   video_mux_node    →  /mc/video/uplink_status (≥1 Hz)        →  health_monitor
-  health_monitor    →  /mc/health (≥1 Hz)                    →  gcs_mavlink · mission_executor
-  health_monitor    →  /mc/fault (event)                     →  mission_executor_node
+  health_monitor    →  /mc/health (≥1 Hz)                    →  gcs_mavlink · mission_manager
+  health_monitor    →  /mc/fault (event)                     →  mission_manager_node
 end note
 
 @enduml

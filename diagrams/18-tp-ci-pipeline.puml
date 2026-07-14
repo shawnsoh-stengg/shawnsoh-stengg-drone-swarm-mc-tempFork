@@ -58,7 +58,7 @@ note right
 end note
 
 if (All pass?) then (yes)
-  :TP-NI-001–007\nCore node integration tests\n(fcc_bridge · formation · peer · executor heartbeat);
+  :TP-NI-001–007\nCore node integration tests\n(fcc_bridge · formation · peer · manager heartbeat);
 
   if (All pass?) then (yes)
     :PR gate PASS\nMerge allowed;
