@@ -1224,7 +1224,7 @@ Smoke tests are companion scripts to each installation script. They verify the i
 | TP-SM-003 | `03b-smoke-test-docker.sh` | Docker Engine running · cgroups v2 enabled · `docker info` no errors |
 | TP-SM-004 | `04b-smoke-test-ros2.sh` | ROS 2 Humble sourced · `ros2 --version` · CycloneDDS shared library present |
 | TP-SM-005 | `05b-smoke-test-colcon.sh` | `colcon` in PATH · workspace installed at `/opt/drone-mc/install` · `ros2 pkg list` shows all MC packages |
-| TP-SM-006 | `06b-smoke-test-mavlink-router.sh` | `mavlink-router` binary present · `mavlink-router --version` · config file valid (parse check) |
+| TP-SM-006 | `06b-smoke-test-fcc-links.sh` | HIF-001 (ttyTHS1) hardware verification: `config/environment` pins device/baud · `/dev/ttyTHS1` present, `dialout` group · fcc-bridge image has `MicroXRCEAgent` · `LIVE_CHECK=1`: `/fmu/out/vehicle_status` ≥ 5 Hz, `/fmu/out/vehicle_local_position` ≥ 10 Hz against a real Pixhawk 6X |
 | TP-SM-007 | `07b-smoke-test-xrce-dds.sh` | `MicroXRCEAgent` binary in PATH · can bind to test port without error |
 | TP-SM-008 | `08b-smoke-test-camera.sh` | `/dev/video0` exists · `gst-launch-1.0 nvarguscamerasrc ... appsink` produces frames (5 s run) |
 | TP-SM-009 | `09b-smoke-test-services.sh` | All `drone-mc-*.service` units loaded · `drone-mc.target` enabled · systemd slice configs valid |
