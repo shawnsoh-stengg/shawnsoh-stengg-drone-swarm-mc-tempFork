@@ -16,15 +16,17 @@ namespace
 class FakeBackend : public fcc_bridge::FccBackend
 {
 public:
-  void upload_mission(const std::vector<fcc_bridge::MissionItem> & items) override
+  bool upload_mission(const std::vector<fcc_bridge::MissionItem> & items) override
   {
     last_uploaded_mission_ = items;
+    return upload_result_;
   }
 
-  void update_mission_item(uint16_t seq, const fcc_bridge::MissionItem & item) override
+  bool update_mission_item(uint16_t seq, const fcc_bridge::MissionItem & item) override
   {
     last_updated_seq_ = seq;
     last_updated_item_ = item;
+    return update_result_;
   }
 
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override
@@ -44,6 +46,8 @@ public:
 
   fcc_bridge::VehicleState state_{};
   bool link_alive_{true};
+  bool upload_result_{true};
+  bool update_result_{true};
   std::vector<fcc_bridge::MissionItem> last_uploaded_mission_;
   uint16_t last_updated_seq_{0xFFFF};
   fcc_bridge::MissionItem last_updated_item_{};
@@ -62,10 +66,31 @@ TEST(FccBackendContract, UploadMissionReachesImplementationThroughBasePointer)
   std::vector<fcc_bridge::MissionItem> items(3);
   items[1].seq = 1;
   items[1].command = fcc_bridge::mav::CMD_NAV_WAYPOINT;
-  backend->upload_mission(items);
+  EXPECT_TRUE(backend->upload_mission(items));
 
   ASSERT_EQ(fake.last_uploaded_mission_.size(), 3U);
   EXPECT_EQ(fake.last_uploaded_mission_[1].command, fcc_bridge::mav::CMD_NAV_WAYPOINT);
+}
+
+// FCC-006: the bool return is the caller-visible ack signal — a backend
+// reporting failure must not be silently swallowed back to void through the
+// base-class pointer.
+TEST(FccBackendContract, UploadMissionReturnsImplementationsResultThroughBasePointer)
+{
+  FakeBackend fake;
+  fake.upload_result_ = false;
+  fcc_bridge::FccBackend * backend = &fake;
+
+  EXPECT_FALSE(backend->upload_mission({}));
+}
+
+TEST(FccBackendContract, UpdateMissionItemReturnsImplementationsResultThroughBasePointer)
+{
+  FakeBackend fake;
+  fake.update_result_ = false;
+  fcc_bridge::FccBackend * backend = &fake;
+
+  EXPECT_FALSE(backend->update_mission_item(fcc_bridge::FORMATION_SLOT, fcc_bridge::MissionItem{}));
 }
 
 TEST(FccBackendContract, UpdateMissionItemUsesFormationSlotByConvention)

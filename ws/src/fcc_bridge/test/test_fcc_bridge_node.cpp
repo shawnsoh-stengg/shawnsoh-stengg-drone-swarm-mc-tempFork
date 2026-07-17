@@ -19,6 +19,7 @@
 #include <mc_msgs/msg/fault_event.hpp>
 #include <mc_msgs/msg/fcc_command.hpp>
 #include <mc_msgs/msg/fcc_mission.hpp>
+#include <mc_msgs/msg/fcc_mission_ack.hpp>
 #include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
@@ -210,14 +211,15 @@ namespace
 class FakeMissionBackend : public fcc_bridge::FccBackend
 {
 public:
-  void upload_mission(const std::vector<fcc_bridge::MissionItem> & items) override
+  bool upload_mission(const std::vector<fcc_bridge::MissionItem> & items) override
   {
     std::scoped_lock lock(mtx_);
     last_uploaded_mission_ = items;
     ++upload_count_;
+    return upload_result_;
   }
 
-  void update_mission_item(uint16_t seq, const fcc_bridge::MissionItem & item) override
+  bool update_mission_item(uint16_t seq, const fcc_bridge::MissionItem & item) override
   {
     if (update_delay_.count() > 0) {
       std::this_thread::sleep_for(update_delay_);
@@ -226,6 +228,7 @@ public:
     last_updated_seq_ = seq;
     last_updated_item_ = item;
     ++update_count_;
+    return update_result_;
   }
 
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override
@@ -244,6 +247,10 @@ public:
   // Set before spinning starts, read only from update_mission_item() itself
   // — no synchronization needed for this field specifically.
   std::chrono::milliseconds update_delay_{0};
+  // Set before spinning starts — controls the ack success/failure this fake
+  // reports (FCC-006).
+  bool upload_result_{true};
+  bool update_result_{true};
 
   mutable std::mutex mtx_;
   std::vector<fcc_bridge::MissionItem> last_uploaded_mission_;
@@ -279,6 +286,12 @@ protected:
     sub_vehicle_state_ = harness_->create_subscription<mc_msgs::msg::VehicleState>(
       "/mc/fcc/vehicle_state", rclcpp::QoS(10),
       [this](mc_msgs::msg::VehicleState::SharedPtr /*msg*/) {++vehicle_state_count_;});
+    sub_mission_ack_ = harness_->create_subscription<mc_msgs::msg::FccMissionAck>(
+      "/mc/fcc/mission_ack", rclcpp::QoS(10),
+      [this](mc_msgs::msg::FccMissionAck::SharedPtr msg) {
+        std::scoped_lock lock(ack_mtx_);
+        mission_acks_.push_back(msg);
+      });
   }
 
   void TearDown() override
@@ -296,7 +309,10 @@ protected:
   rclcpp::Publisher<mc_msgs::msg::FccMissionItem>::SharedPtr pub_mission_item_update_;
   rclcpp::Publisher<mc_msgs::msg::FccCommand>::SharedPtr pub_send_command_;
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
+  rclcpp::Subscription<mc_msgs::msg::FccMissionAck>::SharedPtr sub_mission_ack_;
   std::atomic<int> vehicle_state_count_{0};
+  std::mutex ack_mtx_;
+  std::vector<mc_msgs::msg::FccMissionAck::SharedPtr> mission_acks_;
 };
 
 TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadForwardsAllItemsToBackend)
@@ -328,6 +344,74 @@ TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadForwardsAllItemsToBacken
   EXPECT_EQ(backend_->last_uploaded_mission_[1].lat, 10000001);
   EXPECT_EQ(backend_->last_uploaded_mission_[2].lon, 20000002);
   EXPECT_FLOAT_EQ(backend_->last_uploaded_mission_[0].acceptance_radius, 15.0F);
+}
+
+// FCC-006: a forwarded mission upload produces a matching mission_ack —
+// success case, upload_id echoed.
+TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadPublishesSuccessAckWithUploadId)
+{
+  mc_msgs::msg::FccMission msg;
+  msg.upload_id = 77;
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [&] {
+        pub_mission_upload_->publish(msg);
+        std::scoped_lock lock(ack_mtx_);
+        return !mission_acks_.empty();
+      },
+      std::chrono::seconds(3)));
+
+  std::scoped_lock lock(ack_mtx_);
+  const auto & ack = *mission_acks_.back();
+  EXPECT_EQ(ack.request_type, mc_msgs::msg::FccMissionAck::UPLOAD);
+  EXPECT_EQ(ack.upload_id, 77U);
+  EXPECT_TRUE(ack.success);
+}
+
+// FCC-006: backend rejection/timeout must surface as success=false, not be
+// swallowed by the adapter.
+TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadPublishesFailureAckWhenBackendRejects)
+{
+  backend_->upload_result_ = false;
+
+  mc_msgs::msg::FccMission msg;
+  msg.upload_id = 78;
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [&] {
+        pub_mission_upload_->publish(msg);
+        std::scoped_lock lock(ack_mtx_);
+        return !mission_acks_.empty();
+      },
+      std::chrono::seconds(3)));
+
+  std::scoped_lock lock(ack_mtx_);
+  EXPECT_FALSE(mission_acks_.back()->success);
+}
+
+// FCC-006: a forwarded mission-item update produces a matching mission_ack —
+// seq echoed, not upload_id.
+TEST_F(FccBridgeNodeMissionForwardingTest, MissionItemUpdatePublishesAckWithSeq)
+{
+  mc_msgs::msg::FccMissionItem item;
+  item.seq = 5;
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [&] {
+        pub_mission_item_update_->publish(item);
+        std::scoped_lock lock(ack_mtx_);
+        return !mission_acks_.empty();
+      },
+      std::chrono::seconds(3)));
+
+  std::scoped_lock lock(ack_mtx_);
+  const auto & ack = *mission_acks_.back();
+  EXPECT_EQ(ack.request_type, mc_msgs::msg::FccMissionAck::ITEM_UPDATE);
+  EXPECT_EQ(ack.seq, 5U);
+  EXPECT_TRUE(ack.success);
 }
 
 TEST_F(FccBridgeNodeMissionForwardingTest, SendCommandForwardsCmdAndAllParams)

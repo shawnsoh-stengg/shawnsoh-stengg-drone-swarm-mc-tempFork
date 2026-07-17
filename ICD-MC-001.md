@@ -346,6 +346,7 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | `/mc/fcc/mission_upload` | MC → FCC | MAVLink mission protocol, full handshake (§3.3 Mission Protocol) |
 | `/mc/fcc/mission_item_update` | MC → FCC | MAVLink mission protocol, partial update (§3.3 Mission Protocol) |
 | `/mc/fcc/send_command` | MC → FCC | uXRCE-DDS `vehicle_command` |
+| `/mc/fcc/mission_ack` | FCC → MC | `MISSION_ACK` result from the mission protocol handshake, one per upload/item-update |
 | `/mc/fcc/visual_odometry` | MC → FCC | uXRCE-DDS `vehicle_visual_odometry` |
 
 ---
@@ -905,6 +906,7 @@ All internal topics use the `/mc/` namespace. All custom message types are defin
 | `/mc/fcc/mission_upload` | `mc_msgs/FccMission` | `mission_manager` | `fcc_bridge_node` | On change (path replace) |
 | `/mc/fcc/mission_item_update` | `mc_msgs/FccMissionItem` | `formation_controller` | `fcc_bridge_node` | ≥ 5 Hz (MISSION, INGRESS) |
 | `/mc/fcc/send_command` | `mc_msgs/FccCommand` | `mission_manager`, `health_monitor` | `fcc_bridge_node` | Event-driven |
+| `/mc/fcc/mission_ack` | `mc_msgs/FccMissionAck` | `fcc_bridge_node` | `mission_manager`, `formation_controller` | Event-driven (one per forwarded upload/item-update) |
 | `/mc/fcc/visual_odometry` | `mc_msgs/VisualOdometry` | `visual_localisation` | `fcc_bridge_node` | ≥ 10 Hz (GNSS-denied) |
 | `/mc/mission_phase` | `mc_msgs/MissionPhase` | `mission_manager` | `swarm_coordinator`, `gcs_mavlink`, `health_monitor`, `formation_controller` | On change + 1 Hz keepalive |
 | `/mc/manager/heartbeat` | `std_msgs/Header` | `mission_manager` | `health_monitor` (watchdog) | ≥ 1 Hz |
@@ -998,6 +1000,26 @@ mc_msgs/FccMissionItem[] items
 std_msgs/Header header
 uint32 cmd                   # MAV_CMD
 float32[7] params            # param1-param7
+```
+
+#### `mc_msgs/FccMissionAck`
+
+```
+# Ack for a mission upload or mission-item-update request forwarded by
+# fcc_bridge_node (the /mc/fcc/mission_upload and /mc/fcc/mission_item_update
+# subscriptions, FCC-005) — reports whether the FCC's
+# MISSION_ACK/MAV_MISSION_ACCEPTED response arrived before timeout (FCC-006).
+# Event-driven: published once per forwarded request, no periodic republish.
+std_msgs/Header header
+
+uint8 UPLOAD      = 0
+uint8 ITEM_UPDATE = 1
+uint8 request_type       # UPLOAD or ITEM_UPDATE, see constants above
+
+uint32 upload_id         # valid iff request_type == UPLOAD; echoes FccMission.upload_id
+uint16 seq                # valid iff request_type == ITEM_UPDATE; echoes FccMissionItem.seq
+
+bool success              # true = MAV_MISSION_ACCEPTED before timeout; false = timeout/reject
 ```
 
 #### `mc_msgs/MissionPhase`

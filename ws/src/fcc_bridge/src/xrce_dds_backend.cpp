@@ -201,22 +201,26 @@ void XrceDdsBackend::on_imu(const px4_msgs::msg::SensorCombined::SharedPtr /*msg
   touch_link_alive();
 }
 
-void XrceDdsBackend::upload_mission(const std::vector<MissionItem> & items)
+bool XrceDdsBackend::upload_mission(const std::vector<MissionItem> & items)
 {
-  if (!mission_client_->upload_mission(items)) {
+  const bool accepted = mission_client_->upload_mission(items);
+  if (!accepted) {
     RCLCPP_ERROR(node_->get_logger(),
         "upload_mission: FCC rejected or did not ACK the mission upload");
   }
+  return accepted;
 }
 
-void XrceDdsBackend::update_mission_item(uint16_t seq, const MissionItem & item)
+bool XrceDdsBackend::update_mission_item(uint16_t seq, const MissionItem & item)
 {
-  if (!mission_client_->update_mission_item(seq, item)) {
+  const bool accepted = mission_client_->update_mission_item(seq, item);
+  if (!accepted) {
     RCLCPP_WARN(
       node_->get_logger(),
         "update_mission_item(seq=%u): no ACK within timeout — will retry next cycle",
       seq);
   }
+  return accepted;
 }
 
 void XrceDdsBackend::send_command(uint32_t cmd, const std::array<float, 7> & params)

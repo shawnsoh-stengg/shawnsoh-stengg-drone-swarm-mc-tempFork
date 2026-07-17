@@ -26,12 +26,14 @@ public:
 
   // Upload or fully replace the active FCC mission (search paths,
   // ingress/muster legs). MISSION mode only — there is no OFFBOARD setpoint
-  // path (SDD §5.3).
-  virtual void upload_mission(const std::vector<MissionItem> & items) = 0;
+  // path (SDD §5.3). Returns true iff MISSION_ACK/MAV_MISSION_ACCEPTED was
+  // received before timeout (FCC-006) — false on timeout or rejection.
+  virtual bool upload_mission(const std::vector<MissionItem> & items) = 0;
 
   // Replace a single mission item in place — used for the moving
-  // FORMATION_SLOT target during INGRESS (SDD §5.2).
-  virtual void update_mission_item(uint16_t seq, const MissionItem & item) = 0;
+  // FORMATION_SLOT target during INGRESS (SDD §5.2). Same ack-propagation
+  // contract as upload_mission() above.
+  virtual bool update_mission_item(uint16_t seq, const MissionItem & item) = 0;
 
   // Send a vehicle_command (arm/disarm, mode change, RTL, HOLD, ...).
   virtual void send_command(uint32_t cmd, const std::array<float, 7> & params) = 0;

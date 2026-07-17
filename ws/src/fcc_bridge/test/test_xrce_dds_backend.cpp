@@ -197,6 +197,16 @@ TEST_F(XrceDdsBackendTest, IsLinkAliveTrueAfterRecentMessage)
     std::chrono::seconds(3)));
 }
 
+// FCC-006: XrceDdsBackend must forward MissionProtocolClient's bool result
+// rather than swallow it — no live FCC peer replies here, so the underlying
+// client's own timeout path (test_mission_protocol_client.cpp covers its
+// wire-level correctness) is what should surface as `false` here.
+TEST_F(XrceDdsBackendTest, UpdateMissionItemReturnsFalseWhenFccDoesNotAck)
+{
+  EXPECT_FALSE(
+    backend_->update_mission_item(fcc_bridge::FORMATION_SLOT, fcc_bridge::MissionItem{}));
+}
+
 TEST_F(XrceDdsBackendTest, SendCommandPublishesVehicleCommandWithAllParams)
 {
   std::array<float, 7> params{1, 2, 3, 4, 5, 6, 7};

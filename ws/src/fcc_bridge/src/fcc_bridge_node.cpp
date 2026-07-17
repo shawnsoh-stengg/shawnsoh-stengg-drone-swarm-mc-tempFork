@@ -32,6 +32,8 @@ FccBridgeNode::FccBridgeNode(
   pub_vehicle_state_ =
     create_publisher<mc_msgs::msg::VehicleState>("/mc/fcc/vehicle_state", rclcpp::QoS(10));
   pub_fault_ = create_publisher<mc_msgs::msg::FaultEvent>("/mc/fault", rclcpp::QoS(10));
+  pub_mission_ack_ =
+    create_publisher<mc_msgs::msg::FccMissionAck>("/mc/fcc/mission_ack", rclcpp::QoS(10));
 
   // Mutually-exclusive group: periodic publish stays serialized against
   // itself (threading model, SDD §2.1) even once other timers are added.
@@ -80,12 +82,26 @@ void FccBridgeNode::on_mission_upload(const mc_msgs::msg::FccMission::SharedPtr 
   for (const auto & item : msg->items) {
     items.push_back(to_mission_item(item));
   }
-  backend_->upload_mission(items);
+  const bool success = backend_->upload_mission(items);
+  publish_mission_ack(mc_msgs::msg::FccMissionAck::UPLOAD, msg->upload_id, 0, success);
 }
 
 void FccBridgeNode::on_mission_item_update(const mc_msgs::msg::FccMissionItem::SharedPtr msg)
 {
-  backend_->update_mission_item(msg->seq, to_mission_item(*msg));
+  const bool success = backend_->update_mission_item(msg->seq, to_mission_item(*msg));
+  publish_mission_ack(mc_msgs::msg::FccMissionAck::ITEM_UPDATE, 0, msg->seq, success);
+}
+
+void FccBridgeNode::publish_mission_ack(
+  uint8_t request_type, uint32_t upload_id, uint16_t seq, bool success)
+{
+  mc_msgs::msg::FccMissionAck ack;
+  ack.header.stamp = now();
+  ack.request_type = request_type;
+  ack.upload_id = upload_id;
+  ack.seq = seq;
+  ack.success = success;
+  pub_mission_ack_->publish(ack);
 }
 
 void FccBridgeNode::on_send_command(const mc_msgs::msg::FccCommand::SharedPtr msg)

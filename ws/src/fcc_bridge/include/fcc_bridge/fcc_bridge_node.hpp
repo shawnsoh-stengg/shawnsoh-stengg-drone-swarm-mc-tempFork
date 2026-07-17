@@ -7,6 +7,7 @@
 
 #include "mc_msgs/msg/fcc_command.hpp"
 #include "mc_msgs/msg/fcc_mission.hpp"
+#include "mc_msgs/msg/fcc_mission_ack.hpp"
 #include "mc_msgs/msg/fcc_mission_item.hpp"
 #include "mc_msgs/msg/fault_event.hpp"
 #include "mc_msgs/msg/vehicle_state.hpp"
@@ -22,6 +23,10 @@
 // business logic, an adapter only (no mission validation, frame conversion,
 // or retry policy). The /mc/fcc/imu, /mc/fcc/odometry relays (SDD §3.4 item
 // 4) remain tracked separately.
+// FCC-006: adds /mc/fcc/mission_ack — raw success/failure of each forwarded
+// upload/item-update, reported by FccBackend. Still zero business logic:
+// deciding HOLD/RTL/mission-abort from repeated failures stays
+// mission_manager's/formation_controller's job (SDD §10.3 ownership split).
 namespace fcc_bridge
 {
 
@@ -43,12 +48,14 @@ private:
   void on_send_command(const mc_msgs::msg::FccCommand::SharedPtr msg);
   mc_msgs::msg::VehicleState to_msg(const VehicleState & state, bool link_alive) const;
   static MissionItem to_mission_item(const mc_msgs::msg::FccMissionItem & msg);
+  void publish_mission_ack(uint8_t request_type, uint32_t upload_id, uint16_t seq, bool success);
 
   std::unique_ptr<FccBackend> backend_;
   double link_timeout_s_;
 
   rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
   rclcpp::Publisher<mc_msgs::msg::FaultEvent>::SharedPtr pub_fault_;
+  rclcpp::Publisher<mc_msgs::msg::FccMissionAck>::SharedPtr pub_mission_ack_;
   rclcpp::CallbackGroup::SharedPtr timer_cb_group_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 
