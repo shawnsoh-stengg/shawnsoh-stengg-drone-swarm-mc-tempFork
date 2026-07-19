@@ -18,6 +18,7 @@ find_package(mc_msgs REQUIRED)
 add_library(fcc_backend
   src/factory.cpp
   src/xrce_dds_backend.cpp
+  src/mavlink_udp_backend.cpp
   src/mission_protocol_client.cpp
 )
 target_include_directories(fcc_backend PUBLIC
@@ -94,6 +95,12 @@ if(BUILD_TESTING)
   # (TP-NI style, SDD §3.2) — real px4_msgs types, no live FCC required.
   ament_add_gtest(test_xrce_dds_backend test/test_xrce_dds_backend.cpp)
   target_link_libraries(test_xrce_dds_backend fcc_backend)
+
+  # FCC-007: MavlinkUdpBackend state aggregation + mission protocol against
+  # a mock PX4 SITL peer (plain UDP socket in the test, no live PX4).
+  ament_add_gtest(test_mavlink_udp_backend test/test_mavlink_udp_backend.cpp)
+  target_link_libraries(test_mavlink_udp_backend fcc_backend)
+  target_include_directories(test_mavlink_udp_backend PRIVATE ${mavlink_INCLUDE_DIRS})
 
   # FCC-004: fcc_bridge_node adapter — TP-NI-001/002/003 (publish rate,
   # content accuracy, link-loss fault), against a mock uORB publisher.

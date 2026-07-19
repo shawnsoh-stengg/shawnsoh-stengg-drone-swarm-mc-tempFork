@@ -53,8 +53,14 @@ TEST_F(FactoryTest, SimulationModeFalseSelectsXrceDdsBackend)
   ASSERT_NE(backend, nullptr);
 }
 
-TEST_F(FactoryTest, SimulationModeTrueThrowsUntilMavlinkUdpBackendExists)
+// FCC-007: MavlinkUdpBackend now exists — SIMULATION_MODE=true constructs
+// it instead of throwing. SITL_FCC_PORT is isolated per-test so this
+// doesn't collide with test_mavlink_udp_backend.cpp's own bind port.
+TEST_F(FactoryTest, SimulationModeTrueSelectsMavlinkUdpBackend)
 {
   setenv("SIMULATION_MODE", "true", 1);
-  EXPECT_THROW(fcc_bridge::make_fcc_backend(node_.get()), std::runtime_error);
+  setenv("SITL_FCC_PORT", "25541", 1);
+  auto backend = fcc_bridge::make_fcc_backend(node_.get());
+  ASSERT_NE(backend, nullptr);
+  unsetenv("SITL_FCC_PORT");
 }

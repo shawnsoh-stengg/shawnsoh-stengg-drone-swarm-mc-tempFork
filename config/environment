@@ -41,6 +41,10 @@ EXECUTOR_WD_TIMEOUT_S=5
 # --- Simulation ---
 # Set to true to use MavlinkUdpBackend instead of XrceDdsBackend (SDD §13.1).
 SIMULATION_MODE=false
+# MavlinkUdpBackend's local bind port when SIMULATION_MODE=true — the peer
+# (PX4 SITL) is learned dynamically from the first datagram it sends here,
+# not configured by IP (FCC-007). Matches SDD §13.1's documented SITL port.
+SITL_FCC_PORT=14540
 
 # --- ROS 2 / DDS ---
 ROS_DOMAIN_ID=0

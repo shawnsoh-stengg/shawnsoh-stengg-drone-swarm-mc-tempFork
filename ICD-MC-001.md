@@ -1406,6 +1406,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `FCC_LINK_TIMEOUT_S` | `1` | FCC link-loss fault trigger (s) |
 | `MANAGER_WD_TIMEOUT_S` | `5` | Manager watchdog timeout (s) |
 | `SIMULATION_MODE` | `false` | `true` replaces hardware with SITL equivalents |
+| `SITL_FCC_PORT` | `14540` | `MavlinkUdpBackend`'s local UDP bind port (`SIMULATION_MODE=true` only) — PX4 SITL's address is learned dynamically from its first datagram, not configured (FCC-007) |
 | `ROS_DOMAIN_ID` | `0` | CycloneDDS domain ID |
 | `CYCLONEDDS_URI` | `/etc/drone-mc/cyclonedds.xml` | CycloneDDS config file |
 | `CAMERA_CALIBRATION_FILE` | `/etc/drone-mc/camera_calibration.yaml` | Calibration file path |

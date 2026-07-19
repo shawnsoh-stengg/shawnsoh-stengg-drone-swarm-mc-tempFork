@@ -2,10 +2,10 @@
 // Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §3, ICD-MC-001 §3).
 
 #include <cstdlib>
-#include <stdexcept>
 #include <string>
 
 #include "fcc_bridge/fcc_backend.hpp"
+#include "fcc_bridge/mavlink_udp_backend.hpp"
 #include "fcc_bridge/xrce_dds_backend.hpp"
 
 namespace fcc_bridge
@@ -29,12 +29,7 @@ std::unique_ptr<FccBackend> make_fcc_backend(rclcpp::Node * node)
   // single three-value FCC_TRANSPORT, which does not match config/environment).
   if (env_true("SIMULATION_MODE")) {
     RCLCPP_INFO(node->get_logger(), "make_fcc_backend: SIMULATION_MODE=true -> MavlinkUdpBackend");
-    // MavlinkUdpBackend is not yet implemented (tracked separately, not
-    // part of FCC-001/FCC-002) — fail loudly rather than silently falling
-    // back to production hardware.
-    throw std::runtime_error(
-      "make_fcc_backend: MavlinkUdpBackend not yet implemented — "
-      "SIMULATION_MODE=true is not usable until that ticket lands");
+    return std::make_unique<MavlinkUdpBackend>(node);
   }
 
   RCLCPP_INFO(node->get_logger(), "make_fcc_backend: SIMULATION_MODE=false -> XrceDdsBackend");
