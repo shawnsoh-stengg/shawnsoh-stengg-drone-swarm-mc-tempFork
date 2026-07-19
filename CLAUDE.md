@@ -173,6 +173,18 @@ scripts/
   04b-smoke-test-ros2.sh      # TP-SM-004: ROS 2 + CycloneDDS
   05-build-workspace.sh       # colcon build → /opt/drone-mc/install
   05b-smoke-test-colcon.sh    # TP-SM-005: workspace + pkg-list
+  06b-smoke-test-fcc-links.sh  # HIF-001 (ttyTHS1) hardware-link verification
+  06c-smoke-test-xrce-agent.sh # FCC-008: FCC_TRANSPORT selection + agent/node liveness
+                                #   (no plain "06-*.sh": unlike every other numbered pair,
+                                #   06b/06c verify config+behavior other scripts already set
+                                #   up — HIF-001 wiring from 01-install-os.sh, the
+                                #   MicroXRCEAgent-bearing image from 08-build-fcc-bridge-image.sh
+                                #   — rather than installing/building anything of their own,
+                                #   so there's no "06" step for them to pair with)
+  08-build-fcc-bridge-image.sh  # build ghcr.io/drone-mc/fcc-bridge image
+  08b-smoke-test-fcc-bridge.sh  # package/interface/executable registration + loopback publish
+  09-build-mavlink-router-image.sh  # build ghcr.io/drone-mc/mavlink-router image (standalone, not FROM ros2-core)
+  09b-smoke-test-routing.sh         # GCS-001/MAVR-001 channel isolation
 ```
 
 ## Tooling Decisions
