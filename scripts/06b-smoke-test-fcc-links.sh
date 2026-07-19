@@ -9,13 +9,14 @@
 # pins HIF-001's documented device/baud · /dev/ttyTHS1 present with
 # dialout permissions on this host (mirrors 01b-smoke-test-os.sh so this
 # script is self-contained when run standalone on the DUT) · the
-# fcc-bridge image actually contains a MicroXRCEAgent binary.
+# fcc-bridge image actually contains a MicroXRCEAgent binary (built from
+# source in docker/fcc-bridge/Dockerfile's xrce_agent_builder stage,
+# FCC-008).
 #
-# NOTE: that last check is expected to FAIL until FCC-008 (MicroXRCEAgent
-# lifecycle) lands — see FCC-MISSION-CHANNEL-BACKLOG.md, which documents
-# that FCC-008 "blocks any real HIL use of FCC-002 today". Neither
-# docker/fcc-bridge/Dockerfile nor docker/ros2-core/Dockerfile installs
-# the Agent binary as of this writing.
+# See scripts/06c-smoke-test-xrce-agent.sh for FCC-008's own transport-
+# selection checks (does the container's entrypoint pick the right
+# MicroXRCEAgent invocation for FCC_TRANSPORT, do both processes run
+# together) — this script stays focused on HIF-001 link verification.
 #
 # Set LIVE_CHECK=1 to additionally start the Micro XRCE-DDS Agent against
 # a real Pixhawk 6X wired via HIF-001 and assert /fmu/out/vehicle_status

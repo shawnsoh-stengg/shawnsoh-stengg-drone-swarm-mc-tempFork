@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# 06c-smoke-test-xrce-agent.sh — Verify FCC-008: the fcc-bridge container's
+# entrypoint launches MicroXRCEAgent with the transport selected by
+# FCC_TRANSPORT, alongside fcc_bridge_node, and both share the container's
+# shutdown lifecycle.
+# Ref: HID-MC-001 §4.3, FCC-MISSION-CHANNEL-BACKLOG.md FCC-008.
+#
+# Runs entirely against the ethernet transport with loopback overrides — no
+# real Pixhawk or 192.168.12.x subnet required (mirrors
+# 08b-smoke-test-fcc-bridge.sh's FCC_ETH_IP=127.0.0.1 pattern). The
+# serial-transport branch is exercised on real hardware by
+# 06b-smoke-test-fcc-links.sh's LIVE_CHECK path instead, since that needs
+# an actual /dev/ttyTHS1.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
+PASS=0; FAIL=0
+IMAGE="${MC_VERSION:+ghcr.io/drone-mc/fcc-bridge:${MC_VERSION}}"
+IMAGE="${IMAGE:-ghcr.io/drone-mc/fcc-bridge:latest}"
+SOURCE="source /opt/ros/humble/install/setup.bash"
+AGENT_PORT=18888
+
+check() {
+    local desc="$1"; shift
+    if "$@" &>/dev/null; then
+        printf "PASS: %s\n" "$desc"; PASS=$((PASS+1))
+    else
+        printf "FAIL: %s\n" "$desc"; FAIL=$((FAIL+1))
+    fi
+}
+
+check "entrypoint.sh selects serial transport command" \
+    grep -q 'MicroXRCEAgent serial --dev' "${REPO_ROOT}/docker/fcc-bridge/entrypoint.sh"
+check "entrypoint.sh selects ethernet transport command" \
+    grep -q 'MicroXRCEAgent udp4 --port' "${REPO_ROOT}/docker/fcc-bridge/entrypoint.sh"
+
+command -v docker >/dev/null || { echo "==> ERROR: docker required" >&2; exit 1; }
+
+cid=""
+cleanup() { [[ -n "${cid}" ]] && docker rm -f "${cid}" &>/dev/null || true; }
+trap cleanup EXIT
+
+cid="$(docker run -d --rm --name mc-xrce-agent-smoke \
+    -e FCC_TRANSPORT=ethernet \
+    -e FCC_ETH_PORT="${AGENT_PORT}" \
+    -e FCC_ETH_IP=127.0.0.1 \
+    -e FCC_MISSION_PORT=15558 \
+    "${IMAGE}")"
+
+check "container is running" docker inspect -f '{{.State.Running}}' "${cid}"
+
+# Give the entrypoint a moment to spawn both processes.
+sleep 2
+
+check "MicroXRCEAgent launched with FCC_ETH_PORT (ethernet transport)" \
+    docker exec "${cid}" bash -c "pgrep -fa 'MicroXRCEAgent udp4 --port ${AGENT_PORT}'"
+check "fcc_bridge_node publishes /mc/fcc/vehicle_state alongside the agent" \
+    docker exec "${cid}" bash -c \
+        "${SOURCE} && timeout 5 ros2 topic hz /mc/fcc/vehicle_state 2>/dev/null | grep -q 'average rate'"
+
+start_ts=$(date +%s)
+docker stop --time 10 "${cid}" &>/dev/null || true
+stop_elapsed=$(( $(date +%s) - start_ts ))
+check "container stops cleanly (both processes) within 10s of SIGTERM" \
+    bash -c "[[ ${stop_elapsed} -lt 10 ]]"
+cid=""
+
+printf "\nResults: %d passed, %d failed\n" "${PASS}" "${FAIL}"
+[[ "${FAIL}" -eq 0 ]] || exit 1

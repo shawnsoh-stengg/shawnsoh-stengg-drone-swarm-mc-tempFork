@@ -18,27 +18,31 @@ the physical DUT; it does not contain real measurements.
    `CLAUDE.md`'s network table) is unreachable from the workstation this
    work was done on (`ssh: connect to host 192.168.10.11 port 22: No
    route to host`). The live check must be run from a machine with an
-   actual route to the Jetson, or directly on the Jetson.
-2. **`MicroXRCEAgent` is not yet installed anywhere in the image build.**
-   Neither `docker/ros2-core/Dockerfile` nor `docker/fcc-bridge/Dockerfile`
-   installs the Micro XRCE-DDS Agent binary. This matches the gap already
-   tracked as FCC-008 ("MicroXRCEAgent lifecycle") in
-   `FCC-MISSION-CHANNEL-BACKLOG.md`, which states FCC-008 "blocks any real
-   hardware-in-the-loop use of FCC-002 today." Until FCC-008 (or an
-   equivalent image change) lands, `06b-smoke-test-fcc-links.sh`'s
-   `LIVE_CHECK=1` path cannot pass — the container will fail to start
-   `MicroXRCEAgent` at all.
+   actual route to the Jetson, or directly on the Jetson. **Still
+   blocking as of 2026-07-19** — unrelated to blocker 2 below.
+2. ~~`MicroXRCEAgent` is not yet installed anywhere in the image
+   build.~~ **Resolved 2026-07-19 by FCC-008**:
+   `docker/fcc-bridge/Dockerfile` now builds the Agent from source in a
+   dedicated `xrce_agent_builder` stage, and `docker/fcc-bridge/
+   entrypoint.sh` launches it (transport selected by `FCC_TRANSPORT`)
+   before `fcc_bridge_node` starts. `06b-smoke-test-fcc-links.sh`'s
+   "fcc-bridge image has MicroXRCEAgent binary" check should now pass
+   once the image is rebuilt (`scripts/08-build-fcc-bridge-image.sh`).
+   See `scripts/06c-smoke-test-xrce-agent.sh` for FCC-008's own
+   transport-selection/liveness checks.
 
 ## To complete this ticket
 
-1. Land FCC-008 (or otherwise add a `MicroXRCEAgent` install step to the
-   fcc-bridge image).
+1. ~~Land FCC-008~~ — done, see above.
 2. On the Jetson DUT, with a powered Pixhawk 6X wired via HIF-001 and
    `UXRCE_DDS_CFG=102` / `UXRCE_DDS_BAUD=921600` set via QGroundControl
    (HID-MC-001 §3.3):
    ```bash
    LIVE_CHECK=1 sudo ./scripts/06b-smoke-test-fcc-links.sh
    ```
+   Blocker 1 (no network route to a DUT) still applies — this step still
+   needs to be run from a machine with an actual route to the Jetson, or
+   directly on the Jetson.
 3. Paste the script's PASS/FAIL output and the measured
    `average rate` values below, replacing this template's placeholders.
 

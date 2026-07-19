@@ -985,6 +985,8 @@ CMD ["ros2", "run", "fcc_bridge", "fcc_bridge_node", ...]
 
 The shared colcon workspace (`/opt/drone-mc/install`) is built once and bind-mounted into all containers. The `ros2-core` base image is built from `dustynv/ros:humble-ros-base-l4t-r36.3.0` (Jetson-native, JetPack 6.2.2) pinned by SHA256 digest.
 
+The fcc-bridge image is the one exception to the plain two-stage template above: it adds a third stage that builds the Micro XRCE-DDS Agent from source (no ROS 2 dependency, built FROM plain Ubuntu rather than `ros2-core` — FCC-008) and copies the resulting binary into the runtime stage alongside the colcon install tree. `docker/fcc-bridge/entrypoint.sh` launches the Agent (transport chosen by `FCC_TRANSPORT`, HID-MC-001 §4.3) before `fcc_bridge_node`, and both processes share the container's lifecycle — see §12.2's `drone-mc-fcc-bridge.service` template, unchanged by this addition since the Agent is supervised as part of the same container rather than a separate unit.
+
 ### 12.2 Systemd Service Units
 
 Each service unit follows this template:

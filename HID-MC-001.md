@@ -282,7 +282,14 @@ FCC_TRANSPORT=serial    # serial (HIF-001, production default) or ethernet (HIF-
                          # used for vehicle_state/vehicle_command, not the mission-protocol channel
 ```
 
-The `FccBackend` factory reads `SIMULATION_MODE` to choose the implementation (FCC-001); `XrceDdsBackend` then reads `FCC_TRANSPORT` to choose its DDS link (FCC-002) — no code changes either way.
+The `FccBackend` factory reads `SIMULATION_MODE` to choose the implementation (FCC-001). `XrceDdsBackend` itself only logs `FCC_TRANSPORT`'s value — the DDS link it depends on is made real by a Micro XRCE-DDS Agent process, launched by `docker/fcc-bridge/entrypoint.sh` *before* `fcc_bridge_node` starts (FCC-008). The entrypoint reads `FCC_TRANSPORT` and runs the same two commands documented in §3.3/§4.2 above:
+
+```
+serial   → MicroXRCEAgent serial --dev $FCC_SERIAL_DEVICE --baudrate $FCC_SERIAL_BAUD --rts-cts
+ethernet → MicroXRCEAgent udp4 --port $FCC_ETH_PORT
+```
+
+Both processes run inside the single `mc-fcc-bridge` container and share its lifecycle: either one dying takes the container down, and `drone-mc-fcc-bridge.service`'s `Restart=on-failure` brings both back together. `fcc_bridge_node` itself never spawns or supervises the Agent — that stays systemd's job, not the application's.
 
 ![Diagram 25 — Network Interface Topology](diagrams/25-hid-network-topology.png)
 
