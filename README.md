@@ -11,7 +11,7 @@ Voronoi cells, fly boustrophedon coverage, detect and geolocate targets).
 Design phase is complete; ROS 2 package implementation is underway in
 `ws/src/`. Packages currently present: `fcc_bridge`, `gcs_comms`,
 `health_monitor`, `mc_msgs`, `mission_exec`, `px4_msgs` (vendored, fetched by
-`scripts/05-build-workspace.sh`), `swarm_coord`, `vision`.
+`scripts/05-build-workspace.sh`), `swarm_coord`, `video_uplink`, `vision`.
 
 ## Documentation
 
@@ -59,7 +59,12 @@ sudo ./scripts/05b-smoke-test-colcon.sh
 sudo ./scripts/08-build-fcc-bridge-image.sh
 sudo ./scripts/08b-smoke-test-fcc-bridge.sh
 
-# 4. Install the drone-mc.target systemd orchestration
+# 4. Build the mavlink-router service image (ghcr.io/drone-mc/mavlink-router)
+# Standalone image, not FROM ros2-core — independent of steps 1-3 above.
+sudo ./scripts/09-build-mavlink-router-image.sh
+sudo ./scripts/09b-smoke-test-routing.sh
+
+# 5. Install the drone-mc.target systemd orchestration
 sudo ./scripts/02-install-systemd-units.sh
 sudo ./scripts/02b-smoke-test-units.sh
 sudo systemctl start drone-mc.target
@@ -73,10 +78,11 @@ per-package `colcon build`/`colcon test` usage.
 ## Repository layout
 
 ```
-docker/ros2-core/     ros2-core base Docker image
+docker/ros2-core/      ros2-core base Docker image
 docker/fcc-bridge/     fcc-bridge service Docker image (FROM ros2-core)
+docker/mavlink-router/ mavlink-router service Docker image (standalone, not FROM ros2-core)
 config/                environment, per-node params, netplan, udev, systemd units
-ws/src/                ROS 2 colcon workspace (7 first-party packages + vendored px4_msgs)
+ws/src/                ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
 scripts/               numbered setup/build/install scripts + smoke tests
 diagrams/              PlantUML architecture diagrams
 ```
