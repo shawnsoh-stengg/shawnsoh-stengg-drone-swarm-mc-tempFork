@@ -119,7 +119,7 @@ package "vision" as C_VIS #F4EEF8 {
 ' ═══════════════════════════════════════════════════
 package "video-uplink" as C_VIDEO #E8F4F0 {
   component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nIndependent of vision pipeline" as PFRONT #A8E0C8
-  component "video_mux_node\nRe-encode + metadata mux\nRTSP uplink to GCS :8555" as VMUX #90D0B0
+  component "video_mux_node\nRe-encode + metadata mux\nStream A :8555 (gimbal)\nStream B :8556 (downward)" as VMUX #90D0B0
 }
 
 ' ═══════════════════════════════════════════════════
@@ -180,11 +180,16 @@ VISLOC -up-> FCC_BRIDGE : "(vehicle_visual_odometry)"
 ' Detections → GCS
 DET --> GCS_NODE : "/mc/detections"
 
-' Gimbal video pipeline (independent of vision pipeline and GCS MAVLink channel)
+' Gimbal video pipeline (Stream A, independent of vision pipeline and GCS MAVLink channel)
 PFRONT --> VMUX : "/mc/perception/front/detections\n/mc/perception/front/tracks"
-VMUX --> QGC : "RTSP/H.265 + metadata\n:8555 (independent of MAVLink)"
+VMUX --> QGC : "RTSP/H.265 + metadata\nStream A :8555 (gimbal)\nStream B :8556 (downward)"
 PFRONT --> HEALTH : "(liveness heartbeat)"
-VMUX --> HEALTH : "/mc/video/uplink_status"
+VMUX --> HEALTH : "/mc/video/uplink_status\n/mc/video/down_uplink_status"
+
+' Downward camera video pipeline (Stream B — additive, perception_down_node's
+' detection role is unchanged; this is a new consumer of existing topics)
+CAMNODE --> VMUX : "/camera/image_raw\n(Stream B input)"
+DET --> VMUX : "/mc/detections\n(Stream B metadata)"
 
 ' Health → GCS + manager
 HEALTH --> GCS_NODE : "/mc/health"

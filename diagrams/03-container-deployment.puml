@@ -174,7 +174,7 @@ SVC_MLR --> GCS_HW : "MAVLink 2/UDP"
 SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
 SVC_ZENOH --> PEER_HW : "Zenoh mesh (DDS bridge)\nTCP :7447 / 192.168.10.x"
 ZBD_CFG --> SVC_ZENOH : "bind mount\n/etc/drone-mc"
-SVC_VIDEO --> GCS_HW : "RTSP/H.265 + metadata\n:8555 (independent of MAVLink)"
+SVC_VIDEO --> GCS_HW : "RTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of MAVLink"
 
 note right of SVC_FCC
   DeviceAllow=ttyTHS1
@@ -192,10 +192,14 @@ note right of SVC_VIS
 end note
 
 note right of SVC_VIDEO
-  network_mode=host (RTSP :8554/:8555)
+  network_mode=host (RTSP :8554/:8555/:8556)
   DeviceAllow=/dev/nvidia*
   MemoryMax=4G
   GPUAccess=all
+  Stream B (:8556) subscribes to
+  vision container's /camera/image_raw
+  + /mc/detections (same-host DDS,
+  no new hardware access needed)
 end note
 
 note right of SVC_ZENOH

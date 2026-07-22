@@ -72,7 +72,9 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
     rectangle "Pixhawk 6X\n192.168.10.31\n──────────────────\nPX4 v1.14 · NuttX\nuORB topics\nMAVLink 2" as FCC #FFD4A8
   }
 
-  rectangle "IMX219\nCSI Camera" as CAM #EDE0F8
+  rectangle "IMX219\nCSI Camera\n(downward, VIO +\nground detection)" as CAM #EDE0F8
+
+  rectangle "Gimbal IP Camera\n192.168.10.200\n(front-facing,\nsearch & detection)" as GIMCAM #EDE0F8
 
   rectangle "Mission Protocol Socket\nMAVLink 2/UDP :14555\n192.168.12.31 (always ethernet)\nnot routed by mavlink-router" as MISSPROTO #F5ECF5
 
@@ -88,12 +90,14 @@ MC <-left-> FCC : "  uXRCE-DDS\n  ttyTHS1 (FCC: Telem2) serial\n"
 MC .left.> MISSPROTO : "MAVLink-Mission Comm.\n 192.168.12.3x ethernet\n  MISSION_COUNT\n  MISSION_ITEM_INT\n  MISSION_ACK"
 MISSPROTO .right.> FCC
 
-' Camera → MC
+' Cameras → MC
 CAM -up-> MC : "  CSI\n  /camera/image_raw\n  ≥15 FPS"
+GIMCAM -up-> MC : "  RTSP/H.265 :8554\n  (IFD-006, HIF-007,\n  shared switch)"
 
 ' MC ↔ MANET
 MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel)\n  Swarm heartbeat / coordination (UDP)\n  192.168.10.x"
 MC .up.> AU1 : "  Zenoh mesh (zenoh-bridge-dds)\n  TCP :7447 — peer MCs (ZBD-001, done)\n  + Mission Orchestrator [proposal]"
+MC -up-> AU1 : "  GCS Video Uplink (RTSP/H.265 + metadata)\n  Stream A :8555 (gimbal) · Stream B :8556 (downward)"
 
 ' GCS ↔ MANET
 GCS <--> GU : "  MAVLink 2/UDP  →  FCC (Flight Telemetry ch.)\n  MAVLink 2/UDP  →  MC (separate ch.)\n  Mission upload · Commands · Telemetry"

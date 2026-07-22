@@ -174,14 +174,29 @@ end note
 ' ═══════════════════════════════════════════════════
 ' IFD-007: MC → GCS Video Uplink  (RTSP/H.265 + metadata)
 ' ═══════════════════════════════════════════════════
-== IFD-007 · MC → GCS Video Uplink · RTSP/H.265 + metadata · 192.168.10.11:8555 ==
+== IFD-007 · MC → GCS Video Uplink · RTSP/H.265 + metadata · 192.168.10.11:8555 (Stream A) ==
 
-MC -[#107850]> GCS : <color:#107850>RTSP/H.265 + KLV-style metadata</color>  ·  rtsp://192.168.10.11:8555/mc_video\n  time_usec  ·  track_id  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)\n  served by video_mux_node, re-encoding perception_front_node's frames + tracks/detections
+MC -[#107850]> GCS : <color:#107850>Stream A: RTSP/H.265 + metadata</color>  ·  rtsp://192.168.10.11:8555/mc_video\n  time_usec  ·  track_id  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)\n  served by video_mux_node, re-encoding perception_front_node's frames + tracks/detections
 
 note over MC, GCS #A8D8C0
   Independent of IFD-002 (MAVLink GCS channel) — separate RTSP server,
   separate port. A stalled video uplink never affects telemetry/command
   traffic.  MC publishes /mc/video/uplink_status (≥1 Hz)  [IR-041, IR-042]
+end note
+
+== IFD-007 · MC → GCS Video Uplink · RTSP/H.265 + metadata · 192.168.10.11:8556 (Stream B, downward — additive, 2026-07-22) ==
+
+MC -[#5050C0]> GCS : <color:#5050C0>Stream B: RTSP/H.265 + metadata</color>  ·  rtsp://192.168.10.11:8556/mc_video_down\n  time_usec  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)  (no track_id)\n  served by video_mux_node (same node, second pipeline), re-encoding camera_node's frames + perception_down_node's detections
+
+note over MC, GCS #D0B8F8
+  Additive to Stream A, independent failure domain — silence on one
+  stream never affects the other  [FR-085, FR-086, IR-043]. No track_id:
+  perception_down_node has no tracker (unlike perception_front_node).
+  perception_down_node's existing detection/geolocation role (IFD-004) is
+  unchanged — this is a new consumer of its already-published
+  /mc/detections, not a replacement.
+  MC publishes /mc/video/down_uplink_status (≥1 Hz), independent of
+  Stream A's /mc/video/uplink_status.
 end note
 
 ' ═══════════════════════════════════════════════════

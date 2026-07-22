@@ -823,6 +823,46 @@ Default timeout per test: 30 s unless specified.
 
 ---
 
+### TP-NI-021: video_mux_node — Downward Stream (Stream B) Metadata Correctness
+
+**SRS ref:** FR-085, IR-043  
+**Package:** `video_uplink`
+
+**Preconditions:** `camera_node` publishing synthetic `/camera/image_raw` frames; `perception_down_node` publishing known synthetic `Detection`s (fixed `class_id`, `confidence`, `lat`/`lon`/`alt`, no `track_id` — this pipeline has no tracker); `video_mux_node` running both streams; a mock RTSP client connected to `:8556`.
+
+**Procedure:**
+1. Publish one synthetic `Detection` with known field values on `/mc/detections`.
+2. Capture the corresponding muxed frame's metadata track at the `:8556` mock RTSP client.
+3. Decode and compare fields.
+
+**Pass criteria:**
+- Decoded `class_id` matches exactly, no `track_id` field present (ICD §8.2a)
+- `|decoded_confidence - sent_confidence| < 1e-4`
+- `|decoded_lat_deg - sent_lat_deg| < 1e-5°`, same for `lon`
+- Stream A (`:8555`) metadata is unaffected by Stream B traffic (independent pipelines, FR-086)
+
+---
+
+### TP-NI-022: video_mux_node — Downward Stream (Stream B) Source Silence → Independent of Stream A
+
+**SRS ref:** FR-086, IR-043  
+**Package:** `video_uplink`
+
+**Preconditions:** `video_mux_node` running both streams, both `streaming=true`; a mock RTSP client connected to each.
+
+**Procedure:**
+1. Stop `camera_node`/`perception_down_node` (halt Stream B's frame/detection source) while Stream A keeps publishing normally.
+2. Wait 3.5 s.
+3. Subscribe to `/mc/video/down_uplink_status` and `/mc/video/uplink_status`.
+
+**Pass criteria:**
+- `/mc/video/down_uplink_status.streaming == false` within 3.5 s of source silence
+- `/mc/video/uplink_status.streaming` (Stream A) remains `true`, unaffected — confirms the two pipelines are independent failure domains (FR-086)
+- No fault raised on `/mc/fault` (perception-only degradation)
+- Resuming Stream B's source restores `streaming == true` within 1 s, without restarting `video_mux_node` or affecting Stream A
+
+---
+
 ## 6. SITL System Tests — TP-ST
 
 SITL tests run a full MC stack against PX4 SITL (Gazebo). Each test is a `pytest` script that controls the GCS via a MAVLink connection and asserts on ROS 2 topic traffic.
@@ -1272,6 +1312,8 @@ The table below maps each SRS functional requirement to at least one test case. 
 | FR-082 | Concurrent GPU budget (both pipelines) | — | — | — | TP-HW-007 |
 | FR-083 | GCS video uplink | — | TP-NI-019, TP-NI-020 | — | TP-HW-007 |
 | FR-084 | Gimbal link loss — no flight failsafe | — | TP-NI-018 | TP-ST-013 | — |
+| FR-085 | Downward-camera GCS video uplink (Stream B) | — | TP-NI-021 | — | TP-HW-007 |
+| FR-086 | Stream B independent failure domain | — | TP-NI-022 | — | TP-HW-007 |
 | IR-001 | ttyTHS1 serial | — | — | — | TP-HW-004 |
 | IR-003 | VehicleState ≥10 Hz | — | TP-NI-001, TP-NI-002 | — | — |
 | IR-004 | Trajectory setpoint ≥5 Hz | — | TP-NI-004 | — | — |
@@ -1284,6 +1326,7 @@ The table below maps each SRS functional requirement to at least one test case. 
 | IR-040 | Gimbal camera RTSP ingest | — | TP-NI-017, TP-NI-018 | — | TP-HW-007 |
 | IR-041 | GCS video uplink RTSP + metadata | — | TP-NI-019 | — | TP-HW-007 |
 | IR-042 | Uplink status, independent of MAVLink | — | TP-NI-020 | — | — |
+| IR-043 | Downward-camera GCS video uplink (Stream B) | — | TP-NI-021, TP-NI-022 | — | TP-HW-007 |
 | PR-007 | Detection latency ≤500 ms | — | TP-NI-013 | — | TP-HW-003 |
 | PR-008 | Path generation ≤5 s | TP-UT-005 | TP-NI-008 | — | — |
 | PR-009 | CPU usage budget | — | — | TP-ST-012 | — |
@@ -1306,7 +1349,7 @@ Tests are aligned with the 6-month project milestones.
 | M1 — Architecture complete | 1 | TP-SM-001–005 (OS, JetPack, Docker, ROS 2, colcon) |
 | M2 — Core nodes integrated | 2 | TP-UT-001–019 · TP-NI-001–007 · TP-SM-006–011 · TP-HW-001–002 |
 | M3 — SITL single-drone | 3 | TP-ST-001 (single drone) · TP-ST-003 · TP-ST-006 · TP-ST-007 |
-| M4 — SITL multi-drone | 4 | TP-NI-008–020 · TP-ST-001–013 (full suite) · TP-HW-003–004 |
+| M4 — SITL multi-drone | 4 | TP-NI-008–022 · TP-ST-001–013 (full suite) · TP-HW-003–004 |
 | M5 — HIL integration | 5 | TP-HW-001–007 (all HIL tests on physical hardware) |
 | M6 — System acceptance | 6 | Full regression: TP-SM + TP-UT + TP-NI + TP-ST · TP-HW repeat |
 

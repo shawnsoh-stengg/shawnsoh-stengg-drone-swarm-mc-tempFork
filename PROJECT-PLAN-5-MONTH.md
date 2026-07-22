@@ -51,6 +51,14 @@ started — see that spec's §8 for open items blocking implementation.
 `GCS-ZENOH-DESIGN-REVIEW.md` has the full analysis of why this traffic
 moves to Zenoh while QGC's traffic stays MAVLink.
 
+**Update (2026-07-22, later still):** `video_mux_node` (`VU-002`) is
+extended to also stream the downward CSI camera's video+metadata to GCS
+as a second, independent RTSP session (`:8556`, Stream B) — additive to
+the existing gimbal uplink (Stream A, `:8555`), which is unchanged.
+`perception_down_node`'s existing ground-detection role is unchanged too;
+this only adds a new consumer of its already-published `/mc/detections`.
+See `SDD-MC-001.md` §9a.3 and `ICD-MC-001.md` §8.1a/§8.2a for the design.
+
 ---
 
 ## Current State (as of this audit)
@@ -513,17 +521,19 @@ node's frame/track output).
 
 ---
 
-#### VU-002: video_mux_node — GCS video re-encode and metadata uplink
+#### VU-002: video_mux_node — GCS video re-encode and metadata uplink (dual-stream)
 
-**Points:** 8
+**Points:** 12 (was 8 — raised 2026-07-22 to cover the second,
+downward-camera stream folded in below; previously scoped as gimbal-only)
 
-**Description:** As a developer, I want `video_mux_node` to re-encode
-`perception_front_node`'s frame stream to H.265, mux in a per-frame
-metadata track, and serve it to the GCS over a dedicated RTSP session, so
-the operator gets a live annotated video feed independent of the MAVLink
-telemetry channel (SDD §9a.2, FR-083–084, IR-041–042).
+**Description:** As a developer, I want `video_mux_node` to re-encode both
+`perception_front_node`'s (gimbal) and `camera_node`'s (downward CSI)
+frame streams to H.265, mux in per-frame metadata, and serve each as its
+own independent RTSP session to the GCS, so the operator gets live
+annotated video from both cameras, independent of the MAVLink telemetry
+channel and of each other (SDD §9a.2/§9a.3, FR-083–086, IR-041–043).
 
-**Acceptance Criteria:**
+**Acceptance Criteria — Stream A (gimbal, unchanged from original scope):**
 - GStreamer encode pipeline (`nvv4l2h265enc`) re-encodes frames from
   `perception_front_node`; muxes a KLV-style metadata track (ICD IFD-007
   §8.2: `time_usec`, `track_id`, `class_id`, `confidence`, `lat`/`lon`/`alt`)
@@ -538,17 +548,41 @@ telemetry channel (SDD §9a.2, FR-083–084, IR-041–042).
   but keeping the encode pipeline warm for reconnect (ICD IFD-007 §8.4). A
   GCS client disconnect alone does not raise a fault.
 
-**Deliverables:**
-- `video_mux_node.{hpp,cpp}` — encode/mux pipeline, RTSP server, status
-  publisher.
-- `mc_msgs/msg/VideoUplinkStatus.msg`.
-- Node integration test: synthetic frame+track input → mock RTSP client
-  receives a valid stream with correctly-muxed metadata; source silence →
-  `streaming=false` within 3 s, no fault escalation.
+**Acceptance Criteria — Stream B (downward, new 2026-07-22):**
+- Second GStreamer encode pipeline re-encodes frames from
+  `/camera/image_raw` (`camera_node`, IFD-004); muxes a metadata track (ICD
+  IFD-007 §8.2a: `time_usec`, `class_id`, `confidence`, `lat`/`lon`/`alt` —
+  no `track_id`, `perception_down_node` has no tracker) sourced from
+  `/mc/detections`.
+- Serves the muxed stream via a second, independent RTSP server at
+  `rtsp://192.168.10.11:8556/mc_video_down`.
+- Publishes `/mc/video/down_uplink_status` (`mc_msgs/VideoUplinkStatus`,
+  reused type, no new message) at ≥1 Hz.
+- On `camera_node`/`perception_down_node` frame/detection silence > 3 s,
+  stops serving new frames and sets `streaming=false` in
+  `/mc/video/down_uplink_status`, tearing down Stream B's RTSP session —
+  **Stream A is unaffected** (independent failure domains, FR-086), and
+  vice versa.
+- `perception_down_node`'s existing detection/geolocation role is
+  unchanged — this only adds a new consumer of its already-published
+  `/mc/detections`.
 
-**Relationships:** Depends on VU-001 (`perception_front_node`'s output).
-Blocks nothing further in this plan — GCS-side consumption of the uplink is
-out of scope for this repo.
+**Deliverables:**
+- `video_mux_node.{hpp,cpp}` — two independent encode/mux pipelines, two
+  RTSP servers, two status publishers.
+- `mc_msgs/msg/VideoUplinkStatus.msg` (unchanged, reused for both streams).
+- Node integration test: synthetic frame+track input (Stream A) and
+  synthetic frame+detection input (Stream B) → each mock RTSP client
+  receives a valid, correctly-muxed stream; source silence on either
+  stream → that stream's `streaming=false` within 3 s with no fault
+  escalation, **and no effect on the other stream** (mirrors
+  TP-NI-021/TP-NI-022).
+
+**Relationships:** Depends on VU-001 (`perception_front_node`'s output for
+Stream A) and the existing `vision` package's `camera_node`/
+`perception_down_node` (Stream B — cross-container topic subscription,
+same-host DDS, no new interface needed). Blocks nothing further in this
+plan — GCS-side consumption of either uplink is out of scope for this repo.
 
 ---
 
@@ -1146,22 +1180,23 @@ deployability.
 | 1 — FCC completion | FCC-006, 007, 008 | 20 |
 | 2A — Mission/Swarm | SC-002, 003, 004, ME-001, 002, SC-001 | 55 |
 | 2B — Vision | VIS-001, 002, 003, 004 | 34 |
-| 2E — Gimbal Video | VU-001, 002 | 18 |
+| 2E — Gimbal Video | VU-001, 002 | 22 |
 | 2C — GCS | GCS-001, 002, 003, 004, MAVR-001 | 32 |
 | 2D — Health | HM-001, 002, 003 | 17 |
 | 2F — Cross-Host DDS | ZBD-001 | 4 |
 | 3 — Deployment | DEP-001, 002, 003, 004, 005, 006 | 20 |
 | 4 — Test infra | TEST-001, 002, 003 | 27 |
-| **Total** | **33 tickets** | **227 pts ≈ 908 hrs ≈ 113.5 person-days** |
+| **Total** | **33 tickets** | **231 pts ≈ 924 hrs ≈ 115.5 person-days** |
 
-At ~21 working days/month, 227 points ≈ 5.4 person-months for a single
+At ~21 working days/month, 231 points ≈ 5.5 person-months for a single
 developer working this backlog alone — roughly in line with the 5-month
 horizon, with some slack for the unplanned work that always surfaces (SITL
 environment quirks, hardware bring-up issues, ICD gaps discovered mid-ticket
 the way FCC-006 discovered `IsrRole`/`FormationOffset`). `ZBD-001`/`DEP-006`
-(7 of the 227 points) are already done as of 2026-07-22. `GCS-004` (8
+(7 of the 231 points) are already done as of 2026-07-22. `GCS-004` (8
 points, added 2026-07-22) has 3 open items blocking a confident start — see
-`MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` §8.
+`MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` §8. `VU-002` was raised from 8 to
+12 points the same day to fold in the downward-camera stream (Stream B).
 
 Not sequenced into specific weeks/months per current scope — re-run this
 sizing exercise once team size is known, or ask for a capacity-sequenced

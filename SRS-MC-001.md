@@ -280,7 +280,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 | FR-075 | MUST | Test | After 3 consecutive failed restart attempts on any critical node, the health monitor shall declare a critical fault and command FCC RTL via the FccBackend. |
 | FR-076 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous manager / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
 
-#### 4.1.9 Front Gimbal Perception and Video Uplink
+#### 4.1.9 Gimbal Perception and Dual-Camera Video Uplink
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
@@ -289,6 +289,8 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 | FR-082 | SHOULD | Analysis | Gimbal-camera detection processing shall run concurrently with downward-camera detection processing without degrading either pipeline's frame rate below its configured minimum. |
 | FR-083 | MUST | Test | The MC shall re-stream the front gimbal video, with embedded per-frame detection/track metadata, to the GCS via a dedicated RTSP/H.265 video uplink (`video_mux_node`), independent of the MC↔GCS MAVLink telemetry channel (§4.1.7). |
 | FR-084 | MUST | Test | Loss of the gimbal camera RTSP link for > 3 s shall be treated as perception-only degradation: the health monitor shall declare `GIMBAL_LINK_LOST` and clear the `GIMBAL_OK` sensor flag. This condition shall not trigger any flight failsafe action. |
+| FR-085 | MUST | Test | The MC shall re-stream the downward CSI camera video, with embedded per-frame detection metadata, to the GCS via a second, independent RTSP/H.265 video uplink (`video_mux_node`, Stream B), in addition to and independent of the existing front-gimbal uplink (Stream A, FR-083). This is additive — `perception_down_node`'s existing detection/geolocation role (§4.1.5) is unchanged. |
+| FR-086 | MUST | Test | The downward-camera video uplink (Stream B) shall be an independent failure domain from the front-gimbal uplink (Stream A): loss of `camera_node`/`perception_down_node` frames or detections for > 3 s shall stop Stream B and set its `streaming` status false without affecting Stream A, and vice versa. |
 
 ---
 
@@ -346,6 +348,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 |---|---|---|---|
 | IR-041 | MUST | Test | The MC shall serve the front gimbal video (H.265) with embedded per-frame metadata (UTC timestamp, track ID, class, confidence, geodetic position) to the GCS via a dedicated RTSP session (`video_mux_node`), independent of the MC↔GCS MAVLink channel (§4.2.2). |
 | IR-042 | MUST | Inspection | The GCS video uplink RTSP session shall be independently restartable, with health reported via `/mc/video/uplink_status`, without affecting MAVLink telemetry or command traffic on the MC↔GCS channel. |
+| IR-043 | MUST | Test | The MC shall serve the downward CSI camera video (H.265) with embedded per-frame detection metadata (UTC timestamp, class, confidence, geodetic position) to the GCS via a second, independent RTSP session (`video_mux_node`, Stream B), health reported via `/mc/video/down_uplink_status`, without affecting Stream A (IR-041/042), the MC↔GCS MAVLink channel, or `perception_down_node`'s existing detection role. |
 
 ---
 
@@ -614,13 +617,13 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | FR-050–053 | Visual localisation | T | HIL |
 | FR-060–064 | GCS communication | T / I | SITL |
 | FR-070–076 | Health and failsafe | T / I | SITL |
-| FR-080–084 | Gimbal perception and video uplink | T / A | SITL → HIL |
+| FR-080–086 | Gimbal + downward perception and video uplink | T / A | SITL → HIL |
 | IR-001–007 | MC ↔ FCC interface | T / I | SITL → HIL |
 | IR-010–014 | MC ↔ GCS MAVLink | T / I | SITL |
 | IR-020–023 | Swarm peer protocol | T / I | SITL |
 | IR-030–033 | Camera interface | T / I | HIL |
 | IR-040 | Gimbal camera interface | T | HIL |
-| IR-041–042 | GCS video uplink | T / I | HIL |
+| IR-041–043 | GCS video uplink (both streams) | T / I | HIL |
 | PR-001–011 | Performance rates and latencies | T | SITL → HIL |
 | SFR-001–009 | Safety and failsafe | T / I | SITL |
 | SW-001–008 | Architecture and build conventions | I | Int |

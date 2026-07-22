@@ -25,7 +25,7 @@
 7. [search_planner_node — Coverage Path Planning](#7-search_planner_node--coverage-path-planning)
 8. [visual_localisation_node — GNSS-Denied Localisation](#8-visual_localisation_node--gnss-denied-localisation)
 9. [perception_down_node — AI Inference Pipeline](#9-perception_down_node--ai-inference-pipeline)
-9a. [perception_front_node and video_mux_node — Gimbal Video Perception and Uplink](#9a-perception_front_node-and-video_mux_node--gimbal-video-perception-and-uplink)
+9a. [perception_front_node and video_mux_node — Gimbal and Downward Video Perception and Uplink](#9a-perception_front_node-and-video_mux_node--gimbal-and-downward-video-perception-and-uplink)
 10. [health_monitor_node — System Health and Failsafe](#10-health_monitor_node--system-health-and-failsafe)
 11. [gcs_mavlink_node — GCS Communication](#11-gcs_mavlink_node--gcs-communication)
 12. [Deployment Design](#12-deployment-design)
@@ -770,9 +770,9 @@ Inference is limited to consume ≤ 80% of GPU throughput (PR-010). This is enfo
 
 ---
 
-## 9a. perception_front_node and video_mux_node — Gimbal Video Perception and Uplink
+## 9a. perception_front_node and video_mux_node — Gimbal and Downward Video Perception and Uplink
 
-**SRS refs:** FR-080–084, IR-040–042
+**SRS refs:** FR-080–086, IR-040–043
 **Package:** `video_uplink`
 
 ### 9a.1 perception_front_node — RTSP Ingest, Inference, and Tracking
@@ -833,6 +833,55 @@ perception_front_node frame stream ──► GStreamer encode (H.265, nvv4l2h265
 `video_mux_node` is independent of `gcs_mavlink_node` — it owns its own RTSP server and never touches the MAVLink GCS channel (IR-041, IR-042). `streaming` in `/mc/video/uplink_status` is `false` until `perception_front_node` frames are flowing and a GCS RTSP client has connected; `client_connected` and `bitrate_kbps` are read from the underlying GStreamer RTSP server session state.
 
 On `perception_front_node` frame/track silence > 3 s, `video_mux_node` stops serving new frames and sets `streaming=false`, tearing down the active RTSP session, but keeps its encode pipeline warm so it can resume immediately once frames return (ICD IFD-007 §8.4). A GCS client disconnecting does not raise a fault — the node keeps encoding, ready for reconnect.
+
+### 9a.3 video_mux_node — Downward Camera Stream (Stream B)
+
+```
+/camera/image_raw (camera_node, IFD-004) ──► GStreamer encode (H.265, nvv4l2h265enc)
+  + /mc/detections (perception_down_node)          │
+                                                     ▼
+                                          Metadata mux (ICD IFD-007 §8.2a:
+                                          time_usec, class_id, confidence,
+                                          lat/lon/alt — no track_id;
+                                          perception_down_node has no tracker)
+                                                     │
+                                                     ▼
+                                          RTSP server :8556 → GCS (Stream B)
+                                          (rtsp://192.168.10.11:8556/mc_video_down)
+                                                     │
+                                                     ▼
+                                          /mc/video/down_uplink_status (≥ 1 Hz)
+```
+
+Additive to §9a.2, not a replacement — `perception_down_node`'s existing
+detection/geolocation role (§9.2, §9.3) is unchanged; this only adds a
+consumer of its already-published `/mc/detections`. `video_mux_node` now
+owns two independent GStreamer encode/RTSP pipelines within one process —
+Stream A (§9a.2, unchanged) and Stream B (this section) — each with its
+own encode pipeline, RTSP session, and silence-timeout/streaming-status
+state. This mirrors the isolation intent `mavlink-router`'s entrypoint
+already establishes for its two independent Channel A/B processes (SDD
+§12.2): one component can serve two transports without either one's
+failure affecting the other, even though here it's two pipelines in one
+process rather than two processes.
+
+On `camera_node`/`perception_down_node` frame/detection silence > 3 s,
+`video_mux_node` stops serving new frames on Stream B and sets
+`streaming=false` in `/mc/video/down_uplink_status`, tearing down Stream
+B's RTSP session — **Stream A's session, encode state, and
+`/mc/video/uplink_status` are unaffected** (ICD IFD-007 §8.4, FR-086). The
+reverse also holds: Stream A silence does not affect Stream B. A GCS
+client disconnecting from either stream does not raise a fault — that
+stream's encode pipeline keeps running, ready for reconnect.
+
+**Resource note (flagged, not fully budgeted):** running two concurrent
+`nvv4l2h265enc` encode pipelines alongside the existing inference
+pipelines (§9.2, §9a.1, ≤80% GPU throughput budget per PR-010) adds load,
+though H.265 encode on Jetson typically uses the dedicated NVENC hardware
+block rather than the Tensor cores/SM compute the TensorRT inference
+pipelines contend for — likely non-competing, but not independently
+verified against real hardware here. Worth confirming during TP-HW-007
+rather than assumed.
 
 ---
 

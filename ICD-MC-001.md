@@ -44,7 +44,7 @@ Seven interface domains are defined:
 | IFD-003 | MC ↔ Swarm Peers | Custom binary protocol / UDP / MANET |
 | IFD-004 | MC ↔ Downward Camera | CSI → gscam2 → ROS 2 |
 | IFD-006 | MC ↔ Gimbal Camera | Ethernet (HIF-007) → RTSP/H.265 → `perception_front_node` |
-| IFD-007 | MC ↔ GCS Video Uplink | RTSP/H.265 + metadata (independent of IFD-002) |
+| IFD-007 | MC ↔ GCS Video Uplink | RTSP/H.265 + metadata, two independent streams (Stream A: gimbal `:8555`, Stream B: downward `:8556`) — both independent of IFD-002 |
 | IFD-005 | Internal (MC-internal) | ROS 2 topics / services (CycloneDDS, same-host only). Cross-host DDS, if/when needed, rides `zenoh-bridge-dds` over a static-peer Zenoh mesh instead — see §11.4a. |
 
 ### 1.3 Conventions
@@ -70,10 +70,11 @@ Seven interface domains are defined:
 │  /camera/         node   ttyTHS1 /    _node        mavlink-      │
 │  image_raw               192.168.12.x              router        │
 │                                                                   │
-│  IFD-006                              IFD-007                    │
+│  IFD-006                              IFD-007 (2 streams)         │
 │  Gimbal camera ──eth0(switch)──► perception_ video_mux ─RTSP/H.265─► │
 │  192.168.10.200                    front_node        + metadata      │
-│                                        (:8555)          to GCS        │
+│                                     (:8555 Stream A)    to GCS        │
+│  camera_node (IFD-004) ──────► perception_down_node ─┘ (:8556 Stream B)│
 │                                                                   │
 │  IFD-005: Internal ROS 2 topics (/mc/*)                           │
 │  All nodes communicate via CycloneDDS on the shared DDS domain    │
@@ -850,7 +851,7 @@ Type: `mc_msgs/TrackArray`. Published at ≥ 5 Hz whenever the gimbal video pipe
 
 ## 8. IFD-007: MC ↔ GCS Video Uplink (RTSP H.265 + Metadata)
 
-**SRS refs:** IR-041, IR-042, FR-083
+**SRS refs:** IR-041, IR-042, IR-043, FR-083, FR-085, FR-086
 
 ### 8.1 Transport
 
@@ -863,7 +864,24 @@ Type: `mc_msgs/TrackArray`. Published at ≥ 5 Hz whenever the gimbal video pipe
 
 `video_mux_node` subscribes to `perception_front_node`'s decoded/annotated frame stream and `/mc/perception/front/tracks` + `/mc/perception/front/detections`, re-encodes to H.265, muxes in a metadata track (per-frame UTC timestamp, detection class, confidence, track ID, geodetic position), and serves the result as a single RTSP session.
 
-### 8.2 Metadata Track Contents
+### 8.1a Transport — Downward Camera Stream (Stream B)
+
+**SRS refs:** FR-085, FR-086, IR-043
+
+| Parameter | Value |
+|---|---|
+| Protocol | RTSP 1.0 over the existing MANET link (HIF-004), video codec H.265/HEVC, embedded metadata track — same transport pattern as Stream A |
+| Server | `video_mux_node` (`video_uplink` package) — same node as Stream A, second independent pipeline |
+| Stream URL (GCS pulls) | `rtsp://192.168.10.11:8556/mc_video_down` |
+| Inputs | `/camera/image_raw` (`camera_node`, IFD-004) + `/mc/detections` (`perception_down_node`, `mc_msgs/DetectionArray`, §9.2) |
+| Independent of | Stream A (`:8555`), IFD-002 (MAVLink GCS channel), and `perception_down_node`'s existing detection/geolocation role, which is unchanged by this interface |
+
+Additive to Stream A, not a replacement — the front-gimbal uplink (§8.1)
+is unaffected. Unlike Stream A, this pipeline has no upstream tracker
+(`perception_down_node` is detection-only, no `perception_front_node`-style
+IoU tracker), so the metadata track (§8.2a) has no `track_id` field.
+
+### 8.2 Metadata Track Contents (Stream A — Gimbal)
 
 | Field | Type | Unit | Description |
 |---|---|---|---|
@@ -873,6 +891,18 @@ Type: `mc_msgs/TrackArray`. Published at ≥ 5 Hz whenever the gimbal video pipe
 | `confidence` | `uint16` | 0–10000 | Confidence × 10000 |
 | `lat`, `lon` | `int32` | degE7 | Estimated target geodetic position |
 | `alt` | `int32` | mm | Estimated target altitude MSL |
+
+### 8.2a Metadata Track Contents (Stream B — Downward)
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `time_usec` | `uint64` | µs | UTC timestamp of muxed frame |
+| `class_id` | `uint16` | — | Detection class label ID |
+| `confidence` | `uint16` | 0–10000 | Confidence × 10000 |
+| `lat`, `lon` | `int32` | degE7 | Estimated target geodetic position |
+| `alt` | `int32` | mm | Estimated target altitude MSL |
+
+No `track_id` field — `perception_down_node` has no tracker (§8.1a).
 
 ### 8.3 ROS 2 Topics Published by `video_mux_node`
 
@@ -887,12 +917,20 @@ Type: `mc_msgs/VideoUplinkStatus`. Rate: ≥ 1 Hz.
 | `bitrate_kbps` | `uint32` | kbps | Current output bitrate |
 | `client_connected` | `bool` | — | GCS has an active RTSP session open |
 
+#### `/mc/video/down_uplink_status`
+
+Type: `mc_msgs/VideoUplinkStatus` (same type as Stream A, reused — no new
+message type). Rate: ≥ 1 Hz. Same fields as above, reporting Stream B's
+RTSP session (`:8556`) independently of Stream A's `/mc/video/uplink_status`.
+
 ### 8.4 Timing and Error Handling
 
 | Condition | Timeout | Action | SRS Ref |
 |---|---|---|---|
-| `perception_front_node` frame/track silence | 3 s | `video_mux_node` stops serving new frames, sets `streaming=false` in `/mc/video/uplink_status`; existing RTSP session is torn down | FR-083 |
-| GCS RTSP client disconnect | — | `video_mux_node` continues encoding (ready for reconnect); no fault raised | — |
+| `perception_front_node` frame/track silence | 3 s | `video_mux_node` stops serving new frames, sets `streaming=false` in `/mc/video/uplink_status`; existing RTSP session (Stream A) is torn down | FR-083 |
+| GCS RTSP client disconnect (Stream A) | — | `video_mux_node` continues encoding (ready for reconnect); no fault raised | — |
+| `camera_node`/`perception_down_node` frame/detection silence | 3 s | `video_mux_node` stops serving new frames, sets `streaming=false` in `/mc/video/down_uplink_status`; existing RTSP session (Stream B) is torn down — Stream A unaffected | FR-085, FR-086 |
+| GCS RTSP client disconnect (Stream B) | — | `video_mux_node` continues encoding (ready for reconnect); no fault raised | — |
 
 ---
 
@@ -1400,7 +1438,8 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `14900` | UDP | Swarm heartbeat | Broadcast among peers |
 | `14901` | UDP | Swarm coordination | Unicast among peers |
 | `8554` | TCP/UDP | RTSP — Gimbal camera source stream | Gimbal camera → `perception_front_node`, on `192.168.10.200` (HIF-007, shared switch) |
-| `8555` | TCP/UDP | RTSP — MC video uplink | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007) |
+| `8555` | TCP/UDP | RTSP — MC video uplink, Stream A (gimbal) | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007 §8.1) |
+| `8556` | TCP/UDP | RTSP — MC video uplink, Stream B (downward) | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007 §8.1a) |
 
 ### 11.3 Serial Configuration
 

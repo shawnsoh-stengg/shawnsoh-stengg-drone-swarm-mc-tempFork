@@ -77,14 +77,14 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
 
   rectangle "IFD-006\nperception_front_node\n─────────────────\nRTSP/H.265  ·  192.168.10.200:8554\nshared switch (HIF-007)" as IFD006 #C8E8D8
 
-  rectangle "IFD-007\nvideo_mux_node\n─────────────────\nRTSP/H.265 + metadata  ·  192.168.10.11:8555\nindependent of IFD-002 MAVLink" as IFD007 #A8D8C0
+  rectangle "IFD-007\nvideo_mux_node\n─────────────────\nRTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of IFD-002 MAVLink" as IFD007 #A8D8C0
 
   package "IFD-005  ·  Internal ROS 2 Topics  ·  CycloneDDS  ·  Domain 0" as IFD005 #E8E8F8 {
     rectangle "/mc/fcc/*\nvehicle_state · odometry · imu\nmission_upload · mission_item_update · send_command\noffboard_setpoint  (FCC-009)" as T_FCC #D8E8F8
     rectangle "/mc/swarm/*\npeer_states · voronoi_cell · isr_role" as T_SWARM #E0D0F8
     rectangle "/mc/gcs/*\ncommand · mission_upload · link_status" as T_GCS #D0E8D0
     rectangle "/mc/search/*  ·  /mc/local_pose\n/mc/detections  ·  /mc/health\n/mc/mission_phase  ·  /mc/fault" as T_MISC #E8E8D0
-    rectangle "/mc/perception/front/*\ndetections · tracks\n/mc/video/uplink_status" as T_VIDEO #C8E8D8
+    rectangle "/mc/perception/front/*\ndetections · tracks\n/mc/video/uplink_status\n/mc/video/down_uplink_status" as T_VIDEO #C8E8D8
   }
 
 }
@@ -201,13 +201,18 @@ GCS <-[#107850]- IFD007
 
 note on link #A8D8C0
   <b>MC → GCS  (unidirectional, independent of IFD-002)</b>
-  RTSP/H.265 + KLV-style metadata
-  192.168.10.11:8555/mc_video
-  metadata: time_usec · track_id · class_id
-  confidence · lat/lon/alt
+  <b>Stream A (gimbal):</b> 192.168.10.11:8555/mc_video
+    metadata: time_usec · track_id · class_id
+    confidence · lat/lon/alt
+  <b>Stream B (downward):</b> 192.168.10.11:8556/mc_video_down
+    metadata: time_usec · class_id · confidence
+    lat/lon/alt  (no track_id — no tracker on this pipeline)
+  Additive — Stream B does not affect Stream A or
+  perception_down_node's existing detection role
 end note
 
-IFD006 -[#20A070]-> IFD007 : "frames + detections/tracks"
+IFD006 -[#20A070]-> IFD007 : "Stream A: frames + detections/tracks"
+IFD004 -[#5050C0]-> IFD007 : "Stream B: frames + detections"
 
 ' ═══════════════════════════════════════════════════
 ' IFD-005 internal connections
