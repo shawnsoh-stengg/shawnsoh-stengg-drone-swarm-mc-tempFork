@@ -80,7 +80,7 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
   rectangle "IFD-007\nvideo_mux_node\n─────────────────\nRTSP/H.265 + metadata  ·  192.168.10.11:8555\nindependent of IFD-002 MAVLink" as IFD007 #A8D8C0
 
   package "IFD-005  ·  Internal ROS 2 Topics  ·  CycloneDDS  ·  Domain 0" as IFD005 #E8E8F8 {
-    rectangle "/mc/fcc/*\nvehicle_state · odometry · imu\nmission_upload · mission_item_update · send_command" as T_FCC #D8E8F8
+    rectangle "/mc/fcc/*\nvehicle_state · odometry · imu\nmission_upload · mission_item_update · send_command\noffboard_setpoint  (FCC-009)" as T_FCC #D8E8F8
     rectangle "/mc/swarm/*\npeer_states · voronoi_cell · isr_role" as T_SWARM #E0D0F8
     rectangle "/mc/gcs/*\ncommand · mission_upload · link_status" as T_GCS #D0E8D0
     rectangle "/mc/search/*  ·  /mc/local_pose\n/mc/detections  ·  /mc/health\n/mc/mission_phase  ·  /mc/fault" as T_MISC #E8E8D0
@@ -107,6 +107,8 @@ note on link #FFF0E0
   <b>MC → FCC  (published by MC)</b>
   vehicle_command  (event)
   vehicle_visual_odometry  ≥10 Hz
+  offboard_control_mode + trajectory_setpoint  ≥5 Hz
+    (FCC-009 — only while an OFFBOARD-flagged leg is active)
   ─────────────────────────
   <b>Mission protocol  (MAVLink 2/UDP :14555 — the</b>
   <b>one MAVLink exception on this link, IR-007)</b>
@@ -114,7 +116,9 @@ note on link #FFF0E0
     (on change — search paths, ingress/muster)
   single-item replace: MISSION_WRITE_PARTIAL_LIST
     (≥5 Hz during INGRESS — FORMATION_SLOT)
-  MISSION mode only, no OFFBOARD
+  Mission protocol itself is MISSION-mode only;
+  OFFBOARD legs use the DDS setpoint stream above
+  instead, not this protocol  [FR-020/026-029]
 end note
 
 ' ═══════════════════════════════════════════════════

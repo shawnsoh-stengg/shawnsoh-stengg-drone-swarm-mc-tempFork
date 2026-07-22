@@ -69,6 +69,10 @@ FccBridgeNode::FccBridgeNode(
     "/mc/fcc/send_command", rclcpp::QoS(10),
     [this](const mc_msgs::msg::FccCommand::SharedPtr msg) {on_send_command(msg);},
     command_opts);
+  sub_offboard_setpoint_ = create_subscription<mc_msgs::msg::FccOffboardSetpoint>(
+    "/mc/fcc/offboard_setpoint", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::FccOffboardSetpoint::SharedPtr msg) {on_offboard_setpoint(msg);},
+    command_opts);
 
   RCLCPP_INFO(
     get_logger(), "fcc_bridge_node started: vehicle_state_rate=%.1f Hz, link_timeout=%.1f s",
@@ -102,6 +106,16 @@ void FccBridgeNode::publish_mission_ack(
   ack.seq = seq;
   ack.success = success;
   pub_mission_ack_->publish(ack);
+}
+
+void FccBridgeNode::on_offboard_setpoint(const mc_msgs::msg::FccOffboardSetpoint::SharedPtr msg)
+{
+  fcc_bridge::OffboardSetpoint sp;
+  sp.x = msg->x;
+  sp.y = msg->y;
+  sp.z = msg->z;
+  sp.yaw = msg->yaw;
+  backend_->stream_offboard_setpoint(sp);
 }
 
 void FccBridgeNode::on_send_command(const mc_msgs::msg::FccCommand::SharedPtr msg)

@@ -11,8 +11,11 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cmath>
 
 #include <px4_msgs/msg/battery_status.hpp>
+#include <px4_msgs/msg/offboard_control_mode.hpp>
+#include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
@@ -88,6 +91,12 @@ protected:
     sub_vehicle_command_ = node_->create_subscription<px4_msgs::msg::VehicleCommand>(
       "/fmu/in/vehicle_command", px4_qos(),
       [this](px4_msgs::msg::VehicleCommand::SharedPtr msg) {last_command_ = msg;});
+    sub_offboard_control_mode_ = node_->create_subscription<px4_msgs::msg::OffboardControlMode>(
+      "/fmu/in/offboard_control_mode", px4_qos(),
+      [this](px4_msgs::msg::OffboardControlMode::SharedPtr msg) {last_offboard_control_mode_ = msg;});
+    sub_trajectory_setpoint_ = node_->create_subscription<px4_msgs::msg::TrajectorySetpoint>(
+      "/fmu/in/trajectory_setpoint", px4_qos(),
+      [this](px4_msgs::msg::TrajectorySetpoint::SharedPtr msg) {last_trajectory_setpoint_ = msg;});
   }
 
   void TearDown() override
@@ -105,6 +114,10 @@ protected:
   rclcpp::Publisher<px4_msgs::msg::BatteryStatus>::SharedPtr pub_battery_;
   rclcpp::Subscription<px4_msgs::msg::VehicleCommand>::SharedPtr sub_vehicle_command_;
   px4_msgs::msg::VehicleCommand::SharedPtr last_command_;
+  rclcpp::Subscription<px4_msgs::msg::OffboardControlMode>::SharedPtr sub_offboard_control_mode_;
+  px4_msgs::msg::OffboardControlMode::SharedPtr last_offboard_control_mode_;
+  rclcpp::Subscription<px4_msgs::msg::TrajectorySetpoint>::SharedPtr sub_trajectory_setpoint_;
+  px4_msgs::msg::TrajectorySetpoint::SharedPtr last_trajectory_setpoint_;
 };
 
 TEST_F(XrceDdsBackendTest, AggregatesLocalPositionIntoVehicleState)
@@ -219,4 +232,38 @@ TEST_F(XrceDdsBackendTest, SendCommandPublishesVehicleCommandWithAllParams)
   EXPECT_FLOAT_EQ(last_command_->param1, 1.0F);
   EXPECT_FLOAT_EQ(last_command_->param7, 7.0F);
   EXPECT_TRUE(last_command_->from_external);
+}
+
+// FCC-009: stream_offboard_setpoint() publishes OffboardControlMode
+// (position=true, all else false) and TrajectorySetpoint (position+yaw
+// set, velocity/acceleration/jerk/yawspeed NaN'd out per that message's own
+// "NaN means not controlled" convention).
+TEST_F(XrceDdsBackendTest, StreamOffboardSetpointPublishesControlModeAndTrajectorySetpoint)
+{
+  fcc_bridge::OffboardSetpoint sp;
+  sp.x = 1.5F;
+  sp.y = -2.5F;
+  sp.z = -10.0F;
+  sp.yaw = 0.75F;
+
+  ASSERT_TRUE(spin_until(
+    node_,
+      [&] {
+        backend_->stream_offboard_setpoint(sp);
+        return last_offboard_control_mode_ != nullptr && last_trajectory_setpoint_ != nullptr;
+    },
+    std::chrono::seconds(3)));
+
+  EXPECT_TRUE(last_offboard_control_mode_->position);
+  EXPECT_FALSE(last_offboard_control_mode_->velocity);
+  EXPECT_FALSE(last_offboard_control_mode_->acceleration);
+  EXPECT_FALSE(last_offboard_control_mode_->attitude);
+  EXPECT_FALSE(last_offboard_control_mode_->body_rate);
+
+  EXPECT_FLOAT_EQ(last_trajectory_setpoint_->position[0], 1.5F);
+  EXPECT_FLOAT_EQ(last_trajectory_setpoint_->position[1], -2.5F);
+  EXPECT_FLOAT_EQ(last_trajectory_setpoint_->position[2], -10.0F);
+  EXPECT_FLOAT_EQ(last_trajectory_setpoint_->yaw, 0.75F);
+  EXPECT_TRUE(std::isnan(last_trajectory_setpoint_->velocity[0]));
+  EXPECT_TRUE(std::isnan(last_trajectory_setpoint_->yawspeed));
 }

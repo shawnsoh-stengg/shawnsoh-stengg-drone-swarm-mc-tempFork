@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -70,6 +71,10 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
     node_->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
   pub_visual_odometry_ =
     node_->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos);
+  pub_offboard_control_mode_ =
+    node_->create_publisher<px4_msgs::msg::OffboardControlMode>("/fmu/in/offboard_control_mode", qos);
+  pub_trajectory_setpoint_ =
+    node_->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", qos);
 
   mission_sock_fd_ = open_mission_socket();
 
@@ -221,6 +226,32 @@ bool XrceDdsBackend::update_mission_item(uint16_t seq, const MissionItem & item)
       seq);
   }
   return accepted;
+}
+
+void XrceDdsBackend::stream_offboard_setpoint(const OffboardSetpoint & sp)
+{
+  const auto now_us = static_cast<uint64_t>(node_->now().nanoseconds() / 1000);
+
+  px4_msgs::msg::OffboardControlMode mode{};
+  mode.timestamp = now_us;
+  mode.position = true;
+  // velocity/acceleration/attitude/body_rate/actuator left false — position
+  // + yaw only, matches mc_msgs/FccOffboardSetpoint (ICD §9.2, FCC-009).
+  pub_offboard_control_mode_->publish(mode);
+
+  px4_msgs::msg::TrajectorySetpoint setpoint{};
+  setpoint.timestamp = now_us;
+  setpoint.position = {sp.x, sp.y, sp.z};
+  // NaN, not zero — TrajectorySetpoint.msg: "setting a value to NaN means
+  // the state should not be controlled." Zero would tell PX4 to also hold
+  // zero velocity/acceleration, fighting the position setpoint.
+  constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+  setpoint.velocity = {kNaN, kNaN, kNaN};
+  setpoint.acceleration = {kNaN, kNaN, kNaN};
+  setpoint.jerk = {kNaN, kNaN, kNaN};
+  setpoint.yaw = sp.yaw;
+  setpoint.yawspeed = kNaN;
+  pub_trajectory_setpoint_->publish(setpoint);
 }
 
 void XrceDdsBackend::send_command(uint32_t cmd, const std::array<float, 7> & params)

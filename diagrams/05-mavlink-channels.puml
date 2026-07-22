@@ -117,7 +117,18 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
         vehicle_attitude · vehicle_odometry
       MC writes uORB topics:
         vehicle_command
-      MISSION mode only, no OFFBOARD.
+      ──────────────────────────────
+      OFFBOARD (FCC-009, FR-012/026-029):
+      when the active mission plan flags a
+      leg for OFFBOARD, uXRCE-DDS also
+      carries offboard_control_mode +
+      trajectory_setpoint, streamed by
+      FccBackend::stream_offboard_setpoint()
+      at ≥5 Hz (≥2 Hz PX4 floor). Mode
+      entry/exit stays MISSION-mode-authority
+      vehicle_command, sent exclusively by
+      mission_manager_node — never the
+      backend itself.
     end note
 
     note as N_C2

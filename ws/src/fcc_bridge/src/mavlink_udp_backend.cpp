@@ -249,6 +249,38 @@ bool MavlinkUdpBackend::update_mission_item(uint16_t seq, const MissionItem & it
   return accepted;
 }
 
+void MavlinkUdpBackend::stream_offboard_setpoint(const OffboardSetpoint & sp)
+{
+  sockaddr_in target{};
+  {
+    std::scoped_lock lock(peer_mtx_);
+    if (!peer_known_) {
+      RCLCPP_WARN(
+        node_->get_logger(),
+        "MavlinkUdpBackend: no SITL peer seen yet — dropping OFFBOARD setpoint");
+      return;
+    }
+    target = peer_addr_;
+  }
+
+  // POSITION_TARGET_TYPEMASK: ignore velocity (8|16|32) + acceleration/force
+  // (64|128|256) + yaw_rate (2048) — position + yaw only, matching
+  // mc_msgs/FccOffboardSetpoint (ICD §9.2) and XrceDdsBackend's NaN'd
+  // velocity/acceleration/jerk fields on the TrajectorySetpoint side.
+  constexpr uint16_t kTypeMask = 8 | 16 | 32 | 64 | 128 | 256 | 2048;
+
+  mavlink_message_t msg;
+  mavlink_msg_set_position_target_local_ned_pack(
+    drone_id(), kCompIdOnboardComputer, &msg,
+    static_cast<uint32_t>(node_->now().nanoseconds() / 1000000), kTargetSystem, kTargetComponent,
+    MAV_FRAME_LOCAL_NED, kTypeMask, sp.x, sp.y, sp.z,
+    /*vx=*/ 0, /*vy=*/ 0, /*vz=*/ 0, /*afx=*/ 0, /*afy=*/ 0, /*afz=*/ 0, sp.yaw, /*yaw_rate=*/ 0);
+
+  uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+  const uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+  ::sendto(sock_fd_, buf, len, 0, reinterpret_cast<const sockaddr *>(&target), sizeof(target));
+}
+
 void MavlinkUdpBackend::send_command(uint32_t cmd, const std::array<float, 7> & params)
 {
   sockaddr_in target{};

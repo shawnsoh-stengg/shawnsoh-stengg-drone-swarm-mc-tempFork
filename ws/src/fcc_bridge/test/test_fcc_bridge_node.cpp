@@ -21,6 +21,7 @@
 #include <mc_msgs/msg/fcc_mission.hpp>
 #include <mc_msgs/msg/fcc_mission_ack.hpp>
 #include <mc_msgs/msg/fcc_mission_item.hpp>
+#include <mc_msgs/msg/fcc_offboard_setpoint.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
@@ -231,6 +232,13 @@ public:
     return update_result_;
   }
 
+  void stream_offboard_setpoint(const fcc_bridge::OffboardSetpoint & sp) override
+  {
+    std::scoped_lock lock(mtx_);
+    last_offboard_setpoint_ = sp;
+    ++offboard_setpoint_count_;
+  }
+
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override
   {
     std::scoped_lock lock(mtx_);
@@ -258,6 +266,8 @@ public:
   uint16_t last_updated_seq_{0xFFFF};
   fcc_bridge::MissionItem last_updated_item_{};
   int update_count_{0};
+  fcc_bridge::OffboardSetpoint last_offboard_setpoint_{};
+  int offboard_setpoint_count_{0};
   uint32_t last_command_{0};
   std::array<float, 7> last_params_{};
 };
@@ -283,6 +293,8 @@ protected:
       "/mc/fcc/mission_item_update", rclcpp::QoS(10));
     pub_send_command_ = harness_->create_publisher<mc_msgs::msg::FccCommand>(
       "/mc/fcc/send_command", rclcpp::QoS(10));
+    pub_offboard_setpoint_ = harness_->create_publisher<mc_msgs::msg::FccOffboardSetpoint>(
+      "/mc/fcc/offboard_setpoint", rclcpp::QoS(10));
     sub_vehicle_state_ = harness_->create_subscription<mc_msgs::msg::VehicleState>(
       "/mc/fcc/vehicle_state", rclcpp::QoS(10),
       [this](mc_msgs::msg::VehicleState::SharedPtr /*msg*/) {++vehicle_state_count_;});
@@ -308,6 +320,7 @@ protected:
   rclcpp::Publisher<mc_msgs::msg::FccMission>::SharedPtr pub_mission_upload_;
   rclcpp::Publisher<mc_msgs::msg::FccMissionItem>::SharedPtr pub_mission_item_update_;
   rclcpp::Publisher<mc_msgs::msg::FccCommand>::SharedPtr pub_send_command_;
+  rclcpp::Publisher<mc_msgs::msg::FccOffboardSetpoint>::SharedPtr pub_offboard_setpoint_;
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
   rclcpp::Subscription<mc_msgs::msg::FccMissionAck>::SharedPtr sub_mission_ack_;
   std::atomic<int> vehicle_state_count_{0};
@@ -432,6 +445,32 @@ TEST_F(FccBridgeNodeMissionForwardingTest, SendCommandForwardsCmdAndAllParams)
   std::scoped_lock lock(backend_->mtx_);
   EXPECT_FLOAT_EQ(backend_->last_params_[0], 1.0F);
   EXPECT_FLOAT_EQ(backend_->last_params_[6], 7.0F);
+}
+
+// FCC-009: a published FccOffboardSetpoint reaches the backend with all
+// fields intact — mirrors SendCommandForwardsCmdAndAllParams above.
+TEST_F(FccBridgeNodeMissionForwardingTest, OffboardSetpointForwardsAllFieldsToBackend)
+{
+  mc_msgs::msg::FccOffboardSetpoint msg;
+  msg.x = 1.5F;
+  msg.y = -2.5F;
+  msg.z = -10.0F;
+  msg.yaw = 0.75F;
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [&] {
+        pub_offboard_setpoint_->publish(msg);
+        std::scoped_lock lock(backend_->mtx_);
+        return backend_->offboard_setpoint_count_ > 0;
+      },
+      std::chrono::seconds(3)));
+
+  std::scoped_lock lock(backend_->mtx_);
+  EXPECT_FLOAT_EQ(backend_->last_offboard_setpoint_.x, 1.5F);
+  EXPECT_FLOAT_EQ(backend_->last_offboard_setpoint_.y, -2.5F);
+  EXPECT_FLOAT_EQ(backend_->last_offboard_setpoint_.z, -10.0F);
+  EXPECT_FLOAT_EQ(backend_->last_offboard_setpoint_.yaw, 0.75F);
 }
 
 // FCC-005 AC: mission_item_update sustains >=5 Hz without dropping

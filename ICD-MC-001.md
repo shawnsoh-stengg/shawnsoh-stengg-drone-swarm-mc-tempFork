@@ -321,8 +321,11 @@ Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_m
 | MISSION | 1 | 4 | 0 |
 | RTL | 1 | 5 | 0 |
 | TAKEOFF | 1 | 2 | 6 |
+| OFFBOARD ⚠ | 1 | 6 | 0 |
 
-> The MC never commands `OFFBOARD` (FR-012). Formation keeping (FR-020/023) stays in `MISSION` mode and tracks the leader via the mission protocol's `FORMATION_SLOT` item instead (§3.3 above).
+> ⚠ **Pending firmware verification.** `custom_main = 6` is `PX4_CUSTOM_MAIN_MODE_OFFBOARD` per PX4's `px4_custom_mode.h`; verify against the actual v1.14 firmware source before relying on this row operationally (the existing HOLD/MISSION/RTL/TAKEOFF rows are unverified against firmware too — TAKEOFF's `custom_main=2` looks inconsistent with the AUTO-submode pattern the other three use, a pre-existing discrepancy noted here, not introduced by this row).
+>
+> The MC commands `OFFBOARD` only for a phase/leg the active mission plan explicitly flags via `offboard_phase_mask` (§9.2, `mc_msgs/MissionUpload`); `mission_manager_node` is the sole node authorised to issue the mode command (FR-012, FR-026). Formation keeping (FR-020/023) stays in `MISSION` mode by default and tracks the leader via the mission protocol's `FORMATION_SLOT` item (§3.3 above) — `OFFBOARD` is only used where a leg opts in, via `formation_controller_node` streaming `mc_msgs/FccOffboardSetpoint` (§9.1/§9.2) instead. See `OFFBOARD-MODE-SWITCHING-BACKLOG.md` for the full entry/exit sequencing and fallback design (FR-026–029, SFR-009).
 
 ---
 
@@ -348,6 +351,9 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | `/mc/fcc/send_command` | MC → FCC | uXRCE-DDS `vehicle_command` |
 | `/mc/fcc/mission_ack` | FCC → MC | `MISSION_ACK` result from the mission protocol handshake, one per upload/item-update |
 | `/mc/fcc/visual_odometry` | MC → FCC | uXRCE-DDS `vehicle_visual_odometry` |
+| `/mc/fcc/offboard_setpoint` | MC → FCC | uXRCE-DDS `offboard_control_mode` + `trajectory_setpoint`; published only while OFFBOARD is confirmed active (FR-027/028) |
+
+`FccBackend::stream_offboard_setpoint(const OffboardSetpoint &)` is the corresponding abstract method (mirrors `update_mission_item()`'s contract: the backend does not buffer or extrapolate between calls — the caller, `formation_controller_node`, is responsible for sustaining ≥ 2 Hz while OFFBOARD is the commanded mode). It does not itself send `DO_SET_MODE OFFBOARD` — mode commands stay in `send_command()`, called exclusively by `mission_manager_node` (FR-012, FR-026).
 
 ---
 
@@ -908,6 +914,7 @@ All internal topics use the `/mc/` namespace. All custom message types are defin
 | `/mc/fcc/send_command` | `mc_msgs/FccCommand` | `mission_manager`, `health_monitor` | `fcc_bridge_node` | Event-driven |
 | `/mc/fcc/mission_ack` | `mc_msgs/FccMissionAck` | `fcc_bridge_node` | `mission_manager`, `formation_controller` | Event-driven (one per forwarded upload/item-update) |
 | `/mc/fcc/visual_odometry` | `mc_msgs/VisualOdometry` | `visual_localisation` | `fcc_bridge_node` | ≥ 10 Hz (GNSS-denied) |
+| `/mc/fcc/offboard_setpoint` | `mc_msgs/FccOffboardSetpoint` | `formation_controller` | `fcc_bridge_node` | ≥ 5 Hz while OFFBOARD confirmed active (FR-027/028); idle otherwise |
 | `/mc/mission_phase` | `mc_msgs/MissionPhase` | `mission_manager` | `swarm_coordinator`, `gcs_mavlink`, `health_monitor`, `formation_controller` | On change + 1 Hz keepalive |
 | `/mc/manager/heartbeat` | `std_msgs/Header` | `mission_manager` | `health_monitor` (watchdog) | ≥ 1 Hz |
 | `/mc/gcs/command` | `mc_msgs/GcsCommand` | `gcs_mavlink_node` | `mission_manager` | Event-driven |
@@ -1022,6 +1029,24 @@ uint16 seq                # valid iff request_type == ITEM_UPDATE; echoes FccMis
 bool success              # true = MAV_MISSION_ACCEPTED before timeout; false = timeout/reject
 ```
 
+#### `mc_msgs/FccOffboardSetpoint`
+
+```
+# Continuous OFFBOARD position setpoint, published on /mc/fcc/offboard_setpoint
+# while an OFFBOARD-flagged leg is active (FR-027/028). NED frame, matches
+# px4_msgs::msg::TrajectorySetpoint / OffboardControlMode field layout on the
+# XrceDdsBackend side. Velocity/acceleration fields are deliberately omitted
+# for this initial cut — formation-tracking only needs position+yaw, the same
+# as the FORMATION_SLOT mission-item-replace path this supersedes on
+# OFFBOARD-flagged legs (SDD §5.2). Extend later if a use case needs velocity
+# control.
+std_msgs/Header header
+float32 x            # N, m
+float32 y            # E, m
+float32 z            # D, m
+float32 yaw          # rad, NED
+```
+
 #### `mc_msgs/MissionPhase`
 
 ```
@@ -1062,6 +1087,9 @@ mc_msgs/SwarmPeer[] swarm_manifest
 # ARM authorisation
 bool arm_authorised
 float32 low_battery_threshold             # 0.0–1.0 (default 0.20)
+# bit N = Mission Phase ID N (§10.6) requires OFFBOARD for its FCC-facing
+# legs; 0 = all MISSION mode (pre-FR-026 behaviour). See FR-020/026-029.
+uint16 offboard_phase_mask
 ```
 
 #### `mc_msgs/SwarmPeerArray`
@@ -1309,7 +1337,8 @@ uint32  rx_drop_count
 | 8 | `GNSS_DEGRADED` | GNSS fix lost or HDOP > 2.0 |
 | 9 | `VISUAL_ODOM_FAIL` | Visual odometry not publishing when GNSS degraded |
 | 10 | `GIMBAL_LINK_LOST` | Gimbal camera RTSP link silent > 3 s (perception-only, no flight failsafe) |
-| 11–15 | Reserved | — |
+| 11 | `OFFBOARD_STREAM_STALE` | OFFBOARD setpoint stream age > 500 ms while OFFBOARD confirmed active (SFR-009) — `health_monitor_node` publishes this fault only; `mission_manager_node` executes the fallback (FR-029) |
+| 12–15 | Reserved | — |
 
 ### 10.9 Node Alive Mask Bits
 

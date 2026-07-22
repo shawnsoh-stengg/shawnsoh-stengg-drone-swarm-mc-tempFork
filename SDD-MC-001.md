@@ -256,7 +256,7 @@ void XrceDdsBackend::on_local_pos(const px4_msgs::msg::VehicleLocalPosition::Sha
 - `upload_mission(items)` drives the full handshake — `MISSION_COUNT` → `MISSION_ITEM_INT` ×N → `MISSION_ACK` (the same state machine `gcs_mavlink_node` uses for GCS uploads, §11.2). Used for search paths and INGRESS/MUSTER legs — infrequent, on mission change only.
 - `update_mission_item(seq, item)` drives the MAVLink **partial mission update** microservice instead of a full re-upload — `MISSION_WRITE_PARTIAL_LIST(seq, seq)` → FCC's `MISSION_REQUEST_INT(seq)` → `MISSION_ITEM_INT(seq)` → `MISSION_ACK` — replacing only the target slot. Used for the `FORMATION_SLOT` (`seq = 0`) at ≥ 5 Hz during INGRESS; a full-handshake re-upload at that rate would be far too heavyweight.
 
-There is no OFFBOARD-style setpoint stream: the FCC always flies in `MISSION` mode, and neither mission-protocol exchange has a PX4-imposed minimum rate — a gap does not cause a mode change (contrast the old `trajectory_setpoint`/`offboard_control_mode` pair).
+By default the FCC flies in `MISSION` mode via the mission-protocol exchanges above, and neither has a PX4-imposed minimum rate — a gap does not cause a mode change. The one exception is a phase/leg the active mission plan flags via `offboard_phase_mask` (ICD-MC-001 §9.2, FR-026): `mission_manager_node` sequences entry into `OFFBOARD` and `formation_controller_node` streams `offboard_control_mode`/`trajectory_setpoint` for the duration (§4.1a, §5.3a) — reintroducing the ≥ 2 Hz floor that pair enforces (contrast the earlier, since-removed design that used it unconditionally for every leg), scoped only to opted-in legs so the gap-tolerant behaviour above stays the default everywhere else. `XrceDdsBackend::stream_offboard_setpoint()` (ICD §3.4) publishes this pair; it does not itself change the FCC's mode.
 
 ### 3.3 MavlinkUdpBackend
 
@@ -317,6 +317,24 @@ using TransitionTable = std::vector<Transition>;
 | Any | `RETURN` | GCS ABORT command | Cancel active FCC mission |
 | Any | `FAULT` | `health_monitor_node` CRITICAL_FAULT event | Command RTL |
 
+### 4.1a Hybrid Mode Arbitration (MISSION ⇄ OFFBOARD)
+
+Reverses the blanket "FCC always flies MISSION" statement in §3.2/§5.3 for legs the mission plan opts in — see `OFFBOARD-MODE-SWITCHING-BACKLOG.md` for the full design history, including why the original MISSION-only decision was made (OFFBOARD's ≥ 2 Hz PX4-imposed floor vs. MISSION's gap tolerance) and why this reintroduces that tradeoff only where explicitly opted in (FR-020, FR-026).
+
+On each phase entry, `mission_manager_node` checks the entering phase's bit in `offboard_phase_mask` (from the `MissionUpload` that produced the active plan, ICD §9.2):
+
+- **Bit clear (default):** unchanged MISSION-mode upload/replace flow from §4.1's transition table.
+- **Bit set:** sequence OFFBOARD entry before handing control to `formation_controller_node`:
+  1. Command `formation_controller_node` into OFFBOARD-stream mode; wait for ≥ 1 s of confirmed `mc_msgs/FccOffboardSetpoint` publication at ≥ 2 Hz.
+  2. Call `send_command(MAV_CMD_DO_SET_MODE, OFFBOARD)`.
+  3. Confirm entry by observing `/mc/fcc/vehicle_state.nav_state == OFFBOARD` within 1 s. One retry of step 2 on timeout; if still unconfirmed, abort the leg, remain in the vehicle's current mode, and raise fault `OFFBOARD_ENTRY_FAILED` (FR-027) — closes the gap where PX4 silently rejects the mode change (e.g. a failed pre-arm/EKF check) and the MC would otherwise keep streaming setpoints PX4 never acts on. `formation_controller_node` is not told OFFBOARD is "active" for self-supervision purposes until this confirmation lands.
+
+On phase exit from an OFFBOARD-flagged phase — including an `OFFBOARD_STREAM_STALE` fault from `health_monitor_node` (§10.3), which drives this *same* path, not a separate one — `mission_manager_node` confirms a valid mission is already loaded in FCC-side dataman for the upcoming leg, calls `send_command(MAV_CMD_DO_SET_MODE, MISSION)`, confirms the switch via `nav_state == MISSION` within 1 s (same retry-once-then-fault behaviour as entry, FR-029), and only then signals `formation_controller_node` to stop streaming. This avoids a window where the FCC has neither a setpoint stream nor a mission to fly, and avoids the MC's own bookkeeping saying "back in MISSION" while `nav_state` says otherwise.
+
+`mission_manager_node` is the sole node in the system that calls `send_command()` for a flight-mode change arising from this arbitration logic. `health_monitor_node` never does so for `OFFBOARD_STREAM_STALE` — it only publishes the fault (§10.3) — which keeps the "is a mission loaded" check in the one place that owns it (this section) instead of duplicating it in `health_monitor_node`.
+
+**PX4-side backstop.** PX4's own `COM_OBL_ACT` OFFBOARD-loss failsafe (and its associated timeout parameter — exact v1.14 parameter name pending firmware-source verification, see ICD §3.3) stays **enabled**, configured with a timeout longer than `health_monitor_node`'s 500 ms `OFFBOARD_STREAM_STALE` threshold (SFR-009) — proposed 1.5-2 s. This makes it a silent backstop for an unresponsive MC software stack rather than a second primary path racing the MC-driven fallback above; disabling it outright would remove the FCC's last line of defense if the companion computer itself dies mid-OFFBOARD leg. The chosen value should be recorded as a PX4 parameter override in `HID-MC-001.md` alongside the airframe's other overrides (e.g. `BAT1_V_DIV`, §7.6) — not yet done as of this section landing.
+
 ### 4.2 Pre-Arm Checks
 
 Called as a guard before `PREFLIGHT → ARMING`. Returns true only if **all** conditions hold:
@@ -371,7 +389,7 @@ Mission data is written to disk as a YAML file at `/var/drone-mc/mission_upload.
                         (rclcpp params)
 ```
 
-The controller runs at **5 Hz** on a `rclcpp::WallTimer`. The FCC stays in `MISSION` mode throughout INGRESS; the controller tracks the leader by repeatedly replacing a single reserved mission item (`FORMATION_SLOT = 0`, uploaded during the `TAKEOFF → INGRESS` transition, SDD §4.1) rather than streaming an OFFBOARD setpoint. PD math is still done in the NED local frame; only the final target is converted to geodetic before being packaged into the `MissionItem`.
+The controller runs at **5 Hz** on a `rclcpp::WallTimer`. By default the FCC stays in `MISSION` mode throughout INGRESS; the controller tracks the leader by repeatedly replacing a single reserved mission item (`FORMATION_SLOT = 0`, uploaded during the `TAKEOFF → INGRESS` transition, SDD §4.1) rather than streaming an OFFBOARD setpoint. PD math is still done in the NED local frame; only the final target is converted to geodetic before being packaged into the `MissionItem`. A leg the mission plan flags for OFFBOARD (§4.1a) instead streams that same NED target directly, with no geodetic conversion — see §5.3a.
 
 ### 5.2 Mission-Item Target Computation
 
@@ -409,7 +427,16 @@ Target motion between consecutive cycles is clamped to `max_vel_xy` / `max_vel_z
 
 ### 5.3 Update Cadence and Mission-Mode Safety
 
-Unlike OFFBOARD, PX4's `MISSION` mode does not exit autonomously if mission item updates stop arriving — the FCC simply continues toward the last-written item indefinitely. The 5 Hz cadence above is therefore a tracking-quality target, not a mode-retention requirement (contrast the old `trajectory_setpoint` ≥ 2 Hz floor). The staleness safety net moves entirely into `formation_controller_node`: if its own `WallTimer` stalls (no leader state, no FCC link, or the node itself hangs), the watchdog in §5.4 and the manager heartbeat (§4.4) are what command HOLD — PX4 will not do it for us.
+Unlike OFFBOARD, PX4's `MISSION` mode does not exit autonomously if mission item updates stop arriving — the FCC simply continues toward the last-written item indefinitely. The 5 Hz cadence above is therefore a tracking-quality target, not a mode-retention requirement (contrast the ≥ 2 Hz floor OFFBOARD imposes). The staleness safety net moves entirely into `formation_controller_node`: if its own `WallTimer` stalls (no leader state, no FCC link, or the node itself hangs), the watchdog in §5.4 and the manager heartbeat (§4.4) are what command HOLD — PX4 will not do it for us. This section describes the MISSION-mode default; §5.3a covers the OFFBOARD path, where the ≥ 2 Hz floor is real and enforced by `health_monitor_node`'s `OFFBOARD_STREAM_STALE` watchdog (§10.3) rather than left to PX4's own `COM_OBL_ACT` failsafe timing.
+
+### 5.3a Dual-Mode Control (OFFBOARD Path)
+
+`formation_controller_node` becomes dual-mode for legs `mission_manager_node` (§4.1a) has flagged for OFFBOARD. It selects its output path by whichever mode `mission_manager_node` last *confirmed* — not merely commanded — for the current phase; the node only begins streaming (and self-supervising as such) once §4.1a's entry confirmation has landed.
+
+- **MISSION mode (default):** unchanged from §5.2 — replace `FORMATION_SLOT` via `update_mission_item()`.
+- **OFFBOARD mode:** the same PD math (§5.2) feeds a different output path — publish `mc_msgs/FccOffboardSetpoint` at ≥ 5 Hz via `FccBackend::stream_offboard_setpoint()` instead of packaging a `MissionItem`. No duplication of the leader-tracking/NED-frame logic between the two modes; only the final output step differs, and — unlike the MISSION-mode path — no `LocalCartesian` projection to geodetic is needed, since `FccOffboardSetpoint` stays NED-native end to end (§5.5).
+
+Self-supervision extends symmetrically: a stalled `WallTimer` while streaming OFFBOARD setpoints triggers the same self-HOLD behaviour §5.4 already defines for a stalled MISSION-mode replace (FR-024).
 
 ### 5.4 Leader State Staleness
 
@@ -428,7 +455,7 @@ After recovering leader contact, the controller resumes normal operation on the 
 
 ### 5.5 Coordinate Frame Consistency
 
-The leader's state is received in NED from the swarm heartbeat (`PEER_STATE` message). The own vehicle state comes from `/mc/fcc/vehicle_state` also in NED. The formation offset is stored in NED from the GCS mission upload. All PD arithmetic (§5.2) stays in NED — the single added frame transform versus the old OFFBOARD design is the final `LocalCartesian` projection of `target_pos_ned` to geodetic immediately before packaging the `MissionItem`.
+The leader's state is received in NED from the swarm heartbeat (`PEER_STATE` message). The own vehicle state comes from `/mc/fcc/vehicle_state` also in NED. The formation offset is stored in NED from the GCS mission upload. All PD arithmetic (§5.2) stays in NED. On the MISSION-mode path (default), the single added frame transform is the final `LocalCartesian` projection of `target_pos_ned` to geodetic immediately before packaging the `MissionItem`. On the OFFBOARD path (§5.3a), that projection is skipped entirely — `mc_msgs/FccOffboardSetpoint` is NED-native, so `target_pos_ned` (and the yaw term) go straight into the setpoint with no frame transform at all.
 
 ---
 
@@ -885,12 +912,20 @@ every 1 s:
     → reduce inference_rate_limit_fps to 5 FPS (via dynamic param)
     → publish WARNING statustext
 
+  if OFFBOARD_STREAM_STALE in fault_mask:
+    → publish FAULT event only — does NOT command the FCC directly
+    → mission_manager_node consumes this fault and executes the fallback
+      through its §4.1a exit-sequencing path (MISSION if a valid mission
+      is loaded, else HOLD; confirmed via nav_state)
+
   # GIMBAL_LINK_LOST (§9a.1, FR-084) is intentionally NOT handled here —
   # it is perception-only and must never drive a flight-mode command.
 
   publish /mc/health (all metrics + fault_mask + node_alive_mask)
   publish MC_HEALTH (50103) via gcs_mavlink_node
 ```
+
+`OFFBOARD_STREAM_STALE`'s branch is deliberately **not** shaped like the branches above: `FCC_LINK_LOST`, `MANAGER_DEAD` (after 3 restarts), and `LOW_BATTERY`/`GCS_LINK_LOST` all have `health_monitor_node` command the FCC directly. `OFFBOARD_STREAM_STALE` instead routes execution through `mission_manager_node` (§4.1a), because falling back out of OFFBOARD needs the same "is a mission already loaded in dataman" check §4.1a's exit sequencing owns — duplicating that check here would create two independent sources of truth for it. This is a known inconsistency with the existing branches above, accepted for this one fault rather than retrofitted across the others, which is a larger change out of scope for this addition.
 
 ### 10.4 Systemd Restart Interface
 

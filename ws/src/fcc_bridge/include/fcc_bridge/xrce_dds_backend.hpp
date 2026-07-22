@@ -10,7 +10,9 @@
 #include <vector>
 
 #include <px4_msgs/msg/battery_status.hpp>
+#include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/sensor_combined.hpp>
+#include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
@@ -38,6 +40,7 @@ public:
 
   bool upload_mission(const std::vector<MissionItem> & items) override;
   bool update_mission_item(uint16_t seq, const MissionItem & item) override;
+  void stream_offboard_setpoint(const OffboardSetpoint & sp) override;
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override;
   void publish_visual_odometry(const VisualOdometry & vo) override;
   VehicleState get_vehicle_state() const override;
@@ -71,6 +74,11 @@ private:
   // vehicle_visual_odometry is typed VehicleOdometry in PX4's dds_topics.yaml
   // — there is no separate VehicleVisualOdometry message.
   rclcpp::Publisher<px4_msgs::msg::VehicleOdometry>::SharedPtr pub_visual_odometry_;
+  // Published together on each stream_offboard_setpoint() call (FCC-009,
+  // SDD §4.1a/§5.3a) — only while an OFFBOARD-flagged leg is active; mode
+  // entry/exit sequencing lives in mission_manager_node, not here.
+  rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr pub_offboard_control_mode_;
+  rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr pub_trajectory_setpoint_;
 
   // Mission protocol — MAVLink 2/UDP, always 192.168.12.x:FCC_MISSION_PORT,
   // independent of FCC_TRANSPORT (ICD §3.1, IR-007). Not DDS.

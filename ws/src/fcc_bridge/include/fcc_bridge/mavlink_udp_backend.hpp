@@ -39,6 +39,7 @@ public:
 
   bool upload_mission(const std::vector<MissionItem> & items) override;
   bool update_mission_item(uint16_t seq, const MissionItem & item) override;
+  void stream_offboard_setpoint(const OffboardSetpoint & sp) override;
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override;
   void publish_visual_odometry(const VisualOdometry & vo) override;
   VehicleState get_vehicle_state() const override;

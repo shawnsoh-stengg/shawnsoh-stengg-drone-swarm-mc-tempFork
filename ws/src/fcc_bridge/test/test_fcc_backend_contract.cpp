@@ -29,6 +29,12 @@ public:
     return update_result_;
   }
 
+  void stream_offboard_setpoint(const fcc_bridge::OffboardSetpoint & sp) override
+  {
+    last_offboard_setpoint_ = sp;
+    ++offboard_setpoint_count_;
+  }
+
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override
   {
     last_command_ = cmd;
@@ -51,6 +57,8 @@ public:
   std::vector<fcc_bridge::MissionItem> last_uploaded_mission_;
   uint16_t last_updated_seq_{0xFFFF};
   fcc_bridge::MissionItem last_updated_item_{};
+  fcc_bridge::OffboardSetpoint last_offboard_setpoint_{};
+  int offboard_setpoint_count_{0};
   uint32_t last_command_{0};
   std::array<float, 7> last_params_{};
   fcc_bridge::VisualOdometry last_vo_{};
@@ -105,6 +113,29 @@ TEST(FccBackendContract, UpdateMissionItemUsesFormationSlotByConvention)
 
   EXPECT_EQ(fake.last_updated_seq_, fcc_bridge::FORMATION_SLOT);
   EXPECT_EQ(fake.last_updated_item_.lat, 10000000);
+}
+
+// FCC-009: stream_offboard_setpoint() must be reachable through the base
+// pointer like every other FccBackend method — this is the compile-time and
+// run-time contract check that would fail if the pure-virtual method were
+// ever dropped or its signature drifted from the concrete backends.
+TEST(FccBackendContract, StreamOffboardSetpointReachesImplementationThroughBasePointer)
+{
+  FakeBackend fake;
+  fcc_bridge::FccBackend * backend = &fake;
+
+  fcc_bridge::OffboardSetpoint sp;
+  sp.x = 1.0F;
+  sp.y = 2.0F;
+  sp.z = -3.0F;
+  sp.yaw = 0.5F;
+  backend->stream_offboard_setpoint(sp);
+
+  EXPECT_EQ(fake.offboard_setpoint_count_, 1);
+  EXPECT_FLOAT_EQ(fake.last_offboard_setpoint_.x, 1.0F);
+  EXPECT_FLOAT_EQ(fake.last_offboard_setpoint_.y, 2.0F);
+  EXPECT_FLOAT_EQ(fake.last_offboard_setpoint_.z, -3.0F);
+  EXPECT_FLOAT_EQ(fake.last_offboard_setpoint_.yaw, 0.5F);
 }
 
 TEST(FccBackendContract, SendCommandForwardsAllSevenParams)

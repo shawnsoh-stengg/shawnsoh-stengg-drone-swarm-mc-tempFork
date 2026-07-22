@@ -268,6 +268,47 @@ TEST_F(MavlinkUdpBackendTest, SendCommandEmitsCommandLongWithAllParams)
   EXPECT_FLOAT_EQ(cmd.param7, 7.0F);
 }
 
+// FCC-009: no peer known yet — same "nowhere to send" convention
+// send_command() already uses (drop + warn, no throw), verified here by
+// confirming the mock peer never receives anything within a short window.
+TEST_F(MavlinkUdpBackendTest, StreamOffboardSetpointDropsSilentlyWithNoPeerYet)
+{
+  fcc_bridge::OffboardSetpoint sp;
+  sp.x = 1.0F;
+  backend_->stream_offboard_setpoint(sp);
+
+  mavlink_message_t msg;
+  EXPECT_FALSE(recv_frame(fcc_.fd(), 0.3, msg));
+}
+
+TEST_F(MavlinkUdpBackendTest, StreamOffboardSetpointEmitsSetPositionTargetLocalNed)
+{
+  establish_peer();
+
+  fcc_bridge::OffboardSetpoint sp;
+  sp.x = 1.5F;
+  sp.y = -2.5F;
+  sp.z = -10.0F;
+  sp.yaw = 0.75F;
+  backend_->stream_offboard_setpoint(sp);
+
+  mavlink_message_t msg;
+  ASSERT_TRUE(recv_frame(fcc_.fd(), 2.0, msg));
+  ASSERT_EQ(msg.msgid, static_cast<uint32_t>(MAVLINK_MSG_ID_SET_POSITION_TARGET_LOCAL_NED));
+
+  mavlink_set_position_target_local_ned_t target{};
+  mavlink_msg_set_position_target_local_ned_decode(&msg, &target);
+  EXPECT_EQ(target.coordinate_frame, MAV_FRAME_LOCAL_NED);
+  EXPECT_FLOAT_EQ(target.x, 1.5F);
+  EXPECT_FLOAT_EQ(target.y, -2.5F);
+  EXPECT_FLOAT_EQ(target.z, -10.0F);
+  EXPECT_FLOAT_EQ(target.yaw, 0.75F);
+  // Velocity/acceleration/yaw_rate ignored (position + yaw only) — same
+  // POSITION_TARGET_TYPEMASK bits the backend sets.
+  constexpr uint16_t kExpectedTypeMask = 8 | 16 | 32 | 64 | 128 | 256 | 2048;
+  EXPECT_EQ(target.type_mask, kExpectedTypeMask);
+}
+
 TEST_F(MavlinkUdpBackendTest, UploadMissionCompletesFullHandshakeOverSharedSocket)
 {
   establish_peer();

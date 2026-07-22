@@ -69,6 +69,11 @@ package "Shared Data Types  (mc_msgs)" as TYPES #F0F6E8 {
     + position_variance[3] : float
     + stamp : rclcpp::Time
   }
+
+  class OffboardSetpoint << struct >> #D8EED8 {
+    + x, y, z : float          ' NED m
+    + yaw : float              ' rad, NED
+  }
 }
 
 ' ═══════════════════════════════════════════════════
@@ -78,6 +83,7 @@ package "Shared Data Types  (mc_msgs)" as TYPES #F0F6E8 {
 abstract class FccBackend #C0D8F0 {
   {abstract} + upload_mission(items : vector<MissionItem>) : void
   {abstract} + update_mission_item(seq : uint16_t, item : MissionItem) : void
+  {abstract} + stream_offboard_setpoint(sp : OffboardSetpoint) : void
   {abstract} + send_command(cmd : uint32_t, params : float[7]) : void
   {abstract} + publish_visual_odometry(vo : VisualOdometry) : void
   {abstract} + get_vehicle_state() : VehicleState
@@ -105,6 +111,10 @@ class XrceDdsBackend #A8CCEE {
   ' Publishers  /fmu/in/  (uXRCE-DDS)
   - pub_vehicle_command_
   - pub_visual_odometry_
+  ' FCC-009: OFFBOARD stream, published together on each
+  ' stream_offboard_setpoint() call — no internal buffering
+  - pub_offboard_control_mode_
+  - pub_trajectory_setpoint_
   ' Mission protocol — MAVLink 2/UDP :14555, always 192.168.12.x
   ' (not DDS; stock PX4 has no DDS-writable mission topic, IR-007)
   - mission_sock_fd_ : int
@@ -133,6 +143,8 @@ class MavlinkUdpBackend #B8D4E8 {
   - encode_command_long(cmd, params) : mavlink_message_t
   - run_mission_upload_handshake(items) : bool
   - run_mission_partial_update(seq, item) : bool
+  ' FCC-009: same peer_known_/drop-and-warn convention as send_command()
+  - encode_set_position_target_local_ned(sp) : mavlink_message_t
 }
 
 ' ═══════════════════════════════════════════════════
@@ -159,11 +171,13 @@ class fcc_bridge_node #D8E8F8 {
   - sub_mission_item_upd_   ' /mc/fcc/mission_item_update
   - sub_send_command_       ' /mc/fcc/send_command
   - sub_visual_odom_        ' /mc/fcc/visual_odometry
+  - sub_offboard_setpoint_  ' /mc/fcc/offboard_setpoint  (FCC-009)
   - timer_10hz_ : WallTimer
   - timer_1hz_  : WallTimer
   __
   + on_mission_upload(msg) : void
   + on_mission_item_update(msg) : void
+  + on_offboard_setpoint(msg) : void
   + on_send_command(msg) : void
   + publish_vehicle_state() : void
   + check_link_health() : void
@@ -185,6 +199,7 @@ fcc_bridge_node ..>  make_fcc_backend  : calls at startup
 FccBackend --> VehicleState       : returns (copy)
 FccBackend --> MissionItem        : accepts
 FccBackend --> VisualOdometry     : accepts
+FccBackend --> OffboardSetpoint   : accepts
 
 ' ═══════════════════════════════════════════════════
 ' NOTES
@@ -212,6 +227,17 @@ note right of XrceDdsBackend
   separate MAVLink 2/UDP socket to
   192.168.12.31:14555, always active
   regardless of FCC_TRANSPORT.  [IR-007]
+  ──────────────────────────────
+  stream_offboard_setpoint() (FCC-009) DOES
+  use DDS — publishes OffboardControlMode
+  (position=true) + TrajectorySetpoint to
+  /fmu/in/* on each call, one leg-conditional
+  exception to the "MISSION mode only" rule
+  above.  Velocity/accel/jerk NaN'd out per
+  TrajectorySetpoint's own "NaN = uncontrolled"
+  convention.  No DO_SET_MODE OFFBOARD here —
+  mode entry stays in send_command(), called
+  by mission_manager_node.  [SDD §4.1a/§5.3a]
 end note
 
 note right of MavlinkUdpBackend
@@ -224,6 +250,12 @@ note right of MavlinkUdpBackend
   to XrceDdsBackend's, just multiplexed
   over socket_fd_ instead of a
   dedicated port.
+  ──────────────────────────────
+  stream_offboard_setpoint() (FCC-009) sends
+  SET_POSITION_TARGET_LOCAL_NED over the same
+  socket_fd_ — same peer_known_ drop-and-warn
+  convention send_command() already uses for
+  "no SITL peer yet."
 end note
 
 note bottom of make_fcc_backend

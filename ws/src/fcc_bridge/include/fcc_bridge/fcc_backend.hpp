@@ -11,6 +11,7 @@
 #include "rclcpp/node.hpp"
 
 #include "fcc_bridge/mission_item.hpp"
+#include "fcc_bridge/offboard_setpoint.hpp"
 #include "fcc_bridge/vehicle_state.hpp"
 #include "fcc_bridge/visual_odometry.hpp"
 
@@ -25,15 +26,24 @@ public:
   virtual ~FccBackend() = default;
 
   // Upload or fully replace the active FCC mission (search paths,
-  // ingress/muster legs). MISSION mode only — there is no OFFBOARD setpoint
-  // path (SDD §5.3). Returns true iff MISSION_ACK/MAV_MISSION_ACCEPTED was
-  // received before timeout (FCC-006) — false on timeout or rejection.
+  // ingress/muster legs). Returns true iff MISSION_ACK/MAV_MISSION_ACCEPTED
+  // was received before timeout (FCC-006) — false on timeout or rejection.
   virtual bool upload_mission(const std::vector<MissionItem> & items) = 0;
 
   // Replace a single mission item in place — used for the moving
-  // FORMATION_SLOT target during INGRESS (SDD §5.2). Same ack-propagation
-  // contract as upload_mission() above.
+  // FORMATION_SLOT target during INGRESS when the leg is in MISSION mode
+  // (SDD §5.2). Same ack-propagation contract as upload_mission() above.
   virtual bool update_mission_item(uint16_t seq, const MissionItem & item) = 0;
+
+  // Stream a continuous OFFBOARD position setpoint (SDD §4.1a/§5.3a) — used
+  // instead of update_mission_item() for a leg the active mission plan
+  // flags for OFFBOARD (FR-020/026-029). The backend does not buffer or
+  // extrapolate between calls: the caller (formation_controller_node) is
+  // responsible for sustaining >= 2 Hz while OFFBOARD is the commanded
+  // mode. Does not itself send DO_SET_MODE OFFBOARD — mode commands stay in
+  // send_command() below, called exclusively by mission_manager_node
+  // (FR-012, FR-026).
+  virtual void stream_offboard_setpoint(const OffboardSetpoint & sp) = 0;
 
   // Send a vehicle_command (arm/disarm, mode change, RTL, HOLD, ...).
   virtual void send_command(uint32_t cmd, const std::array<float, 7> & params) = 0;

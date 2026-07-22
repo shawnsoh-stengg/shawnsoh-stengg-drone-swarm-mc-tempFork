@@ -9,6 +9,7 @@
 #include "mc_msgs/msg/fcc_mission.hpp"
 #include "mc_msgs/msg/fcc_mission_ack.hpp"
 #include "mc_msgs/msg/fcc_mission_item.hpp"
+#include "mc_msgs/msg/fcc_offboard_setpoint.hpp"
 #include "mc_msgs/msg/fault_event.hpp"
 #include "mc_msgs/msg/vehicle_state.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -27,6 +28,10 @@
 // upload/item-update, reported by FccBackend. Still zero business logic:
 // deciding HOLD/RTL/mission-abort from repeated failures stays
 // mission_manager's/formation_controller's job (SDD §10.3 ownership split).
+// FCC-009: adds /mc/fcc/offboard_setpoint forwarding (SDD §4.1a/§5.3a). Same
+// zero-business-logic contract — no rate enforcement, no mode-entry
+// sequencing, no staleness detection; those stay mission_manager_node's
+// (ME-003) and health_monitor_node's (HM-004) jobs respectively.
 namespace fcc_bridge
 {
 
@@ -45,6 +50,7 @@ private:
   void on_publish_timer();
   void on_mission_upload(const mc_msgs::msg::FccMission::SharedPtr msg);
   void on_mission_item_update(const mc_msgs::msg::FccMissionItem::SharedPtr msg);
+  void on_offboard_setpoint(const mc_msgs::msg::FccOffboardSetpoint::SharedPtr msg);
   void on_send_command(const mc_msgs::msg::FccCommand::SharedPtr msg);
   mc_msgs::msg::VehicleState to_msg(const VehicleState & state, bool link_alive) const;
   static MissionItem to_mission_item(const mc_msgs::msg::FccMissionItem & msg);
@@ -74,6 +80,11 @@ private:
   rclcpp::Subscription<mc_msgs::msg::FccMission>::SharedPtr sub_mission_upload_;
   rclcpp::Subscription<mc_msgs::msg::FccMissionItem>::SharedPtr sub_mission_item_update_;
   rclcpp::Subscription<mc_msgs::msg::FccCommand>::SharedPtr sub_send_command_;
+  // Own reentrant group, same as sub_send_command_ (command_cb_group_'s doc
+  // comment above) — a straight publish with no mission-socket handshake to
+  // serialize against, so it must not queue behind in-flight mission
+  // traffic either (FCC-009 needs this to sustain >= 2 Hz, ICD §9.1).
+  rclcpp::Subscription<mc_msgs::msg::FccOffboardSetpoint>::SharedPtr sub_offboard_setpoint_;
 
   // Edge-triggers FCC_LINK_LOST — publish once per alive->dead transition,
   // not on every tick the link stays down. Starts true: FccBackend also

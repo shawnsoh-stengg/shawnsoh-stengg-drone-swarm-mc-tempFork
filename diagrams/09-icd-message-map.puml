@@ -60,13 +60,16 @@ FCC -[#E07000]> MC : <color:#E07000>vehicle_attitude</color>  ≥50 Hz\n  q[4] q
 FCC -[#E07000]> MC : <color:#E07000>vehicle_odometry</color>  ≥20 Hz\n  position[3]  ·  q[4]  ·  velocity[3]  ·  angular_velocity[3]
 FCC -[#E07000]> MC : <color:#E07000>sensor_combined</color>  ≥100 Hz\n  gyro_rad[3] (rad/s)  ·  accelerometer_m_s2[3]
 
-MC -[#E07000]> FCC : <color:#E07000>vehicle_command</color>  (event-driven)\n  ARM/DISARM (400)  ·  SET_MODE (176)  ·  TAKEOFF (22)  ·  RTL (20)  ·  HOLD (17)
+MC -[#E07000]> FCC : <color:#E07000>vehicle_command</color>  (event-driven)\n  ARM/DISARM (400)  ·  SET_MODE (176)  ·  TAKEOFF (22)  ·  RTL (20)  ·  HOLD (17)  ·  OFFBOARD (176/custom)
 MC -[#E07000]> FCC : <color:#E07000>vehicle_visual_odometry</color>  ≥10 Hz  (GNSS-denied only)\n  position[3] NED  ·  q[4]  ·  velocity[3]  ·  position_variance[3]
+MC -[#E07000]> FCC : <color:#E07000>offboard_control_mode</color> + <color:#E07000>trajectory_setpoint</color>  ≥5 Hz  (FCC-009)\n  position=true only  ·  x,y,z (NED m) · yaw (rad)  ·  velocity/accel/jerk NaN'd (uncontrolled)\n  only while active mission plan flags the current leg for OFFBOARD  [FR-020/026-029]
 
 note over FCC, MC #FFF0E0
   FccBackend abstraction: application nodes use /mc/fcc/* topics only.
   Transport (serial / ethernet) is a deployment config — no code changes.
   Latency FCC actuation: ≤ 100 ms  [IR-006]
+  stream_offboard_setpoint() sends no DO_SET_MODE — mode entry/exit stays
+  vehicle_command, sole authority mission_manager_node  [FCC-009]
 end note
 
 == IFD-001b · MC ↔ FCC · Mission Protocol (MAVLink 2/UDP) · 192.168.12.31:14555 — always ethernet ==
@@ -192,8 +195,9 @@ note over FCC, CAM #E8E8F8
   fcc_bridge_node  →  /mc/fcc/vehicle_state (≥10 Hz)  →  mission_manager · formation_controller · gcs_mavlink · health_monitor
   fcc_bridge_node  →  /mc/fcc/imu  (≥100 Hz)          →  visual_localisation_node
   formation_controller  →  /mc/fcc/mission_item_update (≥5 Hz)  →  fcc_bridge_node (→ FCC mission, seq 0)
+  formation_controller  →  /mc/fcc/offboard_setpoint (≥5 Hz, FCC-009)  →  fcc_bridge_node (→ FCC OFFBOARD stream, OFFBOARD-flagged legs only)
   mission_manager  →  /mc/fcc/mission_upload (on change)  →  fcc_bridge_node (→ FCC mission, full replace)
-  mission_manager  →  /mc/fcc/send_command (event)  →  fcc_bridge_node (→ FCC vehicle_command)
+  mission_manager  →  /mc/fcc/send_command (event)  →  fcc_bridge_node (→ FCC vehicle_command, incl. OFFBOARD mode entry/exit)
 
   gcs_mavlink_node  →  /mc/gcs/command (event)        →  mission_manager_node
   gcs_mavlink_node  →  /mc/gcs/mission_upload (event) →  mission_manager · swarm_coordinator

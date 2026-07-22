@@ -196,7 +196,7 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 |---|---|---|---|
 | FR-010 | MUST | Test | The MC shall arm the FCC only after receiving explicit GCS ARM authorisation as part of the current mission upload, and only after all MC pre-arm checks pass. |
 | FR-011 | MUST | Test | The MC shall command FCC disarm immediately upon receipt of a GCS DISARM command or upon triggering of a safety failsafe condition defined in §4.4. |
-| FR-012 | MUST | Test | The MC shall command FCC flight mode changes (HOLD, RTL, MISSION, TAKEOFF) via uXRCE-DDS `vehicle_command` topic using the PX4 v1.14 command set. |
+| FR-012 | MUST | Test | The MC shall command FCC flight mode changes (HOLD, RTL, MISSION, TAKEOFF, OFFBOARD) via uXRCE-DDS `vehicle_command` topic using the PX4 v1.14 command set. `mission_manager_node` is the sole node authorised to issue a flight-mode command (§4.1.3, FR-026); OFFBOARD is commanded only for a phase/leg the active mission plan explicitly flags for it. |
 | FR-013 | MUST | Test | The MC shall upload waypoints to the FCC for autonomous execution during INGRESS and MUSTER phases via the PX4 mission upload mechanism. |
 | FR-014 | MUST | Test | The MC shall subscribe to and process FCC telemetry at ≥ 10 Hz: vehicle local position, vehicle global position, vehicle velocity, vehicle attitude, armed state, flight mode, battery voltage, and battery remaining percentage. |
 | FR-015 | MUST | Test | The MC shall detect FCC communication loss (silence > 1 s on the uXRCE-DDS bridge), declare a critical fault, attempt to command HOLD if link recovers within 3 s, and notify the GCS. |
@@ -206,12 +206,23 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
-| FR-020 | MUST | Test | During INGRESS phase, the MC shall maintain its assigned formation offset (North, East, Down in metres) relative to the formation leader, commanding the FCC in MISSION mode via a continuously-updated mission item (no OFFBOARD mode). |
+| FR-020 | MUST | Test | During INGRESS phase, the MC shall maintain its assigned formation offset (North, East, Down in metres) relative to the formation leader, commanding the FCC in MISSION mode via a continuously-updated mission item, unless the active mission plan flags the leg for OFFBOARD (`offboard_phase_mask`, ICD-MC-001 §9.2), in which case `formation_controller_node` streams OFFBOARD setpoints instead (FR-026–029). |
 | FR-021 | MUST | Demo | Formation offsets for each drone shall be uploaded by the GCS as part of the pre-flight mission upload and stored persistently on the MC across restarts. |
 | FR-022 | MUST | Test | The MC shall receive the formation leader's position and velocity from swarm peer messages at ≥ 5 Hz and compute NED position targets accordingly. |
 | FR-023 | MUST | Test | Formation-keeping position targets shall be converted to geodetic coordinates and pushed to the FCC as a mission item replacement (PX4 mission upload mechanism) at ≥ 5 Hz while in MISSION mode. |
 | FR-024 | MUST | Test | If the formation leader's state message is not received for > 2 s, the MC shall command FCC HOLD mode and alert the GCS with the reason. |
 | FR-025 | SHOULD | Test | The formation controller shall implement a PD position controller with configurable gains for NED position error, tunable via a ROS 2 parameter file without code recompilation. |
+
+#### 4.1.3a OFFBOARD Formation Keeping (Hybrid Mode Arbitration)
+
+Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped narrowly to legs the active mission plan explicitly flags — see `OFFBOARD-MODE-SWITCHING-BACKLOG.md` for the full design rationale, including why the original MISSION-only decision was made and why reintroducing OFFBOARD does not reopen that reliability tradeoff for phases that don't opt in.
+
+| ID | Priority | Verification | Requirement |
+|---|---|---|---|
+| FR-026 | MUST | Test | `mission_manager_node` shall read the per-phase `offboard_phase_mask` from the active mission plan and command the corresponding FCC flight mode (MISSION or OFFBOARD) at each phase entry. It shall be the sole node in the system that commands a flight-mode change; `health_monitor_node` shall never call `send_command()` for a flight-mode change (FR-012, SFR-009). |
+| FR-027 | MUST | Test | Before commanding `DO_SET_MODE OFFBOARD`, the MC shall establish an OFFBOARD setpoint stream at ≥ 2 Hz for at least 1 s, issue the mode command, then confirm entry by observing `/mc/fcc/vehicle_state.nav_state == OFFBOARD` within 1 s. If unconfirmed, the MC shall retry the mode command once; if still unconfirmed, it shall abort the OFFBOARD leg, remain in the vehicle's current mode, and raise fault `OFFBOARD_ENTRY_FAILED`. `formation_controller_node` shall not treat OFFBOARD as active until entry is confirmed. |
+| FR-028 | MUST | Test | While OFFBOARD is the FCC's confirmed active mode, `formation_controller_node` shall publish OFFBOARD position setpoints at ≥ 5 Hz (tracking-quality target, mirrors FR-023's cadence), never below the PX4-imposed 2 Hz floor. |
+| FR-029 | MUST | Test | Before commanding `DO_SET_MODE MISSION` to leave OFFBOARD, the MC shall confirm a valid mission is already loaded in FCC-side dataman for the upcoming leg, issue the mode command, then confirm exit by observing `/mc/fcc/vehicle_state.nav_state == MISSION` within 1 s (same retry-once-then-fault behaviour as FR-027) before `formation_controller_node` stops streaming. This is the same exit path used both for a normal phase exit and for the `OFFBOARD_STREAM_STALE` fallback (SFR-009). |
 
 #### 4.1.4 Swarm Coordination
 
@@ -367,6 +378,7 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | SFR-006 | MUST | Inspection | All commands issued to the FCC shall be logged with: UTC timestamp, command type, parameters, commanding source (GCS / autonomous manager / watchdog / health monitor), and FCC acknowledgement result. Logs shall persist across container restart. |
 | SFR-007 | MUST | Test | The MC shall command FCC HOLD if the GCS datalink is lost for > 10 s while in any autonomous phase (INGRESS, MUSTER, ISR_SELECTION, VORONOI_PARTITION, SEARCH). |
 | SFR-008 | MUST | Test | The MC shall command FCC RTL when battery remaining falls below `LOW_BATTERY_THRESHOLD` (default: 20%). This shall not be suppressible unless a GCS override command is active and the GCS link is healthy. |
+| SFR-009 | MUST | Test | If the OFFBOARD setpoint stream age exceeds 500 ms while OFFBOARD is the FCC's confirmed active mode (mirrors the FR-003 500 ms GCS-override response bound), `health_monitor_node` shall publish `/mc/fault` with `OFFBOARD_STREAM_STALE` and a recommended fallback action; it shall not command the FCC directly. `mission_manager_node` shall treat this fault as a phase-exit trigger and execute the fallback through FR-029's exit-sequencing path (MISSION if a valid mission is loaded, else HOLD). PX4's own `COM_OBL_ACT` failsafe remains enabled as a slower backstop, configured with a longer timeout than this 500 ms threshold (HID-MC-001, PX4 parameter reference). |
 
 ---
 
@@ -593,7 +605,7 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | FR-014 | FCC telemetry ≥ 10 Hz | T | SITL |
 | FR-015 | FCC comms loss detection | T | SITL |
 | FR-016 | FccBackend abstraction | I | Code review |
-| FR-020–025 | Formation keeping (INGRESS) | T / D | SITL → HIL |
+| FR-020–029 | Formation keeping (INGRESS), incl. hybrid MISSION/OFFBOARD arbitration | T / D | SITL → HIL |
 | FR-030–036 | Swarm coordination | T | SITL (≥ 2 drones) |
 | FR-040–046 | Search execution | T / D | SITL → HIL |
 | FR-050–053 | Visual localisation | T | HIL |
@@ -607,7 +619,7 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | IR-040 | Gimbal camera interface | T | HIL |
 | IR-041–042 | GCS video uplink | T / I | HIL |
 | PR-001–011 | Performance rates and latencies | T | SITL → HIL |
-| SFR-001–008 | Safety and failsafe | T / I | SITL |
+| SFR-001–009 | Safety and failsafe | T / I | SITL |
 | SW-001–007 | Architecture and build conventions | I | Int |
 | SW-010–021 | ROS 2 node interface contracts | T | SITL |
 | SW-030–038 | Container packaging | I / T | Int |

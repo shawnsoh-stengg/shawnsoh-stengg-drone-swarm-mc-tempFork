@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FccMission.msg"
   "msg/FccCommand.msg"
   "msg/FccMissionAck.msg"
+  "msg/FccOffboardSetpoint.msg"
   "msg/GcsCommand.msg"
   "msg/LinkStatus.msg"
   DEPENDENCIES std_msgs

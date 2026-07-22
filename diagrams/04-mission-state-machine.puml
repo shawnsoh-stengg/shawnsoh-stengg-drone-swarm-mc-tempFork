@@ -41,7 +41,7 @@ state ARMING #C8E4F0 : **ARMING**\n──────────────\nG
 
 state TAKEOFF #C8E4F0 : **TAKEOFF**\n──────────────\nFCC commanded to takeoff mode\nClimb to assigned altitude\nConfirm position hold
 
-state INGRESS #B8E0C8 : **INGRESS**\n──────────────\nFormation keeping active (MISSION)\nFormation controller → FCC ≥5 Hz\nGCS retains authority
+state INGRESS #B8E0C8 : **INGRESS**\n──────────────\nFormation keeping active (MISSION or\nOFFBOARD, per-leg plan flag — FCC-009)\nFormation controller → FCC ≥5 Hz\nGCS retains authority
 
 state MUSTER #B8E0C8 : **MUSTER**\n──────────────\nNavigate to muster waypoint\nReport arrival to GCS + peers\nAwait swarm quorum
 
@@ -121,6 +121,19 @@ note bottom of VORONOI_PARTITION
   remaining drones re-run
   VORONOI_PARTITION to redistribute
   uncovered cells
+end note
+
+note right of INGRESS
+  OFFBOARD is an FCC flight-mode choice
+  within this phase, not a separate state.
+  mission_manager_node is sole mode-command
+  authority — never health_monitor_node.
+  Stream-staleness fault (OFFBOARD_STREAM_STALE,
+  >500 ms) is handled via the same
+  exit-sequencing path as a normal
+  OFFBOARD→MISSION phase exit, falling
+  back to MISSION (or HOLD if no mission
+  loaded)  [SFR-009, design decisions 4-5]
 end note
 
 legend right
