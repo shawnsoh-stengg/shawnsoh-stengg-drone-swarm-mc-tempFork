@@ -1072,7 +1072,9 @@ independently of `video_mux_node`'s own container (`DEP-007`) — a
 - `docker/video-ingest/Dockerfile`.
 - `config/systemd/drone-mc-video-ingest.service` + `be.slice` membership
   (SDD §12.3/§12.4 already describe this service).
-- Build script matching the `08-build-fcc-bridge-image.sh` pattern.
+- `scripts/11-build-video-ingest-image.sh` (matching the
+  `09-build-mavlink-router-image.sh`/`10-build-zenoh-bridge-image.sh`
+  pattern) + `scripts/11b-smoke-test-video-ingest.sh` (TP-SM-012).
 
 **Relationships:** Depends on VU-001 being buildable (GStreamer/TensorRT
 deps declared). Independent of `DEP-007` (separate containers by design).
@@ -1102,7 +1104,9 @@ nothing to do with the gimbal RTSP link.
 - `docker/video-downlink/Dockerfile`.
 - `config/systemd/drone-mc-video-downlink.service` + `be.slice` membership
   (SDD §12.3/§12.4 already describe this service).
-- Build script matching the `08-build-fcc-bridge-image.sh` pattern.
+- `scripts/12-build-video-downlink-image.sh` (matching the
+  `09-build-mavlink-router-image.sh`/`10-build-zenoh-bridge-image.sh`
+  pattern) + `scripts/12b-smoke-test-video-downlink.sh` (TP-SM-013).
 
 **Relationships:** Depends on VU-002 being buildable (GStreamer deps
 declared). Independent of `DEP-005` (separate containers by design).
@@ -1217,14 +1221,17 @@ after installation the same way `fcc_bridge`/`ros2-core`/colcon already are.
 
 **Acceptance Criteria:**
 - One smoke-test script per new service container (gcs-comms,
-  health-monitor, swarm-coord, mission-exec, camera, vision, video-ingest,
-  video-downlink, mavlink-router) verifying the container starts, the
-  node(s) inside are alive, and (where applicable) the FCC-008-style
-  transport/config selection took effect.
+  health-monitor, swarm-coord, mission-exec, camera, vision, mavlink-router)
+  verifying the container starts, the node(s) inside are alive, and (where
+  applicable) the FCC-008-style transport/config selection took effect.
+  `video-ingest`/`video-downlink` are covered by their own tickets instead
+  (`scripts/11b-smoke-test-video-ingest.sh` per `DEP-005`,
+  `scripts/12b-smoke-test-video-downlink.sh` per `DEP-007`) — not
+  duplicated here.
 
 **Deliverables:**
-- `scripts/0Xb-smoke-test-<service>.sh` per new service, following the
-  numbering/naming convention already established.
+- `scripts/0Xb-smoke-test-<service>.sh` per remaining new service,
+  following the numbering/naming convention already established.
 
 **Relationships:** Depends on DEP-001/002/003/005 (containers must exist to
 smoke-test). Last ticket in the plan — closes the loop back to
