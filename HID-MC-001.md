@@ -645,7 +645,7 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 
 ## 9. HIF-007: MC ↔ Gimbal IP Camera (ETH Port 1)
 
-**Primary function:** Ethernet transport for the front gimbal IP camera's RTSP/H.265 video stream, ingested by `perception_front_node` (`video_uplink` package) for onboard AI detection/tracking and re-streamed to the GCS (ICD IFD-006/IFD-007).
+**Primary function:** Ethernet transport for the front gimbal IP camera's RTSP/H.265 video stream, ingested by `perception_front_node` (`video_downlink` package) for onboard AI detection/tracking and re-streamed to the GCS (ICD IFD-006/IFD-007).
 
 ### 9.1 Physical Layer
 

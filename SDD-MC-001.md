@@ -25,7 +25,7 @@
 7. [search_planner_node — Coverage Path Planning](#7-search_planner_node--coverage-path-planning)
 8. [visual_localisation_node — GNSS-Denied Localisation](#8-visual_localisation_node--gnss-denied-localisation)
 9. [perception_down_node — AI Inference Pipeline](#9-perception_down_node--ai-inference-pipeline)
-9a. [perception_front_node and video_mux_node — Gimbal and Downward Video Perception and Uplink](#9a-perception_front_node-and-video_mux_node--gimbal-and-downward-video-perception-and-uplink)
+9a. [perception_front_node and video_mux_node — Gimbal and Downward Video Perception and Downlink](#9a-perception_front_node-and-video_mux_node--gimbal-and-downward-video-perception-and-downlink)
 10. [health_monitor_node — System Health and Failsafe](#10-health_monitor_node--system-health-and-failsafe)
 11. [gcs_mavlink_node — GCS Communication](#11-gcs_mavlink_node--gcs-communication)
 12. [Deployment Design](#12-deployment-design)
@@ -770,10 +770,25 @@ Inference is limited to consume ≤ 80% of GPU throughput (PR-010). This is enfo
 
 ---
 
-## 9a. perception_front_node and video_mux_node — Gimbal and Downward Video Perception and Uplink
+## 9a. perception_front_node and video_mux_node — Gimbal and Downward Video Perception and Downlink
 
 **SRS refs:** FR-080–086, IR-040–043
-**Package:** `video_uplink`
+**Package:** `video_downlink` (renamed from `video_uplink`, 2026-07-22 —
+video flows drone→GCS, which is a downlink, not an uplink)
+
+Deployed as **two separate containers/systemd units**
+(`drone-mc-video-ingest.service` for `perception_front_node`,
+`drone-mc-video-downlink.service` for `video_mux_node`, §12.3/§12.4) despite
+being one ROS 2 package — the same independent-restart rationale that
+already splits `camera_node` out of `vision` (§12.1): `perception_front_node`
+depends on an external RTSP link that can flap (FR-084) and does GPU-heavy
+TensorRT inference, while `video_mux_node` is comparatively lightweight
+encode/mux/serve. Bundling them would mean a `perception_front_node` hang
+requiring a container restart also takes down `video_mux_node` — and since
+`video_mux_node` now serves **both** Stream A (gimbal) and Stream B
+(downward, §9a.3), that would undermine the independent-failure-domain
+property FR-086 establishes between the two streams. Splitting containers
+removes that coupling entirely.
 
 ### 9a.1 perception_front_node — RTSP Ingest, Inference, and Tracking
 
@@ -827,10 +842,10 @@ perception_front_node frame stream ──► GStreamer encode (H.265, nvv4l2h265
                                           (rtsp://192.168.10.11:8555/mc_video)
                                                      │
                                                      ▼
-                                          /mc/video/uplink_status (≥ 1 Hz)
+                                          /mc/video/downlink_status (≥ 1 Hz)
 ```
 
-`video_mux_node` is independent of `gcs_mavlink_node` — it owns its own RTSP server and never touches the MAVLink GCS channel (IR-041, IR-042). `streaming` in `/mc/video/uplink_status` is `false` until `perception_front_node` frames are flowing and a GCS RTSP client has connected; `client_connected` and `bitrate_kbps` are read from the underlying GStreamer RTSP server session state.
+`video_mux_node` is independent of `gcs_mavlink_node` — it owns its own RTSP server and never touches the MAVLink GCS channel (IR-041, IR-042). `streaming` in `/mc/video/downlink_status` is `false` until `perception_front_node` frames are flowing and a GCS RTSP client has connected; `client_connected` and `bitrate_kbps` are read from the underlying GStreamer RTSP server session state.
 
 On `perception_front_node` frame/track silence > 3 s, `video_mux_node` stops serving new frames and sets `streaming=false`, tearing down the active RTSP session, but keeps its encode pipeline warm so it can resume immediately once frames return (ICD IFD-007 §8.4). A GCS client disconnecting does not raise a fault — the node keeps encoding, ready for reconnect.
 
@@ -850,7 +865,7 @@ On `perception_front_node` frame/track silence > 3 s, `video_mux_node` stops ser
                                           (rtsp://192.168.10.11:8556/mc_video_down)
                                                      │
                                                      ▼
-                                          /mc/video/down_uplink_status (≥ 1 Hz)
+                                          /mc/video/down_downlink_status (≥ 1 Hz)
 ```
 
 Additive to §9a.2, not a replacement — `perception_down_node`'s existing
@@ -867,9 +882,9 @@ process rather than two processes.
 
 On `camera_node`/`perception_down_node` frame/detection silence > 3 s,
 `video_mux_node` stops serving new frames on Stream B and sets
-`streaming=false` in `/mc/video/down_uplink_status`, tearing down Stream
+`streaming=false` in `/mc/video/down_downlink_status`, tearing down Stream
 B's RTSP session — **Stream A's session, encode state, and
-`/mc/video/uplink_status` are unaffected** (ICD IFD-007 §8.4, FR-086). The
+`/mc/video/downlink_status` are unaffected** (ICD IFD-007 §8.4, FR-086). The
 reverse also holds: Stream A silence does not affect Stream B. A GCS
 client disconnecting from either stream does not raise a fault — that
 stream's encode pipeline keeps running, ready for reconnect.
@@ -927,7 +942,7 @@ Critical nodes and timeouts:
 | `perception_down_node` | `/mc/detections` (or alive topic) | 10 s |
 | `visual_localisation_node` | `/mc/local_pose` | 5 s |
 | `perception_front_node` | `/mc/perception/front/tracks` (or alive topic) | 3 s (FR-084) |
-| `video_mux_node` | `/mc/video/uplink_status` | 2 s |
+| `video_mux_node` | `/mc/video/downlink_status` | 2 s |
 
 ### 10.3 Failsafe Decision Tree
 
@@ -1121,7 +1136,7 @@ WantedBy=drone-mc.target
 ```
 
 Services in `rt.slice`: `fcc-bridge`, `swarm-coord`  
-Services in `be.slice`: `mavlink-router`, `zenoh-bridge`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-uplink`
+Services in `be.slice`: `mavlink-router`, `zenoh-bridge`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-ingest`, `video-downlink`
 
 ### 12.4 Startup Ordering
 
@@ -1135,7 +1150,8 @@ drone-mc.target
   └── swarm-coord.service       (after gcs-comms)
   └── mission-exec.service      (after swarm-coord, fcc-bridge, gcs-comms)
   └── vision.service            (after fcc-bridge)
-  └── video-uplink.service      (no dependencies — HIF-007 is a separate physical link)
+  └── video-ingest.service       (no dependencies — HIF-007 is a separate physical link)
+  └── video-downlink.service     (no dependencies — independent of video-ingest, FR-086)
 ```
 
 ### 12.5 Configuration Files

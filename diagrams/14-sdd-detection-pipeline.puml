@@ -116,7 +116,7 @@ package "→ gcs_mavlink_node" as GCSOUT #E8F4E8 {
 ' independent node instance, same engine/geolocation math
 ' ═══════════════════════════════════════════════════
 
-package "perception_front_node  ·  SDD §9a  (video_uplink package)" as GIMPKG #E0F4EC {
+package "perception_front_node  ·  SDD §9a  (video_downlink package)" as GIMPKG #E0F4EC {
   rectangle "RTSP/H.265 stream\nrtsp://192.168.10.200:8554/stream1\n(gimbal camera, shared switch, HIF-007)\nvia rtspsrc → same Frame Queue /\nPreprocessing / TensorRT / NMS pattern\nas the boxes above (independent instance)" as GIMIN #A8E0C8
 
   rectangle "IoU Tracker  (CPU)\nGreedy frame-to-frame bbox IoU match\n(track_iou_threshold=0.3)\nframes_tracked++ on match\ndropped after track_miss_limit=10 misses" as TRACKER #90D0B0
@@ -125,7 +125,7 @@ package "perception_front_node  ·  SDD §9a  (video_uplink package)" as GIMPKG 
 }
 
 package "→ video_mux_node" as VMUXOUT #D0EFE0 {
-  rectangle "GCS video uplink\nRTSP/H.265 + metadata mux\n:8555/mc_video  (IFD-007)" as VMUXBOX #A8E0C8
+  rectangle "GCS video downlink\nRTSP/H.265 + metadata mux\n:8555/mc_video  (IFD-007)" as VMUXBOX #A8E0C8
 }
 
 ' ═══════════════════════════════════════════════════
@@ -195,7 +195,7 @@ note right of UNCERT
 end note
 
 note bottom of GIMPKG
-  perception_front_node is a separate node/process (video_uplink package,
+  perception_front_node is a separate node/process (video_downlink package,
   not vision) with its own Frame Queue / TensorRT context — it reuses the
   same model and geolocation algorithm as perception_down_node above
   (SDD §9.2, §9.3) rather than sharing runtime state. Both are subject to

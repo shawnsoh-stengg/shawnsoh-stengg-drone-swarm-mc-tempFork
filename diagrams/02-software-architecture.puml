@@ -115,10 +115,21 @@ package "vision" as C_VIS #F4EEF8 {
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: video-uplink
+' CONTAINER: video-ingest (renamed from shared video-uplink container,
+' split 2026-07-22 — perception_front_node's RTSP-link flakiness/GPU
+' inference no longer shares a restart cycle with video_mux_node, which
+' now also serves the unrelated downward-camera stream (Stream B, FR-086)
 ' ═══════════════════════════════════════════════════
-package "video-uplink" as C_VIDEO #E8F4F0 {
-  component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nIndependent of vision pipeline" as PFRONT #A8E0C8
+package "video-ingest" as C_INGEST #E8F4F0 {
+  component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nSearch & detection (front-facing)\nIndependent of vision pipeline" as PFRONT #A8E0C8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: video-downlink (renamed from video-uplink; split from
+' video-ingest into its own container, 2026-07-22 — both nodes still
+' live in the one video_downlink ROS 2 package)
+' ═══════════════════════════════════════════════════
+package "video-downlink" as C_VIDEO #DCF0E8 {
   component "video_mux_node\nRe-encode + metadata mux\nStream A :8555 (gimbal)\nStream B :8556 (downward)" as VMUX #90D0B0
 }
 
@@ -177,14 +188,17 @@ CAMNODE -down-> DET : "/camera/image_raw"
 VISLOC --> DET : "/mc/local_pose"
 VISLOC -up-> FCC_BRIDGE : "(vehicle_visual_odometry)"
 
-' Detections → GCS
+' Detections → GCS (both cameras report their own detections over MAVLink,
+' per ICD §9.1's topic catalogue — gcs_mavlink is a documented subscriber
+' of both /mc/detections and /mc/perception/front/detections)
 DET --> GCS_NODE : "/mc/detections"
+PFRONT --> GCS_NODE : "/mc/perception/front/detections"
 
 ' Gimbal video pipeline (Stream A, independent of vision pipeline and GCS MAVLink channel)
 PFRONT --> VMUX : "/mc/perception/front/detections\n/mc/perception/front/tracks"
 VMUX --> QGC : "RTSP/H.265 + metadata\nStream A :8555 (gimbal)\nStream B :8556 (downward)"
 PFRONT --> HEALTH : "(liveness heartbeat)"
-VMUX --> HEALTH : "/mc/video/uplink_status\n/mc/video/down_uplink_status"
+VMUX --> HEALTH : "/mc/video/downlink_status\n/mc/video/down_downlink_status"
 
 ' Downward camera video pipeline (Stream B — additive, perception_down_node's
 ' detection role is unchanged; this is a new consumer of existing topics)
@@ -202,7 +216,8 @@ legend right
   | <#C8A8E8> | swarm-coord |
   | <#FFD090> | mission-exec |
   | <#C0A0E8> | vision |
-  | <#90D0B0> | video-uplink |
+  | <#E8F4F0> | video-ingest |
+  | <#90D0B0> | video-downlink |
   | <#D0D0D0> | health-monitor |
   | <#C8D8F0> | Mission Orchestrator (another team's app) |
   | Dashed border/line | Proposed, not yet implemented (GCS-004) |

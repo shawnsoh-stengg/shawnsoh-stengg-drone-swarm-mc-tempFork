@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(video_uplink)
+project(video_downlink)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)

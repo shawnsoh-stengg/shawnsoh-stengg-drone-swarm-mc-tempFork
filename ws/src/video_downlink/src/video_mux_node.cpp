@@ -1,6 +1,6 @@
-#include "video_uplink/video_mux_node.hpp"
+#include "video_downlink/video_mux_node.hpp"
 
-namespace video_uplink
+namespace video_downlink
 {
 
 VideoMuxNode::VideoMuxNode()
@@ -9,4 +9,4 @@ VideoMuxNode::VideoMuxNode()
   RCLCPP_INFO(get_logger(), "video_mux_node started");
 }
 
-}  // namespace video_uplink
+}  // namespace video_downlink

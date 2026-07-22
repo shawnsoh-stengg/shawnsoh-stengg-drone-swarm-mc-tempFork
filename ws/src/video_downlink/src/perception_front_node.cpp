@@ -1,6 +1,6 @@
-#include "video_uplink/perception_front_node.hpp"
+#include "video_downlink/perception_front_node.hpp"
 
-namespace video_uplink
+namespace video_downlink
 {
 
 PerceptionFrontNode::PerceptionFrontNode()
@@ -9,4 +9,4 @@ PerceptionFrontNode::PerceptionFrontNode()
   RCLCPP_INFO(get_logger(), "perception_front_node started");
 }
 
-}  // namespace video_uplink
+}  // namespace video_downlink

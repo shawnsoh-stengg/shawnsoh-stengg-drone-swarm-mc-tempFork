@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Status
 
-Design is complete; implementation is underway. The 8 packages described in `SDD-MC-001.md` are being built out in `ws/src/` (`fcc_bridge`, `gcs_comms`, `health_monitor`, `mc_msgs`, `mission_exec`, `swarm_coord`, `vision`, `video_uplink`), alongside the vendored `px4_msgs` dependency fetched by `scripts/05-build-workspace.sh`.
+Design is complete; implementation is underway. The 8 packages described in `SDD-MC-001.md` are being built out in `ws/src/` (`fcc_bridge`, `gcs_comms`, `health_monitor`, `mc_msgs`, `mission_exec`, `swarm_coord`, `vision`, `video_downlink`), alongside the vendored `px4_msgs` dependency fetched by `scripts/05-build-workspace.sh`.
 
 ## Document Map
 
@@ -98,7 +98,7 @@ Layer 1 — Hardware & Transport
   ttyTHS1 serial, 192.168.12.x ethernet, CSI camera, MANET radio
 ```
 
-**7 ROS 2 packages** (`fcc_bridge`, `swarm_coord`, `mission_exec`, `vision`, `video_uplink`, `gcs_comms`, `health_monitor`) **plus 2 external daemons**: `mavlink_router`, `zenoh_bridge_dds`.
+**7 ROS 2 packages** (`fcc_bridge`, `swarm_coord`, `mission_exec`, `vision`, `video_downlink`, `gcs_comms`, `health_monitor`) **plus 2 external daemons**: `mavlink_router`, `zenoh_bridge_dds`.
 
 ## Key Design Patterns
 
@@ -110,7 +110,7 @@ Layer 1 — Hardware & Transport
 
 **Mission state machine** — 11 states in `mission_manager_node`: PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND, with FAULT → RTL escape. GCS retains override authority at all times (500 ms response requirement, FR-003).
 
-**Deployment** — Not Docker Compose. Each Docker container is managed as a systemd unit under `drone-mc.target`. RT services (`fcc_bridge`, `swarm_coord`) in `rt.slice`; best-effort (including `zenoh-bridge` and the new `video-uplink` container) in `be.slice`. Shared colcon workspace bind-mounted to all containers except `mavlink-router` and `zenoh-bridge`, which are standalone daemons with no ROS 2/colcon dependency.
+**Deployment** — Not Docker Compose. Each Docker container is managed as a systemd unit under `drone-mc.target`. RT services (`fcc_bridge`, `swarm_coord`) in `rt.slice`; best-effort (including `zenoh-bridge` and the new `video-ingest`/`video-downlink` containers — `perception_front_node` and `video_mux_node` split into separate containers, 2026-07-22, so one node's restart can't take the other down) in `be.slice`. Shared colcon workspace bind-mounted to all containers except `mavlink-router` and `zenoh-bridge`, which are standalone daemons with no ROS 2/colcon dependency.
 
 ## Key Algorithms (SDD §3.x)
 
@@ -129,7 +129,7 @@ All internal topics are namespaced under `/mc/`. Key topics that cross multiple 
 - `/mc/local_pose` (10+ Hz) — visual odometry position estimate
 - `/mc/detections` — AI detection results with geolocated positions (from `perception_down_node`, renamed from `detection_node`)
 - `/mc/perception/front/detections`, `/mc/perception/front/tracks` — front gimbal camera detections/tracks from `perception_front_node`
-- `/mc/video/uplink_status` — GCS video uplink health from `video_mux_node`
+- `/mc/video/downlink_status`, `/mc/video/down_downlink_status` — GCS video downlink health from `video_mux_node` (gimbal Stream A, downward Stream B)
 - `/mc/health`, `/mc/fault` — system health and fault signals
 
 ## Network / IP Reference
@@ -162,8 +162,8 @@ config/
     rt.slice / be.slice             # cgroup v2 slices (SDD §12.3)
     drone-mc-health-monitor.service # + mavlink-router, zenoh-bridge, fcc-bridge, gcs-comms,
                                      #   swarm-coord, mission-exec, camera, vision — installed by
-                                     #   02-install-systemd-units.sh (video-uplink unit not yet
-                                     #   created — SDD-MC-001 §12.4 design only)
+                                     #   02-install-systemd-units.sh (video-ingest/video-downlink
+                                     #   units not yet created — SDD-MC-001 §12.4 design only)
 ws/
   src/                # colcon workspace — ROS 2 packages go here
 scripts/

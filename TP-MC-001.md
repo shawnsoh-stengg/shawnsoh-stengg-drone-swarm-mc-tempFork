@@ -455,7 +455,7 @@ Unit tests are implemented in `test/` within each package, using `gtest`. Run wi
 
 **SRS ref:** FR-081  
 **SDD ref:** §9a.1  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Description:** Verify the IoU-based greedy tracker maintains a stable `track_id` across frames for a slowly-moving detection, and drops a track after `track_miss_limit` consecutive misses.
 
@@ -753,7 +753,7 @@ Default timeout per test: 30 s unless specified.
 ### TP-NI-017: perception_front_node — Detection/Track Publication Rate
 
 **SRS ref:** FR-081, IR-040  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Preconditions:** `mock_gimbal_node` serving `bags/gimbal_outdoor.mp4` over RTSP at `rtsp://127.0.0.1:8554/stream1`. TensorRT engine pre-built.
 
@@ -769,7 +769,7 @@ Default timeout per test: 30 s unless specified.
 ### TP-NI-018: perception_front_node — Link Loss Detected, No Flight Fault
 
 **SRS ref:** FR-084, IR-040  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Preconditions:** `perception_front_node` running against `mock_gimbal_node`; `/mc/fault` subscriber active.
 
@@ -788,7 +788,7 @@ Default timeout per test: 30 s unless specified.
 ### TP-NI-019: video_mux_node — Metadata Mux Accuracy
 
 **SRS ref:** IR-041  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Preconditions:** `perception_front_node` publishing known synthetic detections/tracks (fixed `track_id`, `class_id`, `confidence`, `lat`/`lon`/`alt`); `video_mux_node` running; a mock RTSP client connected.
 
@@ -807,14 +807,14 @@ Default timeout per test: 30 s unless specified.
 ### TP-NI-020: video_mux_node — Source Silence → streaming=false
 
 **SRS ref:** FR-083, IR-042  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Preconditions:** `video_mux_node` running with `perception_front_node` publishing normally; a mock RTSP client connected (`streaming=true`).
 
 **Procedure:**
 1. Stop `perception_front_node` (halt frame/track publication).
 2. Wait 3.5 s.
-3. Subscribe to `/mc/video/uplink_status`.
+3. Subscribe to `/mc/video/downlink_status`.
 
 **Pass criteria:**
 - `streaming == false` within 3.5 s of source silence
@@ -826,7 +826,7 @@ Default timeout per test: 30 s unless specified.
 ### TP-NI-021: video_mux_node — Downward Stream (Stream B) Metadata Correctness
 
 **SRS ref:** FR-085, IR-043  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Preconditions:** `camera_node` publishing synthetic `/camera/image_raw` frames; `perception_down_node` publishing known synthetic `Detection`s (fixed `class_id`, `confidence`, `lat`/`lon`/`alt`, no `track_id` — this pipeline has no tracker); `video_mux_node` running both streams; a mock RTSP client connected to `:8556`.
 
@@ -846,18 +846,18 @@ Default timeout per test: 30 s unless specified.
 ### TP-NI-022: video_mux_node — Downward Stream (Stream B) Source Silence → Independent of Stream A
 
 **SRS ref:** FR-086, IR-043  
-**Package:** `video_uplink`
+**Package:** `video_downlink`
 
 **Preconditions:** `video_mux_node` running both streams, both `streaming=true`; a mock RTSP client connected to each.
 
 **Procedure:**
 1. Stop `camera_node`/`perception_down_node` (halt Stream B's frame/detection source) while Stream A keeps publishing normally.
 2. Wait 3.5 s.
-3. Subscribe to `/mc/video/down_uplink_status` and `/mc/video/uplink_status`.
+3. Subscribe to `/mc/video/down_downlink_status` and `/mc/video/downlink_status`.
 
 **Pass criteria:**
-- `/mc/video/down_uplink_status.streaming == false` within 3.5 s of source silence
-- `/mc/video/uplink_status.streaming` (Stream A) remains `true`, unaffected — confirms the two pipelines are independent failure domains (FR-086)
+- `/mc/video/down_downlink_status.streaming == false` within 3.5 s of source silence
+- `/mc/video/downlink_status.streaming` (Stream A) remains `true`, unaffected — confirms the two pipelines are independent failure domains (FR-086)
 - No fault raised on `/mc/fault` (perception-only degradation)
 - Resuming Stream B's source restores `streaming == true` within 1 s, without restarting `video_mux_node` or affecting Stream A
 
@@ -1310,9 +1310,9 @@ The table below maps each SRS functional requirement to at least one test case. 
 | FR-080 | Gimbal ingest + inference | — | TP-NI-017 | — | TP-HW-007 |
 | FR-081 | Gimbal detection/track publish | TP-UT-019 | TP-NI-017, TP-NI-018 | — | TP-HW-007 |
 | FR-082 | Concurrent GPU budget (both pipelines) | — | — | — | TP-HW-007 |
-| FR-083 | GCS video uplink | — | TP-NI-019, TP-NI-020 | — | TP-HW-007 |
+| FR-083 | GCS video downlink | — | TP-NI-019, TP-NI-020 | — | TP-HW-007 |
 | FR-084 | Gimbal link loss — no flight failsafe | — | TP-NI-018 | TP-ST-013 | — |
-| FR-085 | Downward-camera GCS video uplink (Stream B) | — | TP-NI-021 | — | TP-HW-007 |
+| FR-085 | Downward-camera GCS video downlink (Stream B) | — | TP-NI-021 | — | TP-HW-007 |
 | FR-086 | Stream B independent failure domain | — | TP-NI-022 | — | TP-HW-007 |
 | IR-001 | ttyTHS1 serial | — | — | — | TP-HW-004 |
 | IR-003 | VehicleState ≥10 Hz | — | TP-NI-001, TP-NI-002 | — | — |
@@ -1324,9 +1324,9 @@ The table below maps each SRS functional requirement to at least one test case. 
 | IR-023 | Peer LOST after 3 s | — | TP-NI-006, TP-NI-007 | TP-ST-005 | — |
 | IR-030 | Camera ≥15 FPS | — | — | — | TP-HW-002 |
 | IR-040 | Gimbal camera RTSP ingest | — | TP-NI-017, TP-NI-018 | — | TP-HW-007 |
-| IR-041 | GCS video uplink RTSP + metadata | — | TP-NI-019 | — | TP-HW-007 |
-| IR-042 | Uplink status, independent of MAVLink | — | TP-NI-020 | — | — |
-| IR-043 | Downward-camera GCS video uplink (Stream B) | — | TP-NI-021, TP-NI-022 | — | TP-HW-007 |
+| IR-041 | GCS video downlink RTSP + metadata | — | TP-NI-019 | — | TP-HW-007 |
+| IR-042 | Downlink status, independent of MAVLink | — | TP-NI-020 | — | — |
+| IR-043 | Downward-camera GCS video downlink (Stream B) | — | TP-NI-021, TP-NI-022 | — | TP-HW-007 |
 | PR-007 | Detection latency ≤500 ms | — | TP-NI-013 | — | TP-HW-003 |
 | PR-008 | Path generation ≤5 s | TP-UT-005 | TP-NI-008 | — | — |
 | PR-009 | CPU usage budget | — | — | TP-ST-012 | — |

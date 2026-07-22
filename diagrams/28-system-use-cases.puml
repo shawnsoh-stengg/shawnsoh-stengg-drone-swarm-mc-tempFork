@@ -62,7 +62,7 @@ rectangle "Swarm Search Drone — Mission Computer System" as SYSTEM #F8F8FF {
   package "Vehicle Telemetry & Control  (MAVLink, QGC)" as PKG_TELEM #D8EED8 {
     usecase "Monitor vehicle telemetry\n(position, battery, mode)" as UC_TELEM #B8DCBA
     usecase "View AI detections" as UC_DET #B8DCBA
-    usecase "View live video uplink\n(gimbal, RTSP/H.265)" as UC_VIDEO #B8DCBA
+    usecase "View live video downlink\n(gimbal + downward, RTSP/H.265)" as UC_VIDEO #B8DCBA
     usecase "Arm / disarm vehicle" as UC_ARM #B8DCBA
     usecase "Command flight-mode change" as UC_MODE #B8DCBA
     usecase "Override autonomous behavior\n(≤500 ms authority, FR-003)" as UC_OVERRIDE #B8DCBA

@@ -126,7 +126,9 @@ package "UDP Port Map  (on 192.168.10.x)" as PORTS #F4F8FF {
 
   rectangle "Gimbal Camera Source Stream\nMC (client) → .200:8554\nRTSP/H.265 · perception_front_node\n(IFD-006, HIF-007)" as PGIM #C8E8D8
 
-  rectangle "GCS Video Uplink\nMC .11:8555 → GCS\nRTSP/H.265 + metadata · video_mux_node\nIndependent of Channel A/B  (IFD-007)" as PVID #A8D8C0
+  rectangle "GCS Video Downlink — Stream A (gimbal)\nMC .11:8555 → GCS\nRTSP/H.265 + metadata · video_mux_node\nIndependent of Channel A/B  (IFD-007)" as PVID #A8D8C0
+
+  rectangle "GCS Video Downlink — Stream B (downward)\nMC .11:8556 → GCS\nRTSP/H.265 + metadata · video_mux_node\nNo track_id — perception_down_node has\nno tracker  (IFD-007 §8.1a, added 2026-07-22)" as PVIDB #98C8B0
 }
 
 note bottom of PORTS

@@ -11,7 +11,7 @@ Voronoi cells, fly boustrophedon coverage, detect and geolocate targets).
 Design phase is complete; ROS 2 package implementation is underway in
 `ws/src/`. Packages currently present: `fcc_bridge`, `gcs_comms`,
 `health_monitor`, `mc_msgs`, `mission_exec`, `px4_msgs` (vendored, fetched by
-`scripts/05-build-workspace.sh`), `swarm_coord`, `video_uplink`, `vision`.
+`scripts/05-build-workspace.sh`), `swarm_coord`, `video_downlink`, `vision`.
 
 ## Documentation
 
@@ -25,7 +25,7 @@ All design artifacts live at the repo root and in `diagrams/`:
 | `HID-MC-001.md` | Hardware interface specs (UART, CSI, Ethernet, power) |
 | `TP-MC-001.md` | Test plan: 4-level strategy (UT → NI → ST → HW) |
 | `FCC-MISSION-CHANNEL-BACKLOG.md` | Follow-up tickets for the MC↔FCC mission protocol channel |
-| `diagrams/*.puml` | 27 PlantUML source diagrams (rendered to matching `.png`) |
+| `diagrams/*.puml` | 28 PlantUML source diagrams (rendered to matching `.png`) |
 
 Key diagrams: `02` (ROS 2 node topology), `03` (Docker/systemd deployment),
 `04` (mission state machine), `10` (FccBackend class hierarchy).

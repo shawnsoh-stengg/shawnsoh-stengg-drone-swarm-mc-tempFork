@@ -13,7 +13,7 @@ sizing is left as story points only, sequenced by dependency order (grouped
 into phases). Total point count is summarized at the end for reference.
 
 **Ticket ID prefixes:** `FCC-*` (fcc_bridge), `ME-*` (mission_exec), `SC-*`
-(swarm_coord), `VIS-*` (vision), `VU-*` (video_uplink), `GCS-*` (gcs_comms),
+(swarm_coord), `VIS-*` (vision), `VU-*` (video_downlink), `GCS-*` (gcs_comms),
 `MAVR-*` (mavlink-router), `ZBD-*` (zenoh-bridge-dds), `HM-*`
 (health_monitor), `DEP-*` (deployment/Docker/config), `TEST-*` (test
 infrastructure). Continues the informal `FCC-XXX` convention already used in
@@ -54,10 +54,27 @@ moves to Zenoh while QGC's traffic stays MAVLink.
 **Update (2026-07-22, later still):** `video_mux_node` (`VU-002`) is
 extended to also stream the downward CSI camera's video+metadata to GCS
 as a second, independent RTSP session (`:8556`, Stream B) — additive to
-the existing gimbal uplink (Stream A, `:8555`), which is unchanged.
+the existing gimbal downlink (Stream A, `:8555`), which is unchanged.
 `perception_down_node`'s existing ground-detection role is unchanged too;
 this only adds a new consumer of its already-published `/mc/detections`.
 See `SDD-MC-001.md` §9a.3 and `ICD-MC-001.md` §8.1a/§8.2a for the design.
+
+**Update (2026-07-22, later still):** the `video_uplink` package is
+**renamed to `video_downlink`** — video flows drone→GCS, which is a
+downlink, not an uplink; the old name had it backwards since the gimbal
+feature landed. Full rename: package directory, topics
+(`/mc/video/uplink_status` → `/mc/video/downlink_status`, etc.), message
+type (`mc_msgs/VideoUplinkStatus` → `VideoDownlinkStatus`), every doc/diagram
+reference. Separately, `perception_front_node` and `video_mux_node` — one
+ROS 2 package, previously one shared container — now **split into two
+containers**: `video-ingest` (`perception_front_node`) and
+`video-downlink` (`video_mux_node`), so a `perception_front_node` hang/
+restart can no longer take down `video_mux_node`'s now-dual-stream serving
+(the same independent-failure-domain reasoning `FR-086` already
+established between Stream A and B, and the same precedent
+`camera_node`/`vision`'s split already set — `DEP-002`). `DEP-005` narrows
+to `video-ingest` only; new `DEP-007` covers `video-downlink`. `SW-038`
+narrows to `video-ingest`; new `SW-038a` covers `video-downlink`.
 
 ---
 
@@ -70,7 +87,7 @@ See `SDD-MC-001.md` §9a.3 and `ICD-MC-001.md` §8.1a/§8.2a for the design.
 | `mission_exec` | **Stub.** Both nodes (`mission_manager_node`, `search_planner_node`) are constructor-only. |
 | `swarm_coord` | **Stub.** Both nodes (`swarm_coordinator_node`, `formation_controller_node`) are constructor-only. |
 | `vision` | **Stub.** Both nodes (`visual_localisation_node`, `perception_down_node` — renamed from `detection_node`) are constructor-only. |
-| `video_uplink` | **Stub, new 2026-07-13.** Both nodes (`perception_front_node`, `video_mux_node`) are constructor-only, scaffolded alongside the gimbal camera design docs. Not yet in the dependency graph before this revision. |
+| `video_downlink` (renamed from `video_uplink`, 2026-07-22) | **Stub, new 2026-07-13.** Both nodes (`perception_front_node`, `video_mux_node`) are constructor-only, scaffolded alongside the gimbal camera design docs. Not yet in the dependency graph before this revision. |
 | `gcs_comms` | **Stub.** `gcs_mavlink_node` is constructor-only; no MAVROS dependency even declared. |
 | `health_monitor` | **Stub.** `health_monitor_node` is constructor-only. |
 | `mavlink-router` | **Not in-tree.** Only a systemd unit (`drone-mc-mavlink-router.service`) referencing an external prebuilt image; no source, build, or `.conf` file in the repo. |
@@ -124,7 +141,8 @@ Phase 2 — Core node logic (parallel tracks once Phase 1 lands)
                                  ──> HM-003 (failsafe tree, needs FCC-004 fault signals, GCS-001 link status)
 
 Phase 3 — Deployment
-  DEP-001, DEP-002, DEP-003, DEP-005 (Dockerfiles) — each needs its node's package.xml/CMake stable
+  DEP-001, DEP-002, DEP-003, DEP-005, DEP-007 (Dockerfiles) — each needs its node's package.xml/CMake stable;
+    DEP-005/DEP-007 are independent of each other (separate containers by design, 2026-07-22)
   DEP-006 (zenoh-bridge-dds Dockerfile, needs ZBD-001) — done 2026-07-22
   DEP-004 (params/config population) — needs every node's tunables finalized
 
@@ -418,7 +436,7 @@ detections during `SEARCH`.
   rather than blocking capture.
 - Post-processing applies IoU 0.45 / confidence 0.5 NMS thresholds.
 - GPU utilization throttled to ≤80% (SDD §9.4) to leave headroom for VO and
-  for `perception_front_node` (VU-001, `video_uplink` package — a separate
+  for `perception_front_node` (VU-001, `video_downlink` package — a separate
   process that independently reuses this same TensorRT engine/model).
 
 **Deliverables:**
@@ -469,7 +487,7 @@ coordinates.
 
 ---
 
-### Track E — Gimbal Video Perception (`video_uplink` package)
+### Track E — Gimbal Video Perception (`video_downlink` package)
 
 #### VU-001: perception_front_node — RTSP ingest, inference, and tracking
 
@@ -498,15 +516,19 @@ independent of the downward camera (SDD §9a.1, FR-080–082, IR-040).
   uses to set `GIMBAL_LINK_LOST`/clear `GIMBAL_OK` — explicitly excluded
   from the flight failsafe tree (FR-084).
 - Runs as a separate node/process from `perception_down_node` (different
-  package, `video_uplink` not `vision`) — a stall in one does not affect the
-  other, subject to the shared ≤80% GPU budget (PR-010, FR-082).
+  package, `video_downlink` not `vision`) — a stall in one does not affect
+  the other, subject to the shared ≤80% GPU budget (PR-010, FR-082). Also
+  deployed in its own container (`video-ingest`, DEP-005), separate from
+  `video_mux_node`'s `video-downlink` container even though both live in
+  the `video_downlink` package — so a `perception_front_node` hang/restart
+  doesn't take down `video_mux_node`'s (now dual-stream) serving either.
 
 **Deliverables:**
 - `perception_front_node.{hpp,cpp}` — rtspsrc pipeline, inference reuse, IoU
   tracker.
 - `mc_msgs/msg/Track.msg`, `TrackArray.msg` (ICD §9.2 already specifies
   fields — not yet created as files).
-- `video_uplink/CMakeLists.txt`/`package.xml` updated with GStreamer RTSP
+- `video_downlink/CMakeLists.txt`/`package.xml` updated with GStreamer RTSP
   client plugins + TensorRT/CUDA dependencies (currently absent — the
   package is a constructor-only scaffold as of the diagram/docs commit).
 - Node integration test: new `mock_gimbal_node` (RTSP test server looping a
@@ -521,7 +543,7 @@ node's frame/track output).
 
 ---
 
-#### VU-002: video_mux_node — GCS video re-encode and metadata uplink (dual-stream)
+#### VU-002: video_mux_node — GCS video re-encode and metadata downlink (dual-stream)
 
 **Points:** 12 (was 8 — raised 2026-07-22 to cover the second,
 downward-camera stream folded in below; previously scoped as gimbal-only)
@@ -541,7 +563,7 @@ channel and of each other (SDD §9a.2/§9a.3, FR-083–086, IR-041–043).
 - Serves the muxed stream via its own RTSP server at
   `rtsp://192.168.10.11:8555/mc_video` — no dependency on
   `gcs_mavlink_node`/mavlink-router.
-- Publishes `/mc/video/uplink_status` (`mc_msgs/VideoUplinkStatus`) at
+- Publishes `/mc/video/downlink_status` (`mc_msgs/VideoDownlinkStatus`) at
   ≥1 Hz reflecting `streaming`, `client_connected`, `bitrate_kbps`.
 - On `perception_front_node` frame/track silence > 3 s, stops serving new
   frames and sets `streaming=false`, tearing down the active RTSP session
@@ -556,11 +578,11 @@ channel and of each other (SDD §9a.2/§9a.3, FR-083–086, IR-041–043).
   `/mc/detections`.
 - Serves the muxed stream via a second, independent RTSP server at
   `rtsp://192.168.10.11:8556/mc_video_down`.
-- Publishes `/mc/video/down_uplink_status` (`mc_msgs/VideoUplinkStatus`,
+- Publishes `/mc/video/down_downlink_status` (`mc_msgs/VideoDownlinkStatus`,
   reused type, no new message) at ≥1 Hz.
 - On `camera_node`/`perception_down_node` frame/detection silence > 3 s,
   stops serving new frames and sets `streaming=false` in
-  `/mc/video/down_uplink_status`, tearing down Stream B's RTSP session —
+  `/mc/video/down_downlink_status`, tearing down Stream B's RTSP session —
   **Stream A is unaffected** (independent failure domains, FR-086), and
   vice versa.
 - `perception_down_node`'s existing detection/geolocation role is
@@ -570,7 +592,7 @@ channel and of each other (SDD §9a.2/§9a.3, FR-083–086, IR-041–043).
 **Deliverables:**
 - `video_mux_node.{hpp,cpp}` — two independent encode/mux pipelines, two
   RTSP servers, two status publishers.
-- `mc_msgs/msg/VideoUplinkStatus.msg` (unchanged, reused for both streams).
+- `mc_msgs/msg/VideoDownlinkStatus.msg` (unchanged, reused for both streams).
 - Node integration test: synthetic frame+track input (Stream A) and
   synthetic frame+detection input (Stream B) → each mock RTSP client
   receives a valid, correctly-muxed stream; source silence on either
@@ -581,8 +603,12 @@ channel and of each other (SDD §9a.2/§9a.3, FR-083–086, IR-041–043).
 **Relationships:** Depends on VU-001 (`perception_front_node`'s output for
 Stream A) and the existing `vision` package's `camera_node`/
 `perception_down_node` (Stream B — cross-container topic subscription,
-same-host DDS, no new interface needed). Blocks nothing further in this
-plan — GCS-side consumption of either uplink is out of scope for this repo.
+same-host DDS, no new interface needed). Deployed in its own container
+(`video-downlink`, `DEP-007`), separate from `perception_front_node`'s
+`video-ingest` container (`DEP-005`) despite sharing the `video_downlink`
+package — a `perception_front_node` restart no longer takes this node's
+now-dual-stream serving down with it. Blocks nothing further in this
+plan — GCS-side consumption of either downlink is out of scope for this repo.
 
 ---
 
@@ -1020,34 +1046,67 @@ verification of the vendor `.deb`'s glibc compatibility on the Jetson.
 
 ---
 
-#### DEP-005: video_uplink Dockerfile
+#### DEP-005: video-ingest Dockerfile (perception_front_node)
 
-**Points:** 3
+**Points:** 3 (narrowed 2026-07-22 — previously bundled `video_mux_node`
+too; that half moved to `DEP-007` when the two nodes' containers split)
 
-**Description:** As a developer, I want the `video_uplink` package
-(`perception_front_node` + `video_mux_node`) containerized, following the
-`docker/vision/Dockerfile` pattern (DEP-002) but with GStreamer RTSP
-server/client plugins added, so a `drone-mc-video-uplink.service` (SDD
-§12.3/§12.4 describe it; the unit file itself doesn't exist yet in
-`config/systemd/`) runs a real image.
+**Description:** As a developer, I want `perception_front_node`
+containerized on its own, following the `docker/vision/Dockerfile` pattern
+(DEP-002) but with GStreamer RTSP client plugins added, so a
+`drone-mc-video-ingest.service` (SDD §12.3/§12.4 describe it; the unit
+file itself doesn't exist yet in `config/systemd/`) runs a real image,
+independently of `video_mux_node`'s own container (`DEP-007`) — a
+`perception_front_node` hang/restart no longer takes `video_mux_node`'s
+(now dual-stream) serving down with it.
 
 **Acceptance Criteria:**
-- `docker/video-uplink/Dockerfile` follows the existing two-stage colcon
-  pattern, adding the GStreamer RTSP client/server plugins
-  (`gst-rtsp-server` or equivalent) to the runtime stage alongside the
-  TensorRT/CUDA deps VU-001 introduces.
-- Image `CMD` runs both `perception_front_node` and `video_mux_node`
-  (matching how DEP-001 bundles multiple nodes per container where SDD
-  groups them into one service).
+- `docker/video-ingest/Dockerfile` follows the existing two-stage colcon
+  pattern, adding the GStreamer RTSP client plugins (`rtspsrc` or
+  equivalent) to the runtime stage alongside the TensorRT/CUDA deps VU-001
+  introduces. Builds from the `video_downlink` package (both nodes'
+  source), but only runs `perception_front_node`.
+- Image `CMD` runs `perception_front_node` only.
 
 **Deliverables:**
-- `docker/video-uplink/Dockerfile`.
-- `config/systemd/drone-mc-video-uplink.service` + `be.slice` membership
+- `docker/video-ingest/Dockerfile`.
+- `config/systemd/drone-mc-video-ingest.service` + `be.slice` membership
   (SDD §12.3/§12.4 already describe this service).
 - Build script matching the `08-build-fcc-bridge-image.sh` pattern.
 
-**Relationships:** Depends on VU-001/VU-002 being buildable (GStreamer/
-TensorRT deps declared). Blocks TEST-003 (HIL smoke test for this service).
+**Relationships:** Depends on VU-001 being buildable (GStreamer/TensorRT
+deps declared). Independent of `DEP-007` (separate containers by design).
+Blocks TEST-003 (HIL smoke test for this service).
+
+---
+
+#### DEP-007: video-downlink Dockerfile (video_mux_node)
+
+**Points:** 3
+
+**Description:** As a developer, I want `video_mux_node` containerized on
+its own, separate from `perception_front_node` (`DEP-005`), so a
+`drone-mc-video-downlink.service` runs a real image whose lifecycle is
+independent of the gimbal-ingest pipeline — important now that this node
+also serves the downward-camera stream (Stream B, `VU-002`), which has
+nothing to do with the gimbal RTSP link.
+
+**Acceptance Criteria:**
+- `docker/video-downlink/Dockerfile` follows the existing two-stage colcon
+  pattern, adding the GStreamer RTSP server plugins (`gst-rtsp-server` or
+  equivalent) to the runtime stage. Builds from the same `video_downlink`
+  package as `DEP-005`, but only runs `video_mux_node`.
+- Image `CMD` runs `video_mux_node` only.
+
+**Deliverables:**
+- `docker/video-downlink/Dockerfile`.
+- `config/systemd/drone-mc-video-downlink.service` + `be.slice` membership
+  (SDD §12.3/§12.4 already describe this service).
+- Build script matching the `08-build-fcc-bridge-image.sh` pattern.
+
+**Relationships:** Depends on VU-002 being buildable (GStreamer deps
+declared). Independent of `DEP-005` (separate containers by design).
+Blocks TEST-003 (HIL smoke test for this service).
 
 ---
 
@@ -1064,7 +1123,7 @@ doesn't start every node with undocumented default behavior.
 - Every package's `params/default.yaml` (and `params/sitl.yaml` where
   applicable, per `CLAUDE.md`'s tooling decisions) has real values for every
   tunable its Phase 2 ticket introduced (PD gains, election weights,
-  failsafe timeouts, TensorRT engine path, `video_uplink`'s
+  failsafe timeouts, TensorRT engine path, `video_downlink`'s
   `track_iou_threshold`/`track_miss_limit`/`gimbal_link_timeout_s`, etc.) —
   not empty `ros__parameters: {}` blocks.
 - `config/camera_calibration.yaml` (SDD §12.5, referenced but absent) is
@@ -1158,10 +1217,10 @@ after installation the same way `fcc_bridge`/`ros2-core`/colcon already are.
 
 **Acceptance Criteria:**
 - One smoke-test script per new service container (gcs-comms,
-  health-monitor, swarm-coord, mission-exec, camera, vision, video-uplink,
-  mavlink-router) verifying the container starts, the node(s) inside are
-  alive, and (where applicable) the FCC-008-style transport/config
-  selection took effect.
+  health-monitor, swarm-coord, mission-exec, camera, vision, video-ingest,
+  video-downlink, mavlink-router) verifying the container starts, the
+  node(s) inside are alive, and (where applicable) the FCC-008-style
+  transport/config selection took effect.
 
 **Deliverables:**
 - `scripts/0Xb-smoke-test-<service>.sh` per new service, following the
@@ -1184,16 +1243,16 @@ deployability.
 | 2C — GCS | GCS-001, 002, 003, 004, MAVR-001 | 32 |
 | 2D — Health | HM-001, 002, 003 | 17 |
 | 2F — Cross-Host DDS | ZBD-001 | 4 |
-| 3 — Deployment | DEP-001, 002, 003, 004, 005, 006 | 20 |
+| 3 — Deployment | DEP-001, 002, 003, 004, 005, 006, 007 | 23 |
 | 4 — Test infra | TEST-001, 002, 003 | 27 |
-| **Total** | **33 tickets** | **231 pts ≈ 924 hrs ≈ 115.5 person-days** |
+| **Total** | **34 tickets** | **234 pts ≈ 936 hrs ≈ 117 person-days** |
 
-At ~21 working days/month, 231 points ≈ 5.5 person-months for a single
+At ~21 working days/month, 234 points ≈ 5.6 person-months for a single
 developer working this backlog alone — roughly in line with the 5-month
 horizon, with some slack for the unplanned work that always surfaces (SITL
 environment quirks, hardware bring-up issues, ICD gaps discovered mid-ticket
 the way FCC-006 discovered `IsrRole`/`FormationOffset`). `ZBD-001`/`DEP-006`
-(7 of the 231 points) are already done as of 2026-07-22. `GCS-004` (8
+(7 of the 234 points) are already done as of 2026-07-22. `GCS-004` (8
 points, added 2026-07-22) has 3 open items blocking a confident start — see
 `MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` §8. `VU-002` was raised from 8 to
 12 points the same day to fold in the downward-camera stream (Stream B).

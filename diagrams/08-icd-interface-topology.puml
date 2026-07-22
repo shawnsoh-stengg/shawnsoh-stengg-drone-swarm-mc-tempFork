@@ -84,7 +84,7 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
     rectangle "/mc/swarm/*\npeer_states · voronoi_cell · isr_role" as T_SWARM #E0D0F8
     rectangle "/mc/gcs/*\ncommand · mission_upload · link_status" as T_GCS #D0E8D0
     rectangle "/mc/search/*  ·  /mc/local_pose\n/mc/detections  ·  /mc/health\n/mc/mission_phase  ·  /mc/fault" as T_MISC #E8E8D0
-    rectangle "/mc/perception/front/*\ndetections · tracks\n/mc/video/uplink_status\n/mc/video/down_uplink_status" as T_VIDEO #C8E8D8
+    rectangle "/mc/perception/front/*\ndetections · tracks\n/mc/video/downlink_status\n/mc/video/down_downlink_status" as T_VIDEO #C8E8D8
   }
 
 }
@@ -195,7 +195,7 @@ note on link #C8E8D8
 end note
 
 ' ═══════════════════════════════════════════════════
-' IFD-007: MC → GCS Video Uplink
+' IFD-007: MC → GCS Video Downlink
 ' ═══════════════════════════════════════════════════
 GCS <-[#107850]- IFD007
 
@@ -233,7 +233,7 @@ legend right
   | <#208040> Green   | IFD-002  MC ↔ GCS  (MAVLink 2/UDP) |
   | <#7030A0> Purple  | IFD-003  MC ↔ Peers  (Swarm/UDP) |
   | <#5050C0> Blue    | IFD-004  Downward Camera → MC  (CSI) |
-  | <#20A070> Teal    | IFD-006 / IFD-007  Gimbal Camera / GCS Video Uplink (RTSP) |
+  | <#20A070> Teal    | IFD-006 / IFD-007  Gimbal Camera / GCS Video Downlink (RTSP) |
   | <#A0A0C0> Gray    | IFD-005  Internal  (CycloneDDS) |
 endlegend
 

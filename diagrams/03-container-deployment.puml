@@ -104,8 +104,11 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
         component "perception_down_node\n(renamed from detection_node)" as N_DET
       }
 
-      package "video-uplink.service" as SVC_VIDEO #D8F0D8 {
+      package "video-ingest.service" as SVC_INGEST #D8F0D8 {
         component "perception_front_node" as N_PFRONT
+      }
+
+      package "video-downlink.service" as SVC_VIDEO #D8F0D8 {
         component "video_mux_node" as N_VMUX
       }
 
@@ -153,6 +156,7 @@ BASE <.. SVC_SWARM : "extends"
 BASE <.. SVC_GCS : "extends"
 BASE <.. SVC_EXEC : "extends"
 BASE <.. SVC_VIS : "extends"
+BASE <.. SVC_INGEST : "extends"
 BASE <.. SVC_VIDEO : "extends"
 BASE <.. SVC_HM : "extends"
 
@@ -161,19 +165,21 @@ WS --> SVC_SWARM : "bind mount"
 WS --> SVC_GCS : "bind mount"
 WS --> SVC_EXEC : "bind mount"
 WS --> SVC_VIS : "bind mount"
+WS --> SVC_INGEST : "bind mount"
 WS --> SVC_VIDEO : "bind mount"
 WS --> SVC_HM : "bind mount"
 
 TTY --> SVC_FCC : "DeviceAllow"
 VIDDEV --> SVC_VIS : "DeviceAllow"
 ETH_INT --> SVC_FCC
-ETH_GIMCAM --> SVC_VIDEO : "DeviceAllow (network_mode=host)"
+ETH_GIMCAM --> SVC_INGEST : "DeviceAllow (network_mode=host)"
 
 SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
 SVC_MLR --> GCS_HW : "MAVLink 2/UDP"
 SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
 SVC_ZENOH --> PEER_HW : "Zenoh mesh (DDS bridge)\nTCP :7447 / 192.168.10.x"
 ZBD_CFG --> SVC_ZENOH : "bind mount\n/etc/drone-mc"
+SVC_INGEST --> SVC_VIDEO : "/mc/perception/front/detections\n/mc/perception/front/tracks\n(same-host DDS, cross-container)"
 SVC_VIDEO --> GCS_HW : "RTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of MAVLink"
 
 note right of SVC_FCC
@@ -191,15 +197,27 @@ note right of SVC_VIS
   GPUAccess=all
 end note
 
-note right of SVC_VIDEO
-  network_mode=host (RTSP :8554/:8555/:8556)
+note right of SVC_INGEST
+  network_mode=host (RTSP :8554 ingest)
   DeviceAllow=/dev/nvidia*
   MemoryMax=4G
   GPUAccess=all
-  Stream B (:8556) subscribes to
-  vision container's /camera/image_raw
-  + /mc/detections (same-host DDS,
-  no new hardware access needed)
+  Split into its own container 2026-07-22:
+  an RTSP-link/inference hang here no
+  longer takes video-downlink.service
+  (both streams) down with it.
+end note
+
+note right of SVC_VIDEO
+  network_mode=host (RTSP :8555/:8556)
+  DeviceAllow=/dev/nvidia*
+  MemoryMax=4G
+  GPUAccess=all
+  Stream A subscribes to video-ingest's
+  output; Stream B subscribes to vision
+  container's /camera/image_raw +
+  /mc/detections. Both cross-container,
+  same-host DDS, no new hardware access.
 end note
 
 note right of SVC_ZENOH

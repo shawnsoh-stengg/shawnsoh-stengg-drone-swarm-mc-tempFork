@@ -1,13 +1,14 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>video_uplink</name>
+  <name>video_downlink</name>
   <version>0.1.0</version>
   <description>
-    Front gimbal camera perception and GCS video uplink: RTSP/H.265 ingest,
+    Front gimbal camera perception and GCS video downlink: RTSP/H.265 ingest,
     inference, and tracking (perception_front_node, SDD-MC-001 §9a,
-    FR-080-082/IR-040) and re-encoded video + metadata uplink to the GCS
-    (video_mux_node, SDD-MC-001 §9a, FR-083-084/IR-041-042).
+    FR-080-082/IR-040) and re-encoded video + metadata downlink to the GCS,
+    both gimbal (Stream A) and downward-camera (Stream B) feeds
+    (video_mux_node, SDD-MC-001 §9a, FR-083-086/IR-041-043).
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>

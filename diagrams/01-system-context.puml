@@ -97,7 +97,7 @@ GIMCAM -up-> MC : "  RTSP/H.265 :8554\n  (IFD-006, HIF-007,\n  shared switch)"
 ' MC ↔ MANET
 MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel)\n  Swarm heartbeat / coordination (UDP)\n  192.168.10.x"
 MC .up.> AU1 : "  Zenoh mesh (zenoh-bridge-dds)\n  TCP :7447 — peer MCs (ZBD-001, done)\n  + Mission Orchestrator [proposal]"
-MC -up-> AU1 : "  GCS Video Uplink (RTSP/H.265 + metadata)\n  Stream A :8555 (gimbal) · Stream B :8556 (downward)"
+MC -up-> AU1 : "  GCS Video Downlink (RTSP/H.265 + metadata)\n  Stream A :8555 (gimbal) · Stream B :8556 (downward)"
 
 ' GCS ↔ MANET
 GCS <--> GU : "  MAVLink 2/UDP  →  FCC (Flight Telemetry ch.)\n  MAVLink 2/UDP  →  MC (separate ch.)\n  Mission upload · Commands · Telemetry"
