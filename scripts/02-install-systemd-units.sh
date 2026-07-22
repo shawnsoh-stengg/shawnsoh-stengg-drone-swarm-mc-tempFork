@@ -64,10 +64,18 @@ fi
 # directory.
 echo "==> Provisioning /etc/drone-mc/cyclonedds.xml"
 if [[ -f /etc/drone-mc/cyclonedds.xml ]]; then
-    echo "    /etc/drone-mc/cyclonedds.xml already exists — leaving per-drone Peers list untouched."
+    echo "    /etc/drone-mc/cyclonedds.xml already exists — leaving it untouched."
 else
     install -m 644 "${REPO_ROOT}/docker/ros2-core/cyclonedds.xml" /etc/drone-mc/cyclonedds.xml
-    echo "    Installed default config. Edit the Peers list for this vehicle's swarm before starting drone-mc.target."
+    echo "    Installed default config (same-host discovery only, lo)."
+fi
+
+echo "==> Provisioning /etc/drone-mc/zenoh-bridge-dds.json5"
+if [[ -f /etc/drone-mc/zenoh-bridge-dds.json5 ]]; then
+    echo "    /etc/drone-mc/zenoh-bridge-dds.json5 already exists — leaving per-drone peer list untouched."
+else
+    install -m 644 "${REPO_ROOT}/config/zenoh-bridge-dds.json5" /etc/drone-mc/zenoh-bridge-dds.json5
+    echo "    Installed default config. Edit the connect endpoints for this vehicle's swarm before starting drone-mc.target."
 fi
 
 echo "==> Provisioning mavlink-router channel configs (GCS-001/MAVR-001)"

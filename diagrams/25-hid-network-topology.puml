@@ -122,6 +122,8 @@ package "UDP Port Map  (on 192.168.10.x)" as PORTS #F4F8FF {
 
   rectangle "Swarm Coordination\nSrc/Dst: .11↔.12↔.13 :14901\nISR_CANDIDATE · ISR_RESULT\nVORONOI_PROPOSAL · VORONOI_ACCEPT\nPEER_STATE" as PSC #E8D4F0
 
+  rectangle "Zenoh DDS Bridge\nSrc/Dst: .11↔.12↔.13 :7447 (TCP)\nzenoh-bridge-dds · peer mode\nForwards no topics by default —\nno cross-host DDS topic exists yet" as PZBD #D4E0F0
+
   rectangle "Gimbal Camera Source Stream\nMC (client) → .200:8554\nRTSP/H.265 · perception_front_node\n(IFD-006, HIF-007)" as PGIM #C8E8D8
 
   rectangle "GCS Video Uplink\nMC .11:8555 → GCS\nRTSP/H.265 + metadata · video_mux_node\nIndependent of Channel A/B  (IFD-007)" as PVID #A8D8C0

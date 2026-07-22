@@ -14,9 +14,10 @@ into phases). Total point count is summarized at the end for reference.
 
 **Ticket ID prefixes:** `FCC-*` (fcc_bridge), `ME-*` (mission_exec), `SC-*`
 (swarm_coord), `VIS-*` (vision), `VU-*` (video_uplink), `GCS-*` (gcs_comms),
-`MAVR-*` (mavlink-router), `HM-*` (health_monitor), `DEP-*`
-(deployment/Docker/config), `TEST-*` (test infrastructure). Continues the
-informal `FCC-XXX` convention already used in `fcc_bridge` code comments.
+`MAVR-*` (mavlink-router), `ZBD-*` (zenoh-bridge-dds), `HM-*`
+(health_monitor), `DEP-*` (deployment/Docker/config), `TEST-*` (test
+infrastructure). Continues the informal `FCC-XXX` convention already used in
+`fcc_bridge` code comments.
 
 **Update (2026-07-13):** the gimbal camera + GCS video uplink feature
 (HID-MC-001 HIF-007, ICD-MC-001 IFD-006/IFD-007, SRS-MC-001 IR-040–042/
@@ -25,6 +26,18 @@ FR-080–084, SDD-MC-001 §9a) landed as design docs plus a constructor-only
 This revision adds the corresponding backlog (Track E, `VU-*`) and rolls the
 `detection_node`→`perception_down_node` rename through the `vision` row
 below. Everything else in this plan is unchanged from the 2026-07-12 audit.
+
+**Update (2026-07-22):** CycloneDDS's cross-host unicast discovery (eth0 +
+static `<Peers>` list) is replaced by a new standalone `zenoh-bridge-dds`
+daemon — a static-peer Zenoh mesh better suited to the lossy,
+bandwidth-constrained MANET link than DDS's own discovery protocol.
+CycloneDDS itself is unchanged for same-host (`lo`) discovery, which is all
+that's actually in use today (no cross-host DDS topic exists yet — see
+`ZBD-001` below). This adds Track F (`ZBD-*`), structured the same way as
+`MAVR-*`/`DEP-003` since `zenoh-bridge-dds` is architecturally the same kind
+of thing as `mavlink-router`: a standalone non-ROS daemon with its own build
+ticket plus a matching Dockerfile ticket. **Both `ZBD-001` and `DEP-006`
+below are already implemented** (not just planned) as of this update.
 
 ---
 
@@ -41,7 +54,8 @@ below. Everything else in this plan is unchanged from the 2026-07-12 audit.
 | `gcs_comms` | **Stub.** `gcs_mavlink_node` is constructor-only; no MAVROS dependency even declared. |
 | `health_monitor` | **Stub.** `health_monitor_node` is constructor-only. |
 | `mavlink-router` | **Not in-tree.** Only a systemd unit (`drone-mc-mavlink-router.service`) referencing an external prebuilt image; no source, build, or `.conf` file in the repo. |
-| Docker images | Only `docker/ros2-core` and `docker/fcc-bridge` exist. 5–6 service containers have no Dockerfile. |
+| `zenoh-bridge-dds` | **Done, 2026-07-22.** `ZBD-001`/`DEP-006`: config, systemd unit, Dockerfile, build/smoke-test scripts, and `cyclonedds.xml` scoped down to same-host-only all landed. |
+| Docker images | Only `docker/ros2-core`, `docker/fcc-bridge`, and `docker/zenoh-bridge` exist. 5 service containers still have no Dockerfile. |
 | Test infra | Only C++ gtest stubs per package (name-check only). No `launch_testing`/pytest, no `.launch.py`, no SITL harness anywhere. |
 
 ---
@@ -76,12 +90,18 @@ Phase 2 — Core node logic (parallel tracks once Phase 1 lands)
                                               └──> GCS-003 (telemetry mux, needs VIS-004, HM-001)
     MAVR-001 (mavlink-router build/config) — independent, needed before any HIL test
 
+  Track F (cross-host DDS transport — independent, not GCS-specific,
+           grouped here since it's the same kind of standalone daemon):
+    ZBD-001 (zenoh-bridge-dds build/config, replaces CycloneDDS's cross-host
+             discovery) — independent, done 2026-07-22
+
   Track D (health):
     HM-001 (resource monitoring) ──> HM-002 (liveness/watchdog, needs ME-001 heartbeat)
                                  ──> HM-003 (failsafe tree, needs FCC-004 fault signals, GCS-001 link status)
 
 Phase 3 — Deployment
   DEP-001, DEP-002, DEP-003, DEP-005 (Dockerfiles) — each needs its node's package.xml/CMake stable
+  DEP-006 (zenoh-bridge-dds Dockerfile, needs ZBD-001) — done 2026-07-22
   DEP-004 (params/config population) — needs every node's tunables finalized
 
 Phase 4 — Test infrastructure
@@ -647,6 +667,51 @@ simultaneously.
 
 ---
 
+### Track F — Cross-Host DDS Transport
+
+#### ZBD-001: zenoh-bridge-dds — build, config, and CycloneDDS scope-down
+
+**Points:** 4 — **Done, 2026-07-22.**
+
+**Description:** As a developer, I want cross-host DDS discovery to ride a
+static-peer Zenoh mesh instead of CycloneDDS's own unicast `<Peers>` list
+over `eth0`, so the MC↔peer-MC link uses a transport actually suited to a
+bandwidth-constrained, lossy MANET, rather than DDS's own discovery
+protocol. (Note: no cross-host DDS topic exists yet — `swarm_coord`'s peer
+protocol is a separate custom UDP protocol, and GCS never joins the DDS
+domain at all — so this is forward-looking infrastructure, not fixing a
+live problem.)
+
+**Acceptance Criteria:**
+- `docker/ros2-core/cyclonedds.xml` scoped down to `lo` only — the `eth0`
+  `NetworkInterface` entry and the cross-host `<Peer address="192.168.10.1x">`
+  entries are removed; only `127.0.0.1` remains.
+- New `zenoh-bridge-dds.json5` config: peer mode (mesh, no central router),
+  multicast scouting disabled (same MANET-bandwidth rationale
+  `cyclonedds.xml` used to document), static per-drone connect/listen
+  endpoints, and a topic allow-list that forwards nothing by default until a
+  real cross-host DDS topic needs it.
+- `scripts/02-install-systemd-units.sh` provisions the new config file the
+  same install-if-missing way it already provisions `cyclonedds.xml`.
+- `scripts/04c-smoke-test-dds.sh` updated to assert `cyclonedds.xml` is
+  `lo`-only (no `eth0`, no cross-host peer) instead of the old unicast-Peers
+  assertions.
+
+**Deliverables:**
+- `config/zenoh-bridge-dds.json5`.
+- `docker/ros2-core/cyclonedds.xml` (edited).
+- `scripts/02-install-systemd-units.sh`, `scripts/04c-smoke-test-dds.sh`
+  (edited).
+- SRS (`SW-008`, `SW-039`), ICD (§11.4a), SDD (§1.4, §12.3–12.5), and
+  `CLAUDE.md` updated to describe the same-host/cross-host split.
+- `diagrams/03-container-deployment.puml` + re-rendered `.png` showing the
+  new `zenoh-bridge.service` component.
+
+**Relationships:** No blockers. Independent of GCS-*/MAVR-001 (does not
+touch MAVLink). Blocks `DEP-006`.
+
+---
+
 ### Track D — Health Monitoring
 
 #### HM-001: health_monitor_node — resource monitoring
@@ -824,6 +889,43 @@ needing both GCS channels live.
 
 ---
 
+#### DEP-006: zenoh-bridge-dds Dockerfile
+
+**Points:** 3 — **Done, 2026-07-22.**
+
+**Description:** As a developer, I want a Dockerfile building
+`zenoh-bridge-dds`, so `drone-mc-zenoh-bridge.service`'s image reference
+(`ghcr.io/drone-mc/zenoh-bridge:${MC_VERSION}`) corresponds to something
+this repo actually builds.
+
+**Acceptance Criteria:**
+- Single-stage Dockerfile (no Rust/CMake/clang builder stage needed):
+  downloads Eclipse Zenoh's prebuilt `aarch64-unknown-linux-gnu` `.deb` for a
+  pinned tagged release and installs it — the vendor already ships an
+  Ubuntu-22.04-targeted build, so there's nothing to compile in-image.
+- `entrypoint.sh` execs `zenoh-bridge-dds -c /etc/drone-mc/zenoh-bridge-dds.json5`
+  as the container's sole process (signals reach it directly).
+- Build script mirrors `09-build-mavlink-router-image.sh`'s shape (pinned
+  version build-arg, `:dev`/`:latest`/`$MC_VERSION` tags).
+- Smoke test mirrors `04c-smoke-test-dds.sh`'s static-check style, plus a
+  `LIVE_CHECK=1` path that starts the container and confirms it stays up —
+  specifically to catch a possible glibc mismatch between the vendor's
+  prebuilt build and JetPack 6.2.2, which has **not** been verified on real
+  hardware yet (flagged, not silently assumed compatible).
+
+**Deliverables:**
+- `docker/zenoh-bridge/Dockerfile`, `docker/zenoh-bridge/entrypoint.sh`.
+- `scripts/10-build-zenoh-bridge-image.sh`.
+- `scripts/10b-smoke-test-zenoh-bridge.sh`.
+- `config/systemd/drone-mc-zenoh-bridge.service` (`be.slice`, no service
+  dependencies beyond `health-monitor`, same pattern as
+  `drone-mc-mavlink-router.service`).
+
+**Relationships:** Depends on ZBD-001. Blocks TEST-003 and any HIL
+verification of the vendor `.deb`'s glibc compatibility on the Jetson.
+
+---
+
 #### DEP-005: video_uplink Dockerfile
 
 **Points:** 3
@@ -987,15 +1089,17 @@ deployability.
 | 2E — Gimbal Video | VU-001, 002 | 18 |
 | 2C — GCS | GCS-001, 002, 003, MAVR-001 | 24 |
 | 2D — Health | HM-001, 002, 003 | 17 |
-| 3 — Deployment | DEP-001, 002, 003, 004, 005 | 17 |
+| 2F — Cross-Host DDS | ZBD-001 | 4 |
+| 3 — Deployment | DEP-001, 002, 003, 004, 005, 006 | 20 |
 | 4 — Test infra | TEST-001, 002, 003 | 27 |
-| **Total** | **30 tickets** | **212 pts ≈ 848 hrs ≈ 106 person-days** |
+| **Total** | **32 tickets** | **219 pts ≈ 876 hrs ≈ 109.5 person-days** |
 
-At ~21 working days/month, 212 points ≈ 5.0 person-months for a single
+At ~21 working days/month, 219 points ≈ 5.2 person-months for a single
 developer working this backlog alone — roughly in line with the 5-month
 horizon, with some slack for the unplanned work that always surfaces (SITL
 environment quirks, hardware bring-up issues, ICD gaps discovered mid-ticket
-the way FCC-006 discovered `IsrRole`/`FormationOffset`).
+the way FCC-006 discovered `IsrRole`/`FormationOffset`). `ZBD-001`/`DEP-006`
+(7 of the 219 points) are already done as of 2026-07-22.
 
 Not sequenced into specific weeks/months per current scope — re-run this
 sizing exercise once team size is known, or ask for a capacity-sequenced

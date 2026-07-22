@@ -63,7 +63,7 @@ Four principles govern the design:
 
 | Concern | Choice | Rationale |
 |---|---|---|
-| Middleware | ROS 2 Humble / CycloneDDS | Deterministic discovery, DDS QoS, PX4 uXRCE-DDS compatibility |
+| Middleware | ROS 2 Humble / CycloneDDS (same-host) + zenoh-bridge-dds (cross-host) | Deterministic discovery + DDS QoS locally; static-peer Zenoh mesh for the bandwidth-constrained, lossy MANET link instead of DDS's own discovery protocol; PX4 uXRCE-DDS compatibility unaffected |
 | Language | C++17 | Performance for control loops; structured bindings, `std::optional`, `std::variant` |
 | Concurrency | ROS 2 multi-threaded executor + `rclcpp::CallbackGroup` | Isolates timer callbacks from subscription callbacks per node |
 | Build | colcon + CMake | Standard ROS 2 workspace tooling |
@@ -1072,7 +1072,7 @@ WantedBy=drone-mc.target
 ```
 
 Services in `rt.slice`: `fcc-bridge`, `swarm-coord`  
-Services in `be.slice`: `mavlink-router`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-uplink`
+Services in `be.slice`: `mavlink-router`, `zenoh-bridge`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-uplink`
 
 ### 12.4 Startup Ordering
 
@@ -1080,6 +1080,7 @@ Services in `be.slice`: `mavlink-router`, `gcs-comms`, `mission-exec`, `vision`,
 drone-mc.target
   └── health-monitor.service    (first — monitors everything else)
   └── mavlink-router.service    (no dependencies)
+  └── zenoh-bridge.service      (no dependencies — cross-host DDS bridge, independent of mavlink-router)
   └── fcc-bridge.service        (after mavlink-router)
   └── gcs-comms.service         (after fcc-bridge, mavlink-router)
   └── swarm-coord.service       (after gcs-comms)
@@ -1095,7 +1096,8 @@ All configuration lives in `/etc/drone-mc/` (bind-mounted read-only into every c
 ```
 /etc/drone-mc/
   environment                  ← environment variables (§9.4 of ICD)
-  cyclonedds.xml               ← CycloneDDS DDS domain and discovery config
+  cyclonedds.xml               ← CycloneDDS same-host (lo-only) DDS domain config
+  zenoh-bridge-dds.json5       ← zenoh-bridge-dds cross-host DDS bridge config (peer list, mode, topic allow-list)
   mavlink-router.conf          ← mavlink-router endpoint config
   camera_calibration.yaml      ← camera intrinsics and distortion
   params/                      ← ROS 2 parameter YAML files per node

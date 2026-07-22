@@ -19,12 +19,13 @@ set -euo pipefail
 PASS=0; FAIL=0
 UNIT_DIR="/etc/systemd/system"
 
-# 8 MC services per SDD §12.4 (health-monitor, mavlink-router, fcc-bridge,
-# gcs-comms, swarm-coord, mission-exec, vision) plus camera (split out of
-# vision — see drone-mc-camera.service).
+# 9 MC services per SDD §12.4 (health-monitor, mavlink-router, zenoh-bridge,
+# fcc-bridge, gcs-comms, swarm-coord, mission-exec, vision) plus camera
+# (split out of vision — see drone-mc-camera.service).
 SERVICES=(
     drone-mc-health-monitor.service
     drone-mc-mavlink-router.service
+    drone-mc-zenoh-bridge.service
     drone-mc-fcc-bridge.service
     drone-mc-gcs-comms.service
     drone-mc-swarm-coord.service
@@ -100,7 +101,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
         [[ ${all_active} -eq 1 ]] && break
         sleep 2
     done
-    check "all 8 services active within 120s" bash -c "[[ ${all_active} -eq 1 ]]"
+    check "all 9 services active within 120s" bash -c "[[ ${all_active} -eq 1 ]]"
 
     systemctl stop drone-mc.target
     sleep 2
@@ -108,7 +109,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     for unit in "${SERVICES[@]}"; do
         systemctl is-active --quiet "${unit}" && all_stopped=0
     done
-    check "all 8 services stopped cleanly" bash -c "[[ ${all_stopped} -eq 1 ]]"
+    check "all 9 services stopped cleanly" bash -c "[[ ${all_stopped} -eq 1 ]]"
 fi
 
 printf "\nResults: %d passed, %d failed\n" "${PASS}" "${FAIL}"

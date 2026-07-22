@@ -1,0 +1,30 @@
+# drone-mc-zenoh-bridge.service — zenoh-bridge-dds (cross-host DDS bridge
+# over the MANET mesh, replacing CycloneDDS's own eth0 unicast discovery).
+# SDD §12.4: no service dependencies beyond health-monitor, same as
+# mavlink-router. Installed by scripts/02-install-systemd-units.sh.
+[Unit]
+Description=Drone MC — zenoh-bridge-dds
+PartOf=drone-mc.target
+After=docker.service drone-mc-health-monitor.service
+Requires=docker.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-zenoh-bridge \
+  --network=host \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc,readonly \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/zenoh-bridge:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-zenoh-bridge
+Restart=on-failure
+RestartSec=5s
+MemoryMax=256M
+CPUQuota=30%
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=drone-mc.target

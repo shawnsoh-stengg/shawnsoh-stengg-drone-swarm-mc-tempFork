@@ -98,7 +98,7 @@ Layer 1 — Hardware & Transport
   ttyTHS1 serial, 192.168.12.x ethernet, CSI camera, MANET radio
 ```
 
-**8 ROS 2 packages:** `fcc_bridge`, `swarm_coord`, `mission_exec`, `vision`, `video_uplink`, `gcs_comms`, `health_monitor`, `mavlink_router` (external daemon).
+**7 ROS 2 packages** (`fcc_bridge`, `swarm_coord`, `mission_exec`, `vision`, `video_uplink`, `gcs_comms`, `health_monitor`) **plus 2 external daemons**: `mavlink_router`, `zenoh_bridge_dds`.
 
 ## Key Design Patterns
 
@@ -110,7 +110,7 @@ Layer 1 — Hardware & Transport
 
 **Mission state machine** — 11 states in `mission_manager_node`: PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND, with FAULT → RTL escape. GCS retains override authority at all times (500 ms response requirement, FR-003).
 
-**Deployment** — Not Docker Compose. Seven Docker containers each managed as systemd units under `drone-mc.target`. RT services (`fcc_bridge`, `swarm_coord`) in `rt.slice`; best-effort (including the new `video-uplink` container) in `be.slice`. Shared colcon workspace bind-mounted to all containers.
+**Deployment** — Not Docker Compose. Each Docker container is managed as a systemd unit under `drone-mc.target`. RT services (`fcc_bridge`, `swarm_coord`) in `rt.slice`; best-effort (including `zenoh-bridge` and the new `video-uplink` container) in `be.slice`. Shared colcon workspace bind-mounted to all containers except `mavlink-router` and `zenoh-bridge`, which are standalone daemons with no ROS 2/colcon dependency.
 
 ## Key Algorithms (SDD §3.x)
 
@@ -148,26 +148,28 @@ All internal topics are namespaced under `/mc/`. Key topics that cross multiple 
 ```
 docker/ros2-core/
   Dockerfile          # ros2-core base image (FROM for all service containers)
-  cyclonedds.xml      # default DDS config, overridden by /etc/drone-mc bind-mount
+  cyclonedds.xml      # same-host (lo-only) DDS config, overridden by /etc/drone-mc bind-mount
 config/
   environment         # default env vars for all containers (ICD §9.4)
+  zenoh-bridge-dds.json5  # cross-host DDS bridge config (ICD §9.4), overridden by /etc/drone-mc bind-mount
   params/             # per-node ROS 2 YAML params (populated as packages land)
   netplan/
     01-drone-mc.yaml          # Jetson eth0 dual-IP (HIF-002/HIF-004), installed by 01-install-os.sh
   udev/
     99-drone-mc.rules         # /dev/ttyTHS1 dialout permissions (HIF-001), installed by 01-install-os.sh
   systemd/
-    drone-mc.target                 # top-level target, all 8 services WantedBy= this (SDD §12.4)
+    drone-mc.target                 # top-level target, all 9 services WantedBy= this (SDD §12.4)
     rt.slice / be.slice             # cgroup v2 slices (SDD §12.3)
-    drone-mc-health-monitor.service # + mavlink-router, fcc-bridge, gcs-comms, swarm-coord,
-                                     #   mission-exec, camera, vision — installed by 02-install-systemd-units.sh
-                                     #   (video-uplink unit not yet created — SDD-MC-001 §12.4 design only)
+    drone-mc-health-monitor.service # + mavlink-router, zenoh-bridge, fcc-bridge, gcs-comms,
+                                     #   swarm-coord, mission-exec, camera, vision — installed by
+                                     #   02-install-systemd-units.sh (video-uplink unit not yet
+                                     #   created — SDD-MC-001 §12.4 design only)
 ws/
   src/                # colcon workspace — ROS 2 packages go here
 scripts/
   01-install-os.sh            # Jetson host: install Netplan + udev rule (post-JetPack-flash)
   01b-smoke-test-os.sh        # TP-SM-001: OS + netplan + udev verification
-  02-install-systemd-units.sh  # install + enable drone-mc.target and all 8 service units
+  02-install-systemd-units.sh  # install + enable drone-mc.target and all 9 service units
   02b-smoke-test-units.sh      # units/target/slices loaded, enabled, valid (LIVE_CHECK=1 for a real boot test)
   04-install-ros2-core.sh     # build ros2-core Docker image
   04b-smoke-test-ros2.sh      # TP-SM-004: ROS 2 + CycloneDDS
@@ -185,6 +187,8 @@ scripts/
   08b-smoke-test-fcc-bridge.sh  # package/interface/executable registration + loopback publish
   09-build-mavlink-router-image.sh  # build ghcr.io/drone-mc/mavlink-router image (standalone, not FROM ros2-core)
   09b-smoke-test-routing.sh         # GCS-001/MAVR-001 channel isolation
+  10-build-zenoh-bridge-image.sh    # build ghcr.io/drone-mc/zenoh-bridge image (standalone, not FROM ros2-core)
+  10b-smoke-test-zenoh-bridge.sh    # config/image checks; LIVE_CHECK=1 verifies the container stays up
 ```
 
 ## Tooling Decisions
@@ -192,5 +196,5 @@ scripts/
 - **Diagrams:** PlantUML (v1.2026 compatible syntax). Source in `diagrams/*.puml`, rendered to `diagrams/*.png`.
 - **Documents:** Markdown only (not HTML/artifacts).
 - **Languages:** C++17 (all ROS 2 nodes), Python 3 (test utilities, GCS-side scripts).
-- **DDS:** CycloneDDS with `cyclonedds.xml` in container base image.
+- **DDS:** CycloneDDS with `cyclonedds.xml` in container base image, scoped to same-host (`lo`) discovery only. Cross-host DDS, if/when it's needed, rides `zenoh-bridge-dds` over a static-peer Zenoh mesh instead of CycloneDDS's own discovery protocol — a better fit for the bandwidth-constrained MANET link (`config/zenoh-bridge-dds.json5`).
 - **Params:** YAML files in `params/default.yaml` and `params/sitl.yaml` per package.

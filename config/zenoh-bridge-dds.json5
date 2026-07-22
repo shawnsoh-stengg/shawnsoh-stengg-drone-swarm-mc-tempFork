@@ -1,0 +1,56 @@
+// zenoh-bridge-dds configuration for drone-mc (SDD §12.4, SRS SW-008).
+// Deployed to /etc/drone-mc/zenoh-bridge-dds.json5 — bind-mounted read-only
+// into the zenoh-bridge-dds container (config/systemd/drone-mc-zenoh-bridge.service).
+//
+// This is the cross-host counterpart to docker/ros2-core/cyclonedds.xml,
+// which is now same-host (lo) only. Where cyclonedds.xml used to carry an
+// eth0 NetworkInterface plus a unicast <Peers> list of every other drone's
+// eth0 address, that per-drone peer list now lives here instead, expressed
+// as Zenoh connect/listen endpoints. Zenoh's peer-mesh model (static
+// locators, no reliance on multicast scouting) is a better fit for the
+// MANET link than DDS's own discovery protocol — CycloneDDS still runs
+// per-drone, but nothing in it reaches across hosts anymore.
+//
+// Per-drone deployment: extend the connect endpoints below with every
+// other swarm member's eth0 address (192.168.10.1N, SRS §2.3/ICD §9.4)
+// before deploying a swarm larger than the two peers shown here as an
+// example — this mirrors the "extend the Peers list" habit the old
+// cyclonedds.xml Discovery/Peers list already established, just relocated.
+//
+// SITL/dev: if there are no other hosts on the network, leave "connect"
+// empty (an idle bridge with peer mode and no reachable peers is harmless)
+// — all SITL nodes are on one host and never need this bridge.
+{
+  // Bridges whichever DDS domain this drone's containers use
+  // ($ROS_DOMAIN_ID, /etc/drone-mc/environment) — not hardcoded here.
+  plugins: {
+    dds: {
+      // Forward nothing by default. "^$" only matches an empty topic name,
+      // which no real DDS topic has — the standard "allow nothing" idiom
+      // (the underlying regex engine has no "deny all" primitive of its own).
+      // Nothing currently needs cross-host DDS: swarm_coord's peer
+      // heartbeat/ISR/Voronoi protocol is a separate custom UDP protocol
+      // (ICD IFD-003, ports 14900/14901), not DDS topics. Extend this list
+      // once a real cross-host DDS topic exists, e.g.:
+      //   allow: ["rt/mc/swarm/.*"]
+      allow: ["^$"],
+    },
+  },
+
+  // Mesh, not a central router — no single point of failure if one drone
+  // or the GCS drops off the link.
+  mode: "peer",
+
+  // Static peer list instead of UDP multicast scouting — the MANET link
+  // (CLAUDE.md Network Reference) is bandwidth-constrained and shared with
+  // MAVLink/video traffic, same rationale cyclonedds.xml's AllowMulticast
+  // used to document for eth0.
+  scouting: { multicast: { enabled: false } },
+
+  // This drone's own peer MCs (SRS §2.3 example: Peer MC #2 at .12, Peer MC
+  // #3 at .13 — this drone's own address is not listed). A future GCS-side
+  // zenoh endpoint, if one is ever stood up, would be added here the same
+  // way — GCS software itself stays out of this repo's scope (SRS §1.4).
+  connect: { endpoints: ["tcp/192.168.10.12:7447", "tcp/192.168.10.13:7447"] },
+  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+}

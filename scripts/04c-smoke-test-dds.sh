@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# 04c-smoke-test-dds.sh — Verify the CycloneDDS unicast-discovery config
-# (INFRA-004). Named 04c, not 04b, since 04b-smoke-test-ros2.sh already
-# covers the base ros2-core image build.
+# 04c-smoke-test-dds.sh — Verify the CycloneDDS same-host-only discovery
+# config (INFRA-004). Named 04c, not 04b, since 04b-smoke-test-ros2.sh
+# already covers the base ros2-core image build.
 #
-# Static checks (always run): cyclonedds.xml pins eth0+lo, disables
-# multicast, and declares a unicast Peers list · every drone-mc-*.service
-# bind-mounts /etc/drone-mc read-only · CYCLONEDDS_URI reaches every unit
-# via /etc/drone-mc/environment.
+# cyclonedds.xml no longer reaches across hosts — that job now belongs to
+# zenoh-bridge-dds (scripts/10b-smoke-test-zenoh-bridge.sh covers its
+# config instead). This script only asserts cyclonedds.xml is scoped to lo.
+#
+# Static checks (always run): cyclonedds.xml pins lo only (no eth0
+# NetworkInterface, no cross-host Peers), disables multicast · every
+# drone-mc-*.service bind-mounts /etc/drone-mc read-only · CYCLONEDDS_URI
+# reaches every unit via /etc/drone-mc/environment.
 #
 # Set LIVE_CHECK=1 to additionally start two ros2-core containers on the
-# host network and confirm cross-container topic discovery completes
-# within 5 s (requires the ros2-core image to already exist on this host).
+# host network and confirm cross-container (same-host) topic discovery
+# completes within 5 s (requires the ros2-core image to already exist on
+# this host).
 set -euo pipefail
 
 PASS=0; FAIL=0
@@ -40,13 +45,13 @@ check() {
 }
 
 check "cyclonedds.xml present"            test -f "${CDDS_XML}"
-check "eth0 interface pinned"             grep -qE '<NetworkInterface name="eth0"' "${CDDS_XML}"
+check "eth0 interface absent"             bash -c "! grep -qE '<NetworkInterface name=\"eth0\"' '${CDDS_XML}'"
 check "lo interface pinned"               grep -qE '<NetworkInterface name="lo"' "${CDDS_XML}"
-check "eth0 multicast disabled"           grep -qE '<NetworkInterface name="eth0"[^>]*multicast="false"' "${CDDS_XML}"
 check "lo multicast disabled"             grep -qE '<NetworkInterface name="lo"[^>]*multicast="false"' "${CDDS_XML}"
 check "AllowMulticast false"              grep -qE '<AllowMulticast>false</AllowMulticast>' "${CDDS_XML}"
-check "unicast Peers list present"        grep -qE '<Peers>' "${CDDS_XML}"
-check "at least one swarm peer address"   grep -qE '<Peer address="192\.168\.10\.[0-9]+"/>' "${CDDS_XML}"
+check "Peers list present"                grep -qE '<Peers>' "${CDDS_XML}"
+check "no cross-host peer address"        bash -c "! grep -qE '<Peer address=\"192\.168\.10\.[0-9]+\"/>' '${CDDS_XML}'"
+check "loopback peer address present"     grep -qE '<Peer address="127\.0\.0\.1"/>' "${CDDS_XML}"
 
 for unit in "${SERVICES[@]}"; do
     check "${unit} bind-mounts /etc/drone-mc read-only" \

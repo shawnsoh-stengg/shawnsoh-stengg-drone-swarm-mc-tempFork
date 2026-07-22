@@ -1229,8 +1229,11 @@ Smoke tests are companion scripts to each installation script. They verify the i
 | TP-SM-008 | `08b-smoke-test-camera.sh` | `/dev/video0` exists · `gst-launch-1.0 nvarguscamerasrc ... appsink` produces frames (5 s run) |
 | TP-SM-009 | `09b-smoke-test-services.sh` | All `drone-mc-*.service` units loaded · `drone-mc.target` enabled · systemd slice configs valid |
 | TP-SM-010 | `10b-smoke-test-networking.sh` | Static IP 192.168.10.11 on Ethernet interface · `ping 192.168.10.31` success · UDP port 14900 bindable |
+| TP-SM-011 | `10b-smoke-test-zenoh-bridge.sh` | `zenoh-bridge-dds.json5` declares peer mode, disables multicast scouting, has ≥1 connect endpoint · image contains the `zenoh-bridge-dds` binary · `drone-mc-zenoh-bridge.service` bind-mounts `/etc/drone-mc` read-only · `LIVE_CHECK=1`: container stays running (catches a glibc mismatch between the vendor's prebuilt aarch64 build and JetPack 6.2.2) |
 
 **Pass criteria for each:** Exit code 0; zero FAIL lines in output.
+
+**Note:** this table's script names reflect an earlier planned numbering scheme; the actual `scripts/` directory (see `CLAUDE.md`'s script listing) has since diverged for several entries (e.g. the real companion to `04-install-ros2-core.sh` is `04b-smoke-test-ros2.sh` + `04c-smoke-test-dds.sh`, not a single `04b`). TP-SM-011 above uses the real, current script name.
 
 ---
 
@@ -1290,7 +1293,7 @@ The table below maps each SRS functional requirement to at least one test case. 
 | SFR-004 | 3× restart → RTL | — | — | TP-ST-004 (ext.) | — |
 | SFR-007 | GCS loss → HOLD | — | — | TP-ST-002 | — |
 | SFR-008 | Low battery RTL (non-suppressible) | TP-UT-016, TP-UT-017 | — | TP-ST-003 | — |
-| SW-001–043 | Software requirements | — | — | — | TP-HW-006, TP-SM-001–010 |
+| SW-001–043 | Software requirements | — | — | — | TP-HW-006, TP-SM-001–011 |
 
 ---
 
@@ -1301,14 +1304,14 @@ Tests are aligned with the 6-month project milestones.
 | Milestone | Month | Test activities |
 |---|---|---|
 | M1 — Architecture complete | 1 | TP-SM-001–005 (OS, JetPack, Docker, ROS 2, colcon) |
-| M2 — Core nodes integrated | 2 | TP-UT-001–019 · TP-NI-001–007 · TP-SM-006–010 · TP-HW-001–002 |
+| M2 — Core nodes integrated | 2 | TP-UT-001–019 · TP-NI-001–007 · TP-SM-006–011 · TP-HW-001–002 |
 | M3 — SITL single-drone | 3 | TP-ST-001 (single drone) · TP-ST-003 · TP-ST-006 · TP-ST-007 |
 | M4 — SITL multi-drone | 4 | TP-NI-008–020 · TP-ST-001–013 (full suite) · TP-HW-003–004 |
 | M5 — HIL integration | 5 | TP-HW-001–007 (all HIL tests on physical hardware) |
 | M6 — System acceptance | 6 | Full regression: TP-SM + TP-UT + TP-NI + TP-ST · TP-HW repeat |
 
 **CI gates (automated, every PR):**
-- TP-SM-001–010
+- TP-SM-001–011
 - TP-UT-001–018
 - TP-NI-001–007
 

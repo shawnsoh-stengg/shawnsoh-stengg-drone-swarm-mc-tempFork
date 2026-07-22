@@ -83,6 +83,10 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
         component "mavlink-router v4" as MLR
       }
 
+      package "zenoh-bridge.service" as SVC_ZENOH #D8F0D8 {
+        component "zenoh-bridge-dds" as ZBD
+      }
+
       package "gcs-comms.service" as SVC_GCS #D8F0D8 {
         component "gcs_mavlink_node" as N_GCS
         component "MAVROS" as MAVROS
@@ -128,9 +132,12 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
 }
 
 ' ─── Base image (shared) ──────────────────────
-package "Container Base Image\nros2-core\n(ROS 2 Humble · CycloneDDS)" as BASE #F8F8D8 {
-  component "cyclonedds.xml\n(shared DDS config)" as DDS_CFG
+package "Container Base Image\nros2-core\n(ROS 2 Humble · CycloneDDS, lo-only)" as BASE #F8F8D8 {
+  component "cyclonedds.xml\n(same-host DDS config)" as DDS_CFG
 }
+
+' ─── zenoh-bridge config (not part of ros2-core; standalone image) ──
+package "zenoh-bridge-dds.json5\n(cross-host DDS config)" as ZBD_CFG #F8F8D8
 
 ' ─── External references ──────────────────────
 node "Pixhawk 6X FCC\n192.168.10.31" as FCC_HW #FFECD8
@@ -165,6 +172,8 @@ ETH_GIMCAM --> SVC_VIDEO : "DeviceAllow (network_mode=host)"
 SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
 SVC_MLR --> GCS_HW : "MAVLink 2/UDP"
 SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
+SVC_ZENOH --> PEER_HW : "Zenoh mesh (DDS bridge)\nTCP :7447 / 192.168.10.x"
+ZBD_CFG --> SVC_ZENOH : "bind mount\n/etc/drone-mc"
 SVC_VIDEO --> GCS_HW : "RTSP/H.265 + metadata\n:8555 (independent of MAVLink)"
 
 note right of SVC_FCC
@@ -187,6 +196,13 @@ note right of SVC_VIDEO
   DeviceAllow=/dev/nvidia*
   MemoryMax=4G
   GPUAccess=all
+end note
+
+note right of SVC_ZENOH
+  Peer mode, static locators
+  (no multicast scouting).
+  Forwards no topics by default —
+  no cross-host DDS topic exists yet.
 end note
 
 note bottom of TARGET

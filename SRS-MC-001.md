@@ -8,7 +8,7 @@
 | Date | 2026-06-19 |
 | Platform | Jetson Orin NX 16GB · JetPack 6.2.2 · Ubuntu 22.04 aarch64 |
 | FCC | Pixhawk 6X · PX4 v1.14 |
-| Stack | ROS 2 Humble · CycloneDDS · uXRCE-DDS · MAVLink 2 |
+| Stack | ROS 2 Humble · CycloneDDS (same-host) · zenoh-bridge-dds (cross-host) · uXRCE-DDS · MAVLink 2 |
 
 ---
 
@@ -80,6 +80,7 @@ Requirements apply to:
 - MAVLink v2 message definition (mavlink.io)
 - ROS 2 Humble API documentation
 - CycloneDDS configuration guide
+- Eclipse Zenoh / zenoh-plugin-dds (zenoh-bridge-dds) documentation
 - Holybro Pixhawk Jetson Baseboard hardware manual
 - NVIDIA Jetson Orin NX System Module datasheet (JetPack 6.2.2)
 
@@ -390,7 +391,8 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 |---|---|---|---|
 | SW-001 | MUST | Inspection | All MC software components shall be packaged as Docker containers managed by Docker Engine on the Jetson Orin NX. |
 | SW-002 | MUST | Inspection | All containers shall be orchestrated under the `drone-mc.target` systemd target. Starting the target shall bring up all MC services in correct dependency order. |
-| SW-003 | MUST | Inspection | All ROS 2 nodes shall use CycloneDDS as the DDS middleware. CycloneDDS configuration (network interface, discovery peers) shall be managed via a shared `cyclonedds.xml` mounted into each container. |
+| SW-003 | MUST | Inspection | All ROS 2 nodes shall use CycloneDDS as the DDS middleware for same-host discovery. CycloneDDS configuration shall be managed via a shared `cyclonedds.xml` mounted into each container, scoped to the loopback interface only — it does not perform discovery across hosts (see SW-008). |
+| SW-008 | MUST | Inspection | Cross-host DDS transport, where needed, shall ride a `zenoh-bridge-dds` container per drone, bridging selected DDS topics over a Zenoh mesh in peer mode with a static per-drone connect/listen endpoint list (`zenoh-bridge-dds.json5`), not CycloneDDS's own multicast/unicast discovery protocol — better suited to the bandwidth-constrained, lossy MANET link (IR-020). The bridge's topic allow-list shall default to forwarding nothing until a specific cross-host DDS topic requires it. |
 | SW-004 | MUST | Inspection | All ROS 2 packages shall be built in a shared colcon workspace bind-mounted into all containers that require it, avoiding redundant builds per container. |
 | SW-005 | MUST | Inspection | All installation and configuration scripts shall be numbered sequentially (e.g., `06-`, `07-`, `08-`), idempotent, and guarded with `set -euo pipefail`. |
 | SW-006 | MUST | Inspection | A companion smoke-test script (e.g., `06b-smoke-test-*.sh`) shall exist for each installation script. Smoke tests shall emit explicit PASS / FAIL for each check, with non-zero exit on any failure. |
@@ -530,7 +532,7 @@ Monitors CPU, memory, disk, GPU temperature, and node liveness via ROS 2 alive c
 
 | Req ID | Container | Contents | Special Access |
 |---|---|---|---|
-| SW-030 | `ros2-core` | ROS 2 Humble base, CycloneDDS, shared colcon workspace | Base layer for all containers |
+| SW-030 | `ros2-core` | ROS 2 Humble base, CycloneDDS (same-host only), shared colcon workspace | Base layer for all containers |
 | SW-031 | `fcc-bridge` | Micro XRCE-DDS Agent, fcc_bridge_node | `DeviceAllow ttyTHS1` |
 | SW-032 | `mavlink-router` | mavlink-router v4 daemon, routing config | `network_mode=host` |
 | SW-033 | `gcs-comms` | gcs_mavlink_node, MAVROS | `network_mode=host` |
@@ -539,6 +541,7 @@ Monitors CPU, memory, disk, GPU temperature, and node liveness via ROS 2 alive c
 | SW-036 | `vision` | camera_node (gscam2), visual_localisation_node, perception_down_node (renamed from detection_node) | GPU device, `/dev/video*` |
 | SW-037 | `health-monitor` | health_monitor_node | Read-only `/sys`, `/proc` |
 | SW-038 | `video-uplink` | perception_front_node, video_mux_node | GPU device, `network_mode=host` (RTSP ports 8554/8555) |
+| SW-039 | `zenoh-bridge` | zenoh-bridge-dds daemon, cross-host DDS bridge config | `network_mode=host` |
 
 ### 5.4 Systemd Integration
 
@@ -620,9 +623,9 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | IR-041–042 | GCS video uplink | T / I | HIL |
 | PR-001–011 | Performance rates and latencies | T | SITL → HIL |
 | SFR-001–009 | Safety and failsafe | T / I | SITL |
-| SW-001–007 | Architecture and build conventions | I | Int |
+| SW-001–008 | Architecture and build conventions | I | Int |
 | SW-010–021 | ROS 2 node interface contracts | T | SITL |
-| SW-030–038 | Container packaging | I / T | Int |
+| SW-030–039 | Container packaging | I / T | Int |
 | SW-040–043 | Systemd integration | I / T | Int |
 | SW-050–052 | SITL validation coverage | T | SITL |
 

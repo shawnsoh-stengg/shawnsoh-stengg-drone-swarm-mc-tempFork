@@ -45,7 +45,7 @@ Seven interface domains are defined:
 | IFD-004 | MC ↔ Downward Camera | CSI → gscam2 → ROS 2 |
 | IFD-006 | MC ↔ Gimbal Camera | Ethernet (HIF-007) → RTSP/H.265 → `perception_front_node` |
 | IFD-007 | MC ↔ GCS Video Uplink | RTSP/H.265 + metadata (independent of IFD-002) |
-| IFD-005 | Internal (MC-internal) | ROS 2 topics / services (CycloneDDS) |
+| IFD-005 | Internal (MC-internal) | ROS 2 topics / services (CycloneDDS, same-host only). Cross-host DDS, if/when needed, rides `zenoh-bridge-dds` over a static-peer Zenoh mesh instead — see §11.4a. |
 
 ### 1.3 Conventions
 
@@ -1436,12 +1436,16 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `MANAGER_WD_TIMEOUT_S` | `5` | Manager watchdog timeout (s) |
 | `SIMULATION_MODE` | `false` | `true` replaces hardware with SITL equivalents |
 | `SITL_FCC_PORT` | `14540` | `MavlinkUdpBackend`'s local UDP bind port (`SIMULATION_MODE=true` only) — PX4 SITL's address is learned dynamically from its first datagram, not configured (FCC-007) |
-| `ROS_DOMAIN_ID` | `0` | CycloneDDS domain ID |
-| `CYCLONEDDS_URI` | `/etc/drone-mc/cyclonedds.xml` | CycloneDDS config file |
+| `ROS_DOMAIN_ID` | `0` | CycloneDDS domain ID (same-host discovery; also the domain `zenoh-bridge-dds` bridges cross-host, §11.4a) |
+| `CYCLONEDDS_URI` | `/etc/drone-mc/cyclonedds.xml` | CycloneDDS config file (same-host / `lo` only) |
 | `CAMERA_CALIBRATION_FILE` | `/etc/drone-mc/camera_calibration.yaml` | Calibration file path |
 | `CAMERA_WIDTH` | `1280` | Camera capture width (px) |
 | `CAMERA_HEIGHT` | `720` | Camera capture height (px) |
 | `CAMERA_FPS` | `30` | Camera capture frame rate |
+
+### 11.4a Cross-Host DDS Bridge Configuration
+
+`zenoh-bridge-dds` (SW-008, SW-039) is not configured via `/etc/drone-mc/environment` — its peer list, mode, and topic allow-list live entirely in the per-drone-edited `/etc/drone-mc/zenoh-bridge-dds.json5` (`config/zenoh-bridge-dds.json5` in the repo), so there is exactly one file to edit per drone rather than two that could drift apart. It picks up `$ROS_DOMAIN_ID` from the shared environment file to know which local DDS domain to bridge. Default listen/connect port: `7447` (TCP).
 
 ---
 
