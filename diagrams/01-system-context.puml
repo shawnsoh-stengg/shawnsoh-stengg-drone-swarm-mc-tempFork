@@ -41,8 +41,13 @@ skinparam rectangle {
 cloud "MANET Mesh Network" as MANET_NW #E0E0E0
 
 ' ── GROUND CONTROL STATION ───────────────────────────────────
+' "GCS" is two separate actors, not one (GCS-ZENOH-DESIGN-REVIEW.md):
+' QGroundControl (vehicle telemetry/control, MAVLink, unchanged) and the
+' Mission Orchestrator (mission plan library, Zenoh, proposal — GCS-004).
 package "Ground Control Station" as GCS_PKG #D8EED8 {
-  rectangle "QGroundControl\n192.168.10.10\n\nMission Planner\nOperator Monitor" as GCS #B8DCBA
+  rectangle "QGroundControl\n192.168.10.10\n\nVehicle Telemetry/Control\nOperator Monitor" as GCS #B8DCBA
+
+  rectangle "Mission Orchestrator\n(another team's app)\n\nMission Plan Library\nCreate · Update · Activate\n[proposal — GCS-004]" as ORCH #C8D8F0
 
   rectangle "Mesh Radio (Ground Unit)\n192.168.10.63" as GU #E0E0E0
 }
@@ -60,7 +65,7 @@ package "Swarm Peers  (192.168.10.12+)" as PEERS_PKG #F5ECF5 {
 package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
   package "Mission Computer (MC)" as MC_PKG #CCDFF5 {
-    rectangle "Jetson Orin NX 16GB\n192.168.10.11\n──────────────────\nROS 2 Humble · CycloneDDS\nDocker Engine\ndrone-mc.target\n──────────────────\nC++17 application nodes\nAI inference (GPU)" as MC #A8CCEE
+    rectangle "Jetson Orin NX 16GB\n192.168.10.11\n──────────────────\nROS 2 Humble · CycloneDDS (same-host)\nzenoh-bridge-dds (cross-host mesh)\nDocker Engine\ndrone-mc.target\n──────────────────\nC++17 application nodes\nAI inference (GPU)" as MC #A8CCEE
   }
 
   package "Flight Control Computer (FCC)" as FCC_PKG #FFECD8 {
@@ -88,9 +93,11 @@ CAM -up-> MC : "  CSI\n  /camera/image_raw\n  ≥15 FPS"
 
 ' MC ↔ MANET
 MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel)\n  Swarm heartbeat / coordination (UDP)\n  192.168.10.x"
+MC .up.> AU1 : "  Zenoh mesh (zenoh-bridge-dds)\n  TCP :7447 — peer MCs (ZBD-001, done)\n  + Mission Orchestrator [proposal]"
 
 ' GCS ↔ MANET
 GCS <--> GU : "  MAVLink 2/UDP  →  FCC (Flight Telemetry ch.)\n  MAVLink 2/UDP  →  MC (separate ch.)\n  Mission upload · Commands · Telemetry"
+ORCH .down.> GU : "  Zenoh session\n  TCP :7447\n  Mission plan CRUD\n  [proposal — GCS-004]"
 
 ' MANET Mesh Network
 GU <-down-> MANET_NW : Mesh Network Datalink
@@ -109,10 +116,12 @@ legend right
   | Color | Subsystem |
   | <#A8CCEE> | Mission Computer (MC) |
   | <#FFD4A8> | Flight Controller (FCC) |
-  | <#B8DCBA> | Ground Control Station |
+  | <#B8DCBA> | Ground Control Station (QGroundControl) |
+  | <#C8D8F0> | Mission Orchestrator (another team's app, proposal) |
   | <#E8D8F0> | Swarm Peer MCs |
   | <#EDE0F8> | Onboard Sensors |
   | <#F5ECF5> | MC↔FCC Mission Protocol (MAVLink exception, IR-007) |
+  | Dashed line | Proposed, not yet implemented (GCS-004) |
 endlegend
 
 @enduml

@@ -39,6 +39,18 @@ of thing as `mavlink-router`: a standalone non-ROS daemon with its own build
 ticket plus a matching Dockerfile ticket. **Both `ZBD-001` and `DEP-006`
 below are already implemented** (not just planned) as of this update.
 
+**Update (2026-07-22, later same day):** clarified that "GCS" is two
+separate actors — QGroundControl (vehicle telemetry/control, unchanged,
+still MAVLink) and a **Mission Orchestrator** app (mission plan
+create/upload/update, built by another team, out of scope to implement).
+This project's deliverable for the latter is the interface spec plus the
+MC-side implementation serving it — see
+`MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` and new ticket `GCS-004` below
+(Zenoh-native, reuses `mc_msgs`, rides the `ZBD-001` mesh). Not yet
+started — see that spec's §8 for open items blocking implementation.
+`GCS-ZENOH-DESIGN-REVIEW.md` has the full analysis of why this traffic
+moves to Zenoh while QGC's traffic stays MAVLink.
+
 ---
 
 ## Current State (as of this audit)
@@ -89,6 +101,10 @@ Phase 2 — Core node logic (parallel tracks once Phase 1 lands)
     GCS-001 (MAVROS + channel + link status) ──> GCS-002 (mission upload FSM)
                                               └──> GCS-003 (telemetry mux, needs VIS-004, HM-001)
     MAVR-001 (mavlink-router build/config) — independent, needed before any HIL test
+    GCS-004 (mission_orchestrator_node, Zenoh plan-library CRUD) — needs
+             ZBD-001, independent of GCS-001/002/003 (different transport,
+             different GCS-side actor); 3 open items before implementation
+             starts, see MISSION-ORCHESTRATOR-INTERFACE-SPEC.md §8
 
   Track F (cross-host DDS transport — independent, not GCS-specific,
            grouped here since it's the same kind of standalone daemon):
@@ -634,6 +650,50 @@ continuous situational awareness.
 
 ---
 
+#### GCS-004: mission_orchestrator_node — Zenoh-native mission plan library
+
+**Points:** 8 — **Not started.** Full interface contract specified in
+`MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` (2026-07-22); this ticket tracks
+the MC-side implementation of that spec, not the Mission Orchestrator app
+itself (built by another team, out of scope).
+
+**Description:** As a developer, I want a new node exposing mission-plan
+CRUD (create/list/update/activate/delete) over Zenoh, reusing `mc_msgs`
+schemas directly rather than a second MAVLink custom dialect, so the
+Mission Orchestrator team has a concrete interface to build against —
+separate from and independent of QGC's MAVLink channel (GCS-001/002/003).
+
+**Acceptance Criteria:** Full detail in
+`MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` §4–§6. Summary:
+- 8 new `mc_msgs` types (`MissionPlan`, `MissionPlanSummary`,
+  `MissionPlanCreateRequest`, `MissionPlanUpdateRequest`,
+  `MissionPlanActivateRequest`, `MissionPlanDeleteRequest`,
+  `MissionPlanListRequest`, `MissionPlanListResponse`, `MissionPlanAck`).
+- `activate` produces exactly the same `mc_msgs/MissionUpload` on
+  `/mc/gcs/mission_upload` that `gcs_mavlink_node` produces today —
+  `mission_manager_node` (ME-001) needs zero changes.
+- Plan library persisted as one YAML file per plan under
+  `/var/drone-mc/mission_plans/`, additive to (not replacing)
+  `mission_manager_node`'s existing single-file mission persistence.
+- `config/zenoh-bridge-dds.json5`'s `allow` list widened to forward the new
+  `/mc/orchestrator/*` topics (currently `["^$"]`, forwards nothing).
+
+**Deliverables:**
+- `mc_msgs/msg/MissionPlan*.msg` × 8 + `CMakeLists.txt` entries.
+- `ws/src/gcs_comms/src/mission_orchestrator_node.{hpp,cpp}`.
+- `config/zenoh-bridge-dds.json5` allow-list update.
+- Node integration test: mock Zenoh peer issuing create/list/update/
+  activate/delete → correct persistence, correct `MissionPlanAck`
+  correlation, correct `/mc/gcs/mission_upload` publish on activate.
+
+**Relationships:** Depends on `ZBD-001` (the Zenoh mesh this rides).
+Independent of GCS-001/002/003 (different transport, different actor).
+Three open items block a confident estimate on the phase-gating/security
+sub-items — see `MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` §8 — resolve
+those before implementation starts.
+
+---
+
 #### MAVR-001: mavlink-router — build, config, and channel isolation
 
 **Points:** 4
@@ -1087,19 +1147,21 @@ deployability.
 | 2A — Mission/Swarm | SC-002, 003, 004, ME-001, 002, SC-001 | 55 |
 | 2B — Vision | VIS-001, 002, 003, 004 | 34 |
 | 2E — Gimbal Video | VU-001, 002 | 18 |
-| 2C — GCS | GCS-001, 002, 003, MAVR-001 | 24 |
+| 2C — GCS | GCS-001, 002, 003, 004, MAVR-001 | 32 |
 | 2D — Health | HM-001, 002, 003 | 17 |
 | 2F — Cross-Host DDS | ZBD-001 | 4 |
 | 3 — Deployment | DEP-001, 002, 003, 004, 005, 006 | 20 |
 | 4 — Test infra | TEST-001, 002, 003 | 27 |
-| **Total** | **32 tickets** | **219 pts ≈ 876 hrs ≈ 109.5 person-days** |
+| **Total** | **33 tickets** | **227 pts ≈ 908 hrs ≈ 113.5 person-days** |
 
-At ~21 working days/month, 219 points ≈ 5.2 person-months for a single
+At ~21 working days/month, 227 points ≈ 5.4 person-months for a single
 developer working this backlog alone — roughly in line with the 5-month
 horizon, with some slack for the unplanned work that always surfaces (SITL
 environment quirks, hardware bring-up issues, ICD gaps discovered mid-ticket
 the way FCC-006 discovered `IsrRole`/`FormationOffset`). `ZBD-001`/`DEP-006`
-(7 of the 219 points) are already done as of 2026-07-22.
+(7 of the 227 points) are already done as of 2026-07-22. `GCS-004` (8
+points, added 2026-07-22) has 3 open items blocking a confident start — see
+`MISSION-ORCHESTRATOR-INTERFACE-SPEC.md` §8.
 
 Not sequenced into specific weeks/months per current scope — re-run this
 sizing exercise once team size is known, or ask for a capacity-sequenced

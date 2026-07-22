@@ -15,9 +15,9 @@ Design is complete; implementation is underway. The 8 packages described in `SDD
 | `SDD-MC-001.md` | Software design: node designs, algorithms, deployment architecture |
 | `HID-MC-001.md` | Hardware interface specs (UART, CSI, Ethernet, power) |
 | `TP-MC-001.md` | Test plan: 4-level strategy (UT → NI → ST → HW) |
-| `diagrams/` | 24 PlantUML source files + rendered PNGs (01–24) |
+| `diagrams/` | 28 PlantUML source files + rendered PNGs (01–28) |
 
-Key diagrams: `02` (ROS 2 node topology), `03` (Docker/systemd deployment), `04` (mission state machine), `10` (FccBackend class hierarchy).
+Key diagrams: `02` (ROS 2 node topology), `03` (Docker/systemd deployment), `04` (mission state machine), `10` (FccBackend class hierarchy), `28` (system use cases — GCS Operator/QGC vs. Mission Planner/Orchestrator).
 
 ## Build System
 

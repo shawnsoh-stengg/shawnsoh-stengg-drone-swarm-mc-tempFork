@@ -54,7 +54,15 @@ package "PX4 FCC  (uXRCE-DDS bridge)" as FCC_PKG #FFECD8 {
 }
 
 package "GCS  (MAVLink 2/UDP  ·  192.168.10.10)" as GCS_PKG #D8EED8 {
-  component "QGroundControl\nMission upload · Commands\nTelemetry · Detections" as QGC #B8DCA8
+  component "QGroundControl\nVehicle telemetry/control\nCommands · Detections" as QGC #B8DCA8
+}
+
+' "GCS" is two separate actors (GCS-ZENOH-DESIGN-REVIEW.md): QGC above
+' (MAVLink, unchanged) and the Mission Orchestrator below (Zenoh, proposal
+' — GCS-004, MISSION-ORCHESTRATOR-INTERFACE-SPEC.md). Built by another
+' team; dashed = not yet implemented.
+package "Mission Orchestrator  (Zenoh  ·  another team's app)\n[proposal — GCS-004]" as ORCH_PKG #E0E8F8 {
+  component "Mission Orchestrator App\nMission plan library\nCreate · List · Update\nActivate · Delete" as ORCH_APP #C8D8F0;line.dashed
 }
 
 package "Swarm Peers  (MANET · 192.168.10.x)" as PEER_PKG #F5ECF5 {
@@ -78,6 +86,7 @@ package "fcc-bridge" as C_FCC #E0ECF8 {
 package "mavlink-router / gcs-comms" as C_GCS #E0F0E8 {
   component "mavlink_router\nv4 daemon\nChannel routing" as MLR #B8DCA8
   component "gcs_mavlink_node\n[MAVROS bridge]\nGCS↔MC MAVLink channel\nCommand · Telemetry · Detections" as GCS_NODE #90C890
+  component "mission_orchestrator_node\nMission plan library (Zenoh)\nCreate · List · Update\nActivate · Delete\n[proposal — GCS-004]" as ORCH_NODE #90C890;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════
@@ -126,6 +135,7 @@ package "health-monitor" as C_HEALTH #F0F0F0 {
 UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
 QGC <--> MLR : "MAVLink 2/UDP\nGCS↔MC channel"
 MLR <--> GCS_NODE
+ORCH_APP ..> ORCH_NODE : "Zenoh session (via zenoh-bridge-dds)\nTCP :7447\n[proposal — GCS-004]"
 PEERS <--> SWARM : "Swarm protocol/UDP\nMANET · 192.168.10.x"
 CAM --> CAMNODE : "CSI"
 GIMCAM --> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)"
@@ -145,6 +155,10 @@ EXEC --> HEALTH : "/mc/manager/heartbeat"
 
 ' GCS node → manager
 GCS_NODE -left-> EXEC : "/mc/gcs/command\n/mc/gcs/mission_upload"
+
+' Mission Orchestrator → manager (same topic, on activate — mission_manager_node
+' needs zero changes to accept either source, see MISSION-ORCHESTRATOR-INTERFACE-SPEC.md §5.4)
+ORCH_NODE ..> EXEC : "/mc/gcs/mission_upload (on activate)\n[proposal — GCS-004]"
 
 ' Swarm → consumers
 SWARM -down-> FORM : "/mc/swarm/peer_states"
@@ -185,6 +199,8 @@ legend right
   | <#C0A0E8> | vision |
   | <#90D0B0> | video-uplink |
   | <#D0D0D0> | health-monitor |
+  | <#C8D8F0> | Mission Orchestrator (another team's app) |
+  | Dashed border/line | Proposed, not yet implemented (GCS-004) |
 endlegend
 
 @enduml
