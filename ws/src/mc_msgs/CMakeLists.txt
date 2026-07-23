@@ -4,6 +4,8 @@ project(mc_msgs)
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(geographic_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/VehicleState.msg"
@@ -15,7 +17,20 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FccOffboardSetpoint.msg"
   "msg/GcsCommand.msg"
   "msg/LinkStatus.msg"
-  DEPENDENCIES std_msgs
+  "msg/MissionPhase.msg"
+  "msg/FormationOffset.msg"
+  "msg/SwarmPeer.msg"
+  "msg/SwarmPeerArray.msg"
+  "msg/VoronoiCell.msg"
+  "msg/Detection.msg"
+  "msg/DetectionArray.msg"
+  "msg/Track.msg"
+  "msg/TrackArray.msg"
+  "msg/VideoDownlinkStatus.msg"
+  "msg/SystemHealth.msg"
+  "msg/LocalisationMode.msg"
+  "msg/MissionUpload.msg"
+  DEPENDENCIES std_msgs geometry_msgs geographic_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)

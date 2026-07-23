@@ -24,6 +24,9 @@ RUN rm -f /etc/apt/sources.list.d/ros2.list \
 # ros-humble-rmw-cyclonedds-cpp: CycloneDDS RMW used on all nodes.
 # ros-humble-mavlink: generated MAVLink C headers — used by fcc_bridge's
 #   mission-protocol client (ICD §3.3, IR-007) and gcs_mavlink_node.
+# ros-humble-geographic-msgs: geographic_msgs/GeoPoint — not part of
+#   ros-base, but mc_msgs (ICD §9.2) depends on it for VoronoiCell.vertices
+#   and MissionUpload.search_polygon.
 # python3-colcon-*: workspace build tooling for service container build stages (SDD §12.1).
 #
 # `rosdep init` is scoped in its own `|| true` subshell — `&&`/`||` share
@@ -34,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rmw-cyclonedds-cpp \
         ros-humble-cyclonedds \
         ros-humble-mavlink \
+        ros-humble-geographic-msgs \
         python3-colcon-common-extensions \
         python3-colcon-mixin \
         python3-rosdep \
