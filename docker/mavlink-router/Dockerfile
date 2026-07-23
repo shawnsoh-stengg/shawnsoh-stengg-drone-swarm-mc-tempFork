@@ -6,8 +6,9 @@
 # 22.04 (matches the Jetson's JetPack 6.2.2 userland) rather than FROM
 # ros2-core, so this image doesn't drag in a ROS 2 toolchain it never uses.
 #
-# Before tagging a release, pin the exact upstream commit this was built
-# from (same policy as docker/ros2-core/Dockerfile's FROM-digest pin):
+# Pinned to an exact upstream commit (the tip of tag v4 as of 2026-07-23),
+# not the floating tag, so a re-build can't silently pick up a moved tag
+# (same policy as docker/ros2-core/Dockerfile's FROM-digest pin). To bump:
 #   git ls-remote --tags https://github.com/mavlink-router/mavlink-router.git
 FROM ubuntu:22.04 AS builder
 
@@ -18,10 +19,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsystemd-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ARG MAVLINK_ROUTER_VERSION=v4
+ARG MAVLINK_ROUTER_COMMIT=42529d55b665e0a9a29e424e186f514c56c2e5b5
 WORKDIR /build
-RUN git clone --recurse-submodules --depth 1 --branch "${MAVLINK_ROUTER_VERSION}" \
-        https://github.com/mavlink-router/mavlink-router.git .
+RUN git init -q . \
+    && git remote add origin https://github.com/mavlink-router/mavlink-router.git \
+    && git fetch --depth 1 origin "${MAVLINK_ROUTER_COMMIT}" \
+    && git checkout -q FETCH_HEAD \
+    && git submodule update --init --recursive --depth 1
 RUN meson setup build . --buildtype=release \
     && ninja -C build \
     && ninja -C build install

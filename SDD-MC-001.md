@@ -1163,7 +1163,8 @@ All configuration lives in `/etc/drone-mc/` (bind-mounted read-only into every c
   environment                  ← environment variables (§9.4 of ICD)
   cyclonedds.xml               ← CycloneDDS same-host (lo-only) DDS domain config
   zenoh-bridge-dds.json5       ← zenoh-bridge-dds cross-host DDS bridge config (peer list, mode, topic allow-list)
-  mavlink-router.conf          ← mavlink-router endpoint config
+  mavlink-router-channel-a.conf ← Channel A (GCS ↔ FCC) endpoint config
+  mavlink-router-channel-b.conf ← Channel B (GCS ↔ MC) endpoint config
   camera_calibration.yaml      ← camera intrinsics and distortion
   params/                      ← ROS 2 parameter YAML files per node
     fcc_bridge.yaml

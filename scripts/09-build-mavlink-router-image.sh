@@ -9,7 +9,7 @@
 # Usage:
 #   ./09-build-mavlink-router-image.sh              # tags mavlink-router:dev and :latest
 #   MC_VERSION=1.0.0 ./09-build-mavlink-router-image.sh
-#   MAVLINK_ROUTER_VERSION=v4 ./09-build-mavlink-router-image.sh
+#   MAVLINK_ROUTER_COMMIT=<sha> ./09-build-mavlink-router-image.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,7 @@ docker build \
     --tag "${IMAGE}:${IMAGE_TAG}" \
     --tag "${IMAGE}:latest" \
     --file "${REPO_ROOT}/docker/mavlink-router/Dockerfile" \
-    --build-arg "MAVLINK_ROUTER_VERSION=${MAVLINK_ROUTER_VERSION:-v4}" \
+    --build-arg "MAVLINK_ROUTER_COMMIT=${MAVLINK_ROUTER_COMMIT:-42529d55b665e0a9a29e424e186f514c56c2e5b5}" \
     "${REPO_ROOT}/docker/mavlink-router"
 
 echo "==> Build complete"
