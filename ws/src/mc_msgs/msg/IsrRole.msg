@@ -1,3 +1,9 @@
+# GAP NOTE: ICD-MC-001 §9's topic table has cited mc_msgs/IsrRole since it
+# was added, but no message body existed anywhere in the ICD (v0.1-DRAFT,
+# 2026-06-20) until this file. Authored locally 2026-07-26 to close that
+# hole — not sourced from an upstream ICD revision; needs ICD-owner
+# review/ratification.
+#
 # This drone's own ISR-election outcome — published by swarm_coordinator_node
 # on /mc/swarm/isr_role on change (SDD §6.2). Consumed by mission_manager_node
 # to gate the ISR_SELECTION -> VORONOI_PARTITION transition, whose guard is

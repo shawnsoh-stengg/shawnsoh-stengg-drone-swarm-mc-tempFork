@@ -1070,6 +1070,13 @@ bool success              # true = MAV_MISSION_ACCEPTED before timeout; false = 
 
 #### `mc_msgs/VisualOdometry`
 
+> **Gap note:** the §9 topic table (row `/mc/fcc/visual_odometry`) has cited
+> this type since it was added, but no message body existed anywhere in
+> ICD-MC-001 v0.1-DRAFT (2026-06-20) until now. The definition below was
+> authored locally on 2026-07-26 to close that hole — it is not sourced from
+> an upstream ICD revision and needs ICD-owner review/ratification against
+> the parent SRS before being treated as final.
+
 ```
 # GNSS-denied pose estimate from visual_localisation_node, forwarded to the
 # FCC via FccBackend::publish_visual_odometry() on /mc/fcc/visual_odometry
@@ -1194,6 +1201,13 @@ uint32  upload_id         # corresponding mission upload ID
 ```
 
 #### `mc_msgs/IsrRole`
+
+> **Gap note:** the §9 topic table (row `/mc/swarm/isr_role`) has cited this
+> type since it was added, but no message body existed anywhere in
+> ICD-MC-001 v0.1-DRAFT (2026-06-20) until now. The definition below was
+> authored locally on 2026-07-26 to close that hole — it is not sourced from
+> an upstream ICD revision and needs ICD-owner review/ratification against
+> the parent SRS before being treated as final.
 
 ```
 # This drone's own ISR-election outcome — published by swarm_coordinator_node

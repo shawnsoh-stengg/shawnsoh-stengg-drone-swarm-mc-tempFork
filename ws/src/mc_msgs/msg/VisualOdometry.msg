@@ -1,3 +1,9 @@
+# GAP NOTE: ICD-MC-001 §9's topic table has cited mc_msgs/VisualOdometry
+# since it was added, but no message body existed anywhere in the ICD
+# (v0.1-DRAFT, 2026-06-20) until this file. Authored locally 2026-07-26 to
+# close that hole — not sourced from an upstream ICD revision; needs
+# ICD-owner review/ratification.
+#
 # GNSS-denied pose estimate from visual_localisation_node, forwarded to the
 # FCC via FccBackend::publish_visual_odometry() on /mc/fcc/visual_odometry
 # while /mc/localisation_mode == VISUAL_ODOMETRY (SDD §8.1/§8.3), >= 10 Hz.
