@@ -15,23 +15,7 @@ Design phase is complete; ROS 2 package implementation is underway in
 
 ## Documentation
 
-All design artifacts live at the repo root and in `diagrams/`:
-
-| File | Purpose |
-|------|---------|
-| `SRS-MC-001.md` | Requirements (FR/IR/PR/SFR/SW tags — 80+ requirements) |
-| `ICD-MC-001.md` | Interface specifications for all 5 interface domains |
-| `SDD-MC-001.md` | Software design: node designs, algorithms, deployment architecture |
-| `HID-MC-001.md` | Hardware interface specs (UART, CSI, Ethernet, power) |
-| `TP-MC-001.md` | Test plan: 4-level strategy (UT → NI → ST → HW) |
-| `FCC-MISSION-CHANNEL-BACKLOG.md` | Follow-up tickets for the MC↔FCC mission protocol channel |
-| `diagrams/*.puml` | 28 PlantUML source diagrams (rendered to matching `.png`) |
-
-Key diagrams: `02` (ROS 2 node topology), `03` (Docker/systemd deployment),
-`04` (mission state machine), `10` (FccBackend class hierarchy).
-
-See `CLAUDE.md` for detailed architecture notes, design patterns, and the
-full repository layout.
+All design documents at /docs directory
 
 ## Platform
 
@@ -78,11 +62,11 @@ per-package `colcon build`/`colcon test` usage.
 ## Repository layout
 
 ```
-docker/ros2-core/      ros2-core base Docker image
-docker/fcc-bridge/     fcc-bridge service Docker image (FROM ros2-core)
-docker/mavlink-router/ mavlink-router service Docker image (standalone, not FROM ros2-core)
-config/                environment, per-node params, netplan, udev, systemd units
-ws/src/                ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
-scripts/               numbered setup/build/install scripts + smoke tests
-diagrams/              PlantUML architecture diagrams
+docker/ros2-core/       ros2-core base Docker image
+docker/fcc-bridge/      fcc-bridge service Docker image (FROM ros2-core)
+docker/mavlink-router/  mavlink-router service Docker image (standalone, not FROM ros2-core)
+config/                 environment, per-node params, netplan, udev, systemd units
+ws/src/                 ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
+scripts/                numbered setup/build/install scripts + smoke tests
+docs/                   architecture design documents
 ```

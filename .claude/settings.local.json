@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(command -v systemctl systemd-analyze)",
-      "Bash(systemctl --version)",
-      "Bash(ps -p 1 -o comm=)"
-    ]
-  }
-}
