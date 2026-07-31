@@ -18,7 +18,13 @@ IMAGE_TAG="${MC_VERSION:-dev}"
 IMAGE="ghcr.io/drone-mc/zenoh-bridge"
 
 echo "==> Building ${IMAGE}:${IMAGE_TAG}"
+# --platform linux/arm64: the Dockerfile's FROM ubuntu:22.04 is multi-arch, so
+# without this it silently builds for the host's native arch on an x86 dev/CI
+# box instead of the Jetson (aarch64) target the vendor .deb below is for. On
+# an x86 host, install QEMU first (see docker/ros2-core/Dockerfile's header
+# comment).
 docker build \
+    --platform linux/arm64 \
     --tag "${IMAGE}:${IMAGE_TAG}" \
     --tag "${IMAGE}:latest" \
     --file "${REPO_ROOT}/docker/zenoh-bridge/Dockerfile" \
