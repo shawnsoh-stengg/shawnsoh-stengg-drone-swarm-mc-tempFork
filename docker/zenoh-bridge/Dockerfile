@@ -29,11 +29,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL -o /tmp/zenoh-bridge-dds.zip \
+# zenoh-plugin-dds's .deb depends on zenohd (=version) — the base Zenoh
+# router daemon — but that binary ships from the separate eclipse-zenoh/zenoh
+# repo's own release, not from zenoh-plugin-dds's. Both pinned to the same
+# ${ZENOH_BRIDGE_DDS_VERSION} (zenoh-plugin-dds's releases track zenoh's
+# versioning exactly, hence the hard `=` dependency); both .deb sets are
+# installed together so apt can resolve that dependency from the local
+# files instead of needing it in an apt repo.
+RUN curl -fsSL -o /tmp/zenoh.zip \
+        "https://github.com/eclipse-zenoh/zenoh/releases/download/${ZENOH_BRIDGE_DDS_VERSION}/zenoh-${ZENOH_BRIDGE_DDS_VERSION}-aarch64-unknown-linux-gnu-debian.zip" \
+    && curl -fsSL -o /tmp/zenoh-bridge-dds.zip \
         "https://github.com/eclipse-zenoh/zenoh-plugin-dds/releases/download/${ZENOH_BRIDGE_DDS_VERSION}/zenoh-plugin-dds-${ZENOH_BRIDGE_DDS_VERSION}-aarch64-unknown-linux-gnu-debian.zip" \
+    && mkdir -p /tmp/zenoh-bridge-dds-deb \
+    && unzip -j /tmp/zenoh.zip 'zenohd_*.deb' -d /tmp/zenoh-bridge-dds-deb \
     && unzip -j /tmp/zenoh-bridge-dds.zip '*.deb' -d /tmp/zenoh-bridge-dds-deb \
     && apt-get update && apt-get install -y --no-install-recommends /tmp/zenoh-bridge-dds-deb/*.deb \
-    && rm -rf /tmp/zenoh-bridge-dds.zip /tmp/zenoh-bridge-dds-deb /var/lib/apt/lists/*
+    && rm -rf /tmp/zenoh.zip /tmp/zenoh-bridge-dds.zip /tmp/zenoh-bridge-dds-deb /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/drone-mc
 

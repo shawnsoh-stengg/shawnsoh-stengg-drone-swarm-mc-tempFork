@@ -13,6 +13,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(mavlink REQUIRED)
 find_package(mc_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(geographic_msgs REQUIRED)
 
 # GCS-001: gcs_mavlink_node — raw-MAVLink Channel B transport (ICD §4.1/§4.2),
 # GCS command decode, link-status heartbeat monitoring (SDD §11.1). Uses the
@@ -30,7 +32,7 @@ target_include_directories(gcs_mavlink_node_lib PUBLIC
   $<INSTALL_INTERFACE:include>
   ${mavlink_INCLUDE_DIRS}
 )
-ament_target_dependencies(gcs_mavlink_node_lib PUBLIC rclcpp mc_msgs)
+ament_target_dependencies(gcs_mavlink_node_lib PUBLIC rclcpp mc_msgs geometry_msgs geographic_msgs)
 
 add_executable(gcs_mavlink_node
   src/gcs_mavlink_node_main.cpp

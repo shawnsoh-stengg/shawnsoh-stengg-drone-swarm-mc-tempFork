@@ -26,7 +26,14 @@ RUN git init -q . \
     && git fetch --depth 1 origin "${MAVLINK_ROUTER_COMMIT}" \
     && git checkout -q FETCH_HEAD \
     && git submodule update --init --recursive --depth 1
-RUN meson setup build . --buildtype=release \
+# -Dsystemdsystemunitdir bypasses meson.build's `dependency('systemd')`
+# lookup (only reachable when this option is left at its default 'auto') —
+# that pkg-config module is `systemd.pc`, which is a *different* package
+# than the `libsystemd.pc` libsystemd-dev provides above and isn't shipped
+# by any package installed here. Harmless to skip: this project runs
+# mavlink-routerd from its own entrypoint.sh/container (SDD §12.2-§12.4),
+# never mavlink-router's own upstream-installed systemd unit.
+RUN meson setup build . --buildtype=release -Dsystemdsystemunitdir=/usr/lib/systemd/system \
     && ninja -C build \
     && ninja -C build install
 
@@ -36,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /etc/drone-mc
 
-COPY --from=builder /usr/local/bin/mavlink-routerd /usr/local/bin/mavlink-routerd
+COPY --from=builder /usr/bin/mavlink-routerd /usr/bin/mavlink-routerd
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

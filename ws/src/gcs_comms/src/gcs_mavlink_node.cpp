@@ -8,9 +8,15 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+
+#include "geographic_msgs/msg/geo_point.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "mc_msgs/msg/formation_offset.hpp"
+#include "mc_msgs/msg/swarm_peer.hpp"
 
 namespace gcs_comms
 {
@@ -18,6 +24,34 @@ namespace gcs_comms
 namespace
 {
 constexpr double kDefaultGcsLinkTimeoutS = 10.0;  // ICD §4.8
+
+// GCS-002: mission upload state machine (SDD §11.2, ICD §4.6 MC_MISSION_UPLOAD).
+// A custom mission_type distinguishes this handshake from any (channel-
+// isolated, so never actually seen here) FCC-bound MAVLINK_MSG_ID_MISSION_*
+// traffic — not in the common dialect's MAV_MISSION_TYPE enum, hence the raw
+// literal rather than a generated constant.
+constexpr uint8_t kMavMissionTypeMc = 3;
+
+// ICD §4.6 mission item `command` values for MC_MISSION_UPLOAD.
+constexpr uint16_t kCmdIngressWaypoint = 50200;
+constexpr uint16_t kCmdMusterPoint = 50201;
+constexpr uint16_t kCmdFormationOffset = 50202;
+constexpr uint16_t kCmdSearchAreaVertex = 50203;
+constexpr uint16_t kCmdSwarmPeerEntry = 50204;
+
+// Beyond SDD §11.2's pseudocode (a single 5 s abort timeout): re-requests
+// the outstanding item at this cadence rather than waiting the full 5 s on
+// one dropped UDP frame — standard MAVLink mission-protocol GCS behaviour,
+// applied here since gcs_mavlink_node plays the "receiver" role for this
+// handshake (SDD §11.2: it sends MISSION_REQUEST_INT and waits). Defaults
+// for the mission_request_retry_s_/mission_upload_timeout_s_ parameters.
+constexpr double kDefaultMissionRequestRetryS = 1.0;
+constexpr double kDefaultMissionUploadTimeoutS = 5.0;  // SDD §11.2
+
+// ICD §11.1 fixes the MC/peer subnet to 192.168.x.x; command 50204 (swarm
+// peer entry) only transmits the last two octets (ICD §4.6 gap note).
+constexpr uint8_t kSwarmPeerIpOctet1 = 192;
+constexpr uint8_t kSwarmPeerIpOctet2 = 168;
 
 std::string env_or(const char * name, const std::string & fallback)
 {
@@ -52,6 +86,12 @@ int open_loopback_socket(uint16_t port)
 
 GcsMavlinkNode::GcsMavlinkNode(const rclcpp::NodeOptions & options)
 : Node("gcs_mavlink_node", options),
+  mission_last_activity_(now()),
+  mission_last_request_sent_(now()),
+  mission_request_retry_s_(
+    declare_parameter("mission_request_retry_s", kDefaultMissionRequestRetryS)),
+  mission_upload_timeout_s_(
+    declare_parameter("mission_upload_timeout_s", kDefaultMissionUploadTimeoutS)),
   gcs_link_timeout_s_(declare_parameter("gcs_link_timeout_s", kDefaultGcsLinkTimeoutS)),
   last_gcs_heartbeat_(now())
 {
@@ -63,6 +103,8 @@ GcsMavlinkNode::GcsMavlinkNode(const rclcpp::NodeOptions & options)
   pub_command_ = create_publisher<mc_msgs::msg::GcsCommand>("/mc/gcs/command", rclcpp::QoS(10));
   pub_link_status_ =
     create_publisher<mc_msgs::msg::LinkStatus>("/mc/gcs/link_status", rclcpp::QoS(10));
+  pub_mission_upload_ =
+    create_publisher<mc_msgs::msg::MissionUpload>("/mc/gcs/mission_upload", rclcpp::QoS(10));
 
   timer_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   recv_timer_ = create_wall_timer(
@@ -89,6 +131,10 @@ GcsMavlinkNode::~GcsMavlinkNode()
 
 void GcsMavlinkNode::on_recv_timer()
 {
+  // Time-based, not event-based — must run every tick regardless of whether
+  // any datagram arrived this cycle (SDD §11.2 retry/timeout).
+  check_mission_upload_timers();
+
   uint8_t buf[512];
   sockaddr_in from{};
   socklen_t from_len = sizeof(from);
@@ -128,6 +174,12 @@ void GcsMavlinkNode::handle_message(const mavlink_message_t & msg, const sockadd
       break;
     case MAVLINK_MSG_ID_COMMAND_LONG:
       handle_command_long(msg, from);
+      break;
+    case MAVLINK_MSG_ID_MISSION_COUNT:
+      handle_mission_count(msg);
+      break;
+    case MAVLINK_MSG_ID_MISSION_ITEM_INT:
+      handle_mission_item_int(msg);
       break;
     default:
       break;
@@ -236,6 +288,219 @@ void GcsMavlinkNode::publish_link_status()
   msg.tx_packet_count = tx_packet_count_;
   msg.rx_drop_count = rx_drop_count_;
   pub_link_status_->publish(msg);
+}
+
+void GcsMavlinkNode::handle_mission_count(const mavlink_message_t & msg)
+{
+  mavlink_mission_count_t count_msg{};
+  mavlink_msg_mission_count_decode(&msg, &count_msg);
+
+  if (count_msg.target_system != system_id_ || count_msg.target_component != kComponentId ||
+    count_msg.mission_type != kMavMissionTypeMc)
+  {
+    return;  // not an MC_MISSION_UPLOAD handshake for this drone (ICD §4.1/§4.6)
+  }
+
+  // A fresh MISSION_COUNT always (re)starts the upload, even mid-RECEIVING —
+  // matches how GCS-side implementations retry a stalled handshake from
+  // scratch rather than resuming (SDD §11.2 has no explicit resume state).
+  mission_state_ = MissionUploadState::RECEIVING;
+  mission_expected_count_ = count_msg.count;
+  mission_items_received_ = 0;
+  mission_gcs_sysid_ = msg.sysid;
+  mission_gcs_compid_ = msg.compid;
+  mission_upload_msg_ = mc_msgs::msg::MissionUpload{};
+  mission_upload_msg_.upload_id = next_upload_id_++;
+  mission_last_activity_ = now();
+
+  RCLCPP_INFO(
+    get_logger(), "mission upload %u: expecting %u items", mission_upload_msg_.upload_id,
+    mission_expected_count_);
+
+  if (mission_expected_count_ == 0) {
+    // Degenerate empty upload — nothing to request, accept immediately.
+    send_mission_ack(MAV_MISSION_ACCEPTED);
+    mission_upload_msg_.header.stamp = now();
+    pub_mission_upload_->publish(mission_upload_msg_);
+    mission_state_ = MissionUploadState::IDLE;
+    return;
+  }
+
+  send_mission_request_int(0);
+}
+
+void GcsMavlinkNode::handle_mission_item_int(const mavlink_message_t & msg)
+{
+  if (mission_state_ != MissionUploadState::RECEIVING) {
+    return;
+  }
+
+  mavlink_mission_item_int_t item{};
+  mavlink_msg_mission_item_int_decode(&msg, &item);
+
+  if (item.target_system != system_id_ || item.target_component != kComponentId ||
+    item.mission_type != kMavMissionTypeMc)
+  {
+    return;
+  }
+
+  // Stale/duplicate/out-of-order item (SDD §11.2 "validate seq ==
+  // items_received") — ignored; the retry timer will re-request whatever
+  // seq we actually still need.
+  if (item.seq != mission_items_received_) {
+    return;
+  }
+
+  switch (item.command) {
+    case kCmdIngressWaypoint:
+    case kCmdMusterPoint:
+      decode_ingress_or_muster_item(item);
+      break;
+    case kCmdFormationOffset:
+      decode_formation_offset_item(item);
+      break;
+    case kCmdSearchAreaVertex:
+      decode_search_area_vertex_item(item);
+      break;
+    case kCmdSwarmPeerEntry:
+      decode_swarm_peer_entry_item(item);
+      break;
+    default:
+      RCLCPP_WARN(
+        get_logger(), "mission upload %u: unrecognised item command %u at seq %u — skipped",
+        mission_upload_msg_.upload_id, item.command, item.seq);
+      break;
+  }
+
+  ++mission_items_received_;
+  mission_last_activity_ = now();
+
+  if (mission_items_received_ == mission_expected_count_) {
+    send_mission_ack(MAV_MISSION_ACCEPTED);
+    mission_upload_msg_.header.stamp = now();
+    pub_mission_upload_->publish(mission_upload_msg_);
+    RCLCPP_INFO(
+      get_logger(), "mission upload %u: complete, %u items", mission_upload_msg_.upload_id,
+      mission_items_received_);
+    mission_state_ = MissionUploadState::IDLE;
+  } else {
+    send_mission_request_int(mission_items_received_);
+  }
+}
+
+void GcsMavlinkNode::check_mission_upload_timers()
+{
+  if (mission_state_ != MissionUploadState::RECEIVING) {
+    return;
+  }
+
+  if ((now() - mission_last_activity_).seconds() >= mission_upload_timeout_s_) {
+    abort_mission_upload("timeout");
+    return;
+  }
+
+  if ((now() - mission_last_request_sent_).seconds() >= mission_request_retry_s_) {
+    send_mission_request_int(mission_items_received_);
+  }
+}
+
+void GcsMavlinkNode::send_mission_request_int(uint16_t seq)
+{
+  if (!has_gcs_endpoint_) {
+    return;  // nowhere to send yet — mirrors send_heartbeat's guard
+  }
+  mavlink_message_t msg;
+  mavlink_msg_mission_request_int_pack(
+    system_id_, kComponentId, &msg, mission_gcs_sysid_, mission_gcs_compid_, seq,
+    kMavMissionTypeMc);
+  send_frame(msg, last_gcs_endpoint_);
+  mission_last_request_sent_ = now();
+}
+
+void GcsMavlinkNode::send_mission_ack(uint8_t result)
+{
+  mavlink_message_t msg;
+  mavlink_msg_mission_ack_pack(
+    system_id_, kComponentId, &msg, mission_gcs_sysid_, mission_gcs_compid_, result,
+    kMavMissionTypeMc, mission_upload_msg_.upload_id);
+  send_frame(msg, last_gcs_endpoint_);
+}
+
+void GcsMavlinkNode::abort_mission_upload(const char * reason)
+{
+  RCLCPP_WARN(
+    get_logger(), "mission upload %u aborted (%s) after %u/%u items",
+    mission_upload_msg_.upload_id, reason, mission_items_received_, mission_expected_count_);
+  send_mission_ack(MAV_MISSION_ERROR);
+  mission_state_ = MissionUploadState::IDLE;
+}
+
+void GcsMavlinkNode::decode_ingress_or_muster_item(const mavlink_mission_item_int_t & item)
+{
+  // ICD §4.6: x=lat×10^7, y=lon×10^7, z=alt(m). param1 (speed, ingress
+  // waypoint only) has no home in mc_msgs/MissionUpload.ingress_waypoints
+  // (geometry_msgs/PoseStamped carries no velocity field) — decoded but not
+  // stored. No yaw is transmitted either; orientation is left identity.
+  geometry_msgs::msg::PoseStamped wp;
+  wp.header.stamp = now();
+  wp.pose.position.x = static_cast<double>(item.x) / 1e7;  // lat, deg
+  wp.pose.position.y = static_cast<double>(item.y) / 1e7;  // lon, deg
+  wp.pose.position.z = static_cast<double>(item.z);        // alt, m
+  wp.pose.orientation.w = 1.0;
+  mission_upload_msg_.ingress_waypoints.push_back(wp);
+}
+
+void GcsMavlinkNode::decode_formation_offset_item(const mavlink_mission_item_int_t & item)
+{
+  // ICD §4.6 gap note: x/y are native int32 fields, scaled ×1000 (mm) for
+  // the N/E offsets; z is native float, so D needs no scaling.
+  mc_msgs::msg::FormationOffset offset;
+  offset.drone_id = static_cast<uint8_t>(std::lround(item.param1));
+  offset.n = static_cast<float>(item.x) / 1000.0F;
+  offset.e = static_cast<float>(item.y) / 1000.0F;
+  offset.d = item.z;
+  mission_upload_msg_.formation_offsets.push_back(offset);
+}
+
+void GcsMavlinkNode::decode_search_area_vertex_item(const mavlink_mission_item_int_t & item)
+{
+  // vertex_index/total_vertices (param1/param2) place this vertex correctly
+  // even if search-area items are interleaved with other item kinds in the
+  // flat MISSION_ITEM_INT seq stream (ICD §4.6).
+  const auto total_vertices = static_cast<size_t>(std::lround(item.param2));
+  const auto vertex_index = static_cast<size_t>(std::lround(item.param1));
+
+  if (total_vertices == 0 || vertex_index >= total_vertices) {
+    RCLCPP_WARN(
+      get_logger(), "mission upload %u: search area vertex index %zu/%zu out of range — skipped",
+      mission_upload_msg_.upload_id, vertex_index, total_vertices);
+    return;
+  }
+  if (mission_upload_msg_.search_polygon.size() != total_vertices) {
+    mission_upload_msg_.search_polygon.resize(total_vertices);
+  }
+
+  geographic_msgs::msg::GeoPoint vertex;
+  vertex.latitude = static_cast<double>(item.x) / 1e7;
+  vertex.longitude = static_cast<double>(item.y) / 1e7;
+  vertex.altitude = 0.0;  // not transmitted (ICD §4.6: `z` unused for this item)
+  mission_upload_msg_.search_polygon[vertex_index] = vertex;
+}
+
+void GcsMavlinkNode::decode_swarm_peer_entry_item(const mavlink_mission_item_int_t & item)
+{
+  // ICD §4.6 gap note: only drone_id + IP octets 3/4 are transmitted;
+  // octets 1-2 are the fixed 192.168.x.x subnet (ICD §11.1). Every other
+  // mc_msgs/SwarmPeer field is populated later from live peer traffic
+  // (SDD §5.4).
+  mc_msgs::msg::SwarmPeer peer;
+  peer.drone_id = static_cast<uint8_t>(std::lround(item.x));
+  const auto octet3 = static_cast<uint8_t>(std::lround(item.y));
+  const auto octet4 = static_cast<uint8_t>(std::lround(item.z));
+  peer.ip_address = std::to_string(kSwarmPeerIpOctet1) + "." +
+    std::to_string(kSwarmPeerIpOctet2) + "." + std::to_string(octet3) + "." +
+    std::to_string(octet4);
+  mission_upload_msg_.swarm_manifest.push_back(peer);
 }
 
 }  // namespace gcs_comms
