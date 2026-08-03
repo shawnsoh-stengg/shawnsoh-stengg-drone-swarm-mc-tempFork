@@ -6,10 +6,13 @@
   <description>
     GCS communication bridge (gcs_mavlink_node): raw-MAVLink link to the
     ground control station over Channel B (ICD §4.1/§4.2), GCS command
-    decode, link-status heartbeat monitoring (GCS-001), and the mission
-    upload state machine (GCS-002, SDD §11.2, ICD §4.6). The
-    MC_STATUS/MC_DETECTION/MC_HEALTH telemetry multiplexer (GCS-003) lands
-    separately. SDD-MC-001 §11. SRS refs: FR-060-064, IR-010-014.
+    decode, link-status heartbeat monitoring (GCS-001), the mission
+    upload state machine (GCS-002, SDD §11.2, ICD §4.6), and the
+    MC_STATUS/MC_DETECTION/MC_HEALTH telemetry multiplexer (GCS-003,
+    SDD §11.3). mc_mavlink_defs.xml documents the custom-message wire
+    format; gcs_mavlink_node.cpp hand-packs them (see that file's own
+    comments) rather than adding a mavgen codegen step. SDD-MC-001 §11.
+    SRS refs: FR-060-064, IR-010-014.
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>

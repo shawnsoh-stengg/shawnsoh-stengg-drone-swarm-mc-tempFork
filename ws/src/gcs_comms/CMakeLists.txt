@@ -57,6 +57,13 @@ install(
   DIRECTORY params/
   DESTINATION share/${PROJECT_NAME}/params
 )
+# Documentation only — not consumed by the build (GCS-003, see this file's
+# own header comment for why gcs_mavlink_node.cpp hand-packs against it
+# instead of generating a header from it via mavgen).
+install(
+  FILES mc_mavlink_defs.xml
+  DESTINATION share/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

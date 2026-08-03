@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -52,6 +54,103 @@ constexpr double kDefaultMissionUploadTimeoutS = 5.0;  // SDD §11.2
 // peer entry) only transmits the last two octets (ICD §4.6 gap note).
 constexpr uint8_t kSwarmPeerIpOctet1 = 192;
 constexpr uint8_t kSwarmPeerIpOctet2 = 168;
+
+// GCS-003: MC_STATUS/MC_DETECTION/MC_HEALTH (ICD §4.6, SDD §11.3) are
+// custom messages outside the common dialect ros-humble-mavlink ships
+// generated headers for, so there is no mavlink_msg_mc_status_pack() etc.
+// to call. Rather than adding a mavgen/pymavlink codegen step to the build
+// (this file's own CMakeLists.txt already chose raw mavlink.h over MAVROS
+// to keep the toolchain thin — same rationale applies here), these three
+// are hand-packed using the same generic, dialect-independent helpers
+// mavgen's own output would call: _mav_put_*/_MAV_RETURN_* (protocol.h) and
+// mavlink_finalize_message() (mavlink_helpers.h), both already pulled in
+// transitively by <mavlink/v2.0/common/mavlink.h>. The wire offsets and
+// CRC_EXTRA constants below were derived from
+// gcs_comms/mc_mavlink_defs.xml's field list (that file is the
+// authoritative source — see its own header comment) by running
+// pymavlink's field-sort (descending type size, stable on ties) and X25
+// CRC-extra algorithm offline, then verified against an actual `mavgen`
+// run of that exact file before being committed. If mc_mavlink_defs.xml's
+// field list for these messages ever changes, these constants must be
+// re-derived the same way — they do not update themselves.
+constexpr uint32_t kMsgIdMcStatus = 50100;
+constexpr uint8_t kLenMcStatus = 33;
+constexpr uint8_t kCrcExtraMcStatus = 24;
+
+constexpr uint32_t kMsgIdMcDetection = 50101;
+constexpr uint8_t kLenMcDetection = 55;
+constexpr uint8_t kCrcExtraMcDetection = 122;
+
+constexpr uint32_t kMsgIdMcHealth = 50103;
+constexpr uint8_t kLenMcHealth = 21;
+constexpr uint8_t kCrcExtraMcHealth = 127;
+
+void pack_mc_status(
+  mavlink_message_t & msg, uint8_t sysid, uint8_t compid, uint64_t time_usec, int32_t lat,
+  int32_t lon, int32_t alt_msl, uint16_t heading, uint16_t groundspeed, int16_t climb_rate,
+  uint16_t fault_mask, uint8_t battery_remaining, uint8_t mission_phase,
+  uint8_t localisation_mode, uint8_t peer_count, uint8_t isr_role)
+{
+  char buf[kLenMcStatus];
+  _mav_put_uint64_t(buf, 0, time_usec);
+  _mav_put_int32_t(buf, 8, lat);
+  _mav_put_int32_t(buf, 12, lon);
+  _mav_put_int32_t(buf, 16, alt_msl);
+  _mav_put_uint16_t(buf, 20, heading);
+  _mav_put_uint16_t(buf, 22, groundspeed);
+  _mav_put_int16_t(buf, 24, climb_rate);
+  _mav_put_uint16_t(buf, 26, fault_mask);
+  _mav_put_uint8_t(buf, 28, battery_remaining);
+  _mav_put_uint8_t(buf, 29, mission_phase);
+  _mav_put_uint8_t(buf, 30, localisation_mode);
+  _mav_put_uint8_t(buf, 31, peer_count);
+  _mav_put_uint8_t(buf, 32, isr_role);
+  std::memcpy(_MAV_PAYLOAD_NON_CONST(&msg), buf, kLenMcStatus);
+  msg.msgid = kMsgIdMcStatus;
+  mavlink_finalize_message(&msg, sysid, compid, kLenMcStatus, kLenMcStatus, kCrcExtraMcStatus);
+}
+
+void pack_mc_detection(
+  mavlink_message_t & msg, uint8_t sysid, uint8_t compid, uint64_t time_usec,
+  uint32_t detection_id, uint16_t class_id, uint16_t confidence, int32_t lat, int32_t lon,
+  int32_t alt, uint16_t pos_uncertainty, uint8_t drone_id, const char (& class_name)[24])
+{
+  char buf[kLenMcDetection];
+  _mav_put_uint64_t(buf, 0, time_usec);
+  _mav_put_uint32_t(buf, 8, detection_id);
+  _mav_put_int32_t(buf, 12, lat);
+  _mav_put_int32_t(buf, 16, lon);
+  _mav_put_int32_t(buf, 20, alt);
+  _mav_put_uint16_t(buf, 24, class_id);
+  _mav_put_uint16_t(buf, 26, confidence);
+  _mav_put_uint16_t(buf, 28, pos_uncertainty);
+  _mav_put_uint8_t(buf, 30, drone_id);
+  _mav_put_char_array(buf, 31, class_name, 24);
+  std::memcpy(_MAV_PAYLOAD_NON_CONST(&msg), buf, kLenMcDetection);
+  msg.msgid = kMsgIdMcDetection;
+  mavlink_finalize_message(
+    &msg, sysid, compid, kLenMcDetection, kLenMcDetection, kCrcExtraMcDetection);
+}
+
+void pack_mc_health(
+  mavlink_message_t & msg, uint8_t sysid, uint8_t compid, uint64_t time_usec, uint8_t cpu_load,
+  uint8_t mem_used, uint8_t disk_used, uint8_t gpu_temp, uint8_t cpu_temp, uint16_t fault_mask,
+  uint16_t node_alive_mask, uint32_t uptime_s)
+{
+  char buf[kLenMcHealth];
+  _mav_put_uint64_t(buf, 0, time_usec);
+  _mav_put_uint32_t(buf, 8, uptime_s);
+  _mav_put_uint16_t(buf, 12, fault_mask);
+  _mav_put_uint16_t(buf, 14, node_alive_mask);
+  _mav_put_uint8_t(buf, 16, cpu_load);
+  _mav_put_uint8_t(buf, 17, mem_used);
+  _mav_put_uint8_t(buf, 18, disk_used);
+  _mav_put_uint8_t(buf, 19, gpu_temp);
+  _mav_put_uint8_t(buf, 20, cpu_temp);
+  std::memcpy(_MAV_PAYLOAD_NON_CONST(&msg), buf, kLenMcHealth);
+  msg.msgid = kMsgIdMcHealth;
+  mavlink_finalize_message(&msg, sysid, compid, kLenMcHealth, kLenMcHealth, kCrcExtraMcHealth);
+}
 
 std::string env_or(const char * name, const std::string & fallback)
 {
@@ -116,6 +215,41 @@ GcsMavlinkNode::GcsMavlinkNode(const rclcpp::NodeOptions & options)
     [this] {on_heartbeat_timer();},
     timer_cb_group_);
 
+  // GCS-003 (SDD §11.3): own callback groups, distinct from timer_cb_group_
+  // above, so detection-heavy traffic on mux_sub_cb_group_ can never queue
+  // behind (or be queued behind by) GCS-001's command-decode path on
+  // recv_timer_.
+  mux_sub_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  rclcpp::SubscriptionOptions mux_sub_opts;
+  mux_sub_opts.callback_group = mux_sub_cb_group_;
+
+  sub_vehicle_state_ = create_subscription<mc_msgs::msg::VehicleState>(
+    "/mc/fcc/vehicle_state", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::VehicleState::SharedPtr msg) {on_vehicle_state(msg);},
+    mux_sub_opts);
+  sub_mission_phase_ = create_subscription<mc_msgs::msg::MissionPhase>(
+    "/mc/mission_phase", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::MissionPhase::SharedPtr msg) {on_mission_phase(msg);},
+    mux_sub_opts);
+  sub_localisation_mode_ = create_subscription<mc_msgs::msg::LocalisationMode>(
+    "/mc/localisation_mode", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::LocalisationMode::SharedPtr msg) {on_localisation_mode(msg);},
+    mux_sub_opts);
+  sub_health_ = create_subscription<mc_msgs::msg::SystemHealth>(
+    "/mc/health", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::SystemHealth::SharedPtr msg) {on_health(msg);},
+    mux_sub_opts);
+  sub_detections_ = create_subscription<mc_msgs::msg::DetectionArray>(
+    "/mc/detections", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::DetectionArray::SharedPtr msg) {on_detections(msg);},
+    mux_sub_opts);
+
+  mux_timer_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  mc_status_timer_ = create_wall_timer(
+    std::chrono::milliseconds(500),
+    [this] {on_mc_status_timer();},
+    mux_timer_cb_group_);
+
   RCLCPP_INFO(
     get_logger(),
     "gcs_mavlink_node started: system_id=%u, Channel B loopback port=%u, gcs_link_timeout=%.1f s",
@@ -164,9 +298,14 @@ void GcsMavlinkNode::handle_message(const mavlink_message_t & msg, const sockadd
 {
   // Learn/refresh mavlink-router's relay endpoint from every frame it
   // forwards us, not just heartbeats, so replies always target the freshest
-  // known source (header comment, last_gcs_endpoint_).
-  last_gcs_endpoint_ = from;
-  has_gcs_endpoint_ = true;
+  // known source (header comment, last_gcs_endpoint_). Locked: GCS-003's
+  // mux_sub_cb_group_/mux_timer_cb_group_ read these fields concurrently
+  // with this write (send_mutex_ header comment).
+  {
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    last_gcs_endpoint_ = from;
+    has_gcs_endpoint_ = true;
+  }
 
   switch (msg.msgid) {
     case MAVLINK_MSG_ID_HEARTBEAT:
@@ -237,6 +376,8 @@ void GcsMavlinkNode::on_heartbeat_timer()
 
 void GcsMavlinkNode::send_heartbeat()
 {
+  std::lock_guard<std::mutex> lock(send_mutex_);
+
   // Nowhere to send until mavlink-router has relayed at least one inbound
   // frame — its Channel B `GCS_MAVLINK_NODE` endpoint is a "Normal" UDP
   // endpoint on an OS-assigned ephemeral port (header comment,
@@ -256,6 +397,7 @@ void GcsMavlinkNode::send_heartbeat()
 
 void GcsMavlinkNode::send_command_ack(const sockaddr_in & to, uint16_t command, uint8_t result)
 {
+  std::lock_guard<std::mutex> lock(send_mutex_);
   mavlink_message_t msg;
   mavlink_msg_command_ack_pack(
     system_id_, kComponentId, &msg, command, result, /*progress=*/ 255, /*result_param2=*/ 0,
@@ -263,6 +405,11 @@ void GcsMavlinkNode::send_command_ack(const sockaddr_in & to, uint16_t command, 
   send_frame(msg, to);
 }
 
+// Callers must already hold send_mutex_ — this only serializes the actual
+// syscall + counter update, not the has_gcs_endpoint_ check or the
+// pack/finalize call that precedes it (both also need the lock, so every
+// caller takes it once, up front, for its whole body — see send_mutex_'s
+// header comment).
 void GcsMavlinkNode::send_frame(const mavlink_message_t & msg, const sockaddr_in & to)
 {
   uint8_t buf[MAVLINK_MAX_PACKET_LEN];
@@ -406,6 +553,7 @@ void GcsMavlinkNode::check_mission_upload_timers()
 
 void GcsMavlinkNode::send_mission_request_int(uint16_t seq)
 {
+  std::lock_guard<std::mutex> lock(send_mutex_);
   if (!has_gcs_endpoint_) {
     return;  // nowhere to send yet — mirrors send_heartbeat's guard
   }
@@ -419,6 +567,7 @@ void GcsMavlinkNode::send_mission_request_int(uint16_t seq)
 
 void GcsMavlinkNode::send_mission_ack(uint8_t result)
 {
+  std::lock_guard<std::mutex> lock(send_mutex_);
   mavlink_message_t msg;
   mavlink_msg_mission_ack_pack(
     system_id_, kComponentId, &msg, mission_gcs_sysid_, mission_gcs_compid_, result,
@@ -501,6 +650,128 @@ void GcsMavlinkNode::decode_swarm_peer_entry_item(const mavlink_mission_item_int
     std::to_string(kSwarmPeerIpOctet2) + "." + std::to_string(octet3) + "." +
     std::to_string(octet4);
   mission_upload_msg_.swarm_manifest.push_back(peer);
+}
+
+// --- GCS-003: telemetry multiplexer (SDD §11.3, ICD §4.6) ---
+
+void GcsMavlinkNode::on_vehicle_state(const mc_msgs::msg::VehicleState::SharedPtr msg)
+{
+  latest_vehicle_state_ = *msg;
+  has_vehicle_state_ = true;
+}
+
+void GcsMavlinkNode::on_mission_phase(const mc_msgs::msg::MissionPhase::SharedPtr msg)
+{
+  latest_mission_phase_ = msg->phase;
+}
+
+void GcsMavlinkNode::on_localisation_mode(const mc_msgs::msg::LocalisationMode::SharedPtr msg)
+{
+  latest_localisation_mode_ = msg->mode;
+}
+
+void GcsMavlinkNode::on_health(const mc_msgs::msg::SystemHealth::SharedPtr msg)
+{
+  // Cached for the next MC_STATUS tick (send_mc_status()); the full message
+  // itself is relayed as its own MC_HEALTH right now, not deferred to that
+  // tick (SDD §11.3: "health updates are event-driven").
+  latest_fault_mask_ = msg->fault_mask;
+  send_mc_health(*msg);
+}
+
+void GcsMavlinkNode::on_detections(const mc_msgs::msg::DetectionArray::SharedPtr msg)
+{
+  // ICD §4.6 MC_DETECTION is a single-target message; DetectionArray may
+  // carry several detections from one frame — one MC_DETECTION per element.
+  for (const auto & detection : msg->detections) {
+    send_mc_detection(detection);
+  }
+}
+
+void GcsMavlinkNode::on_mc_status_timer()
+{
+  if (!has_vehicle_state_) {
+    return;  // nothing meaningful to report before fcc_bridge_node's first publish
+  }
+  send_mc_status();
+}
+
+void GcsMavlinkNode::send_mc_status()
+{
+  std::lock_guard<std::mutex> lock(send_mutex_);
+  if (!has_gcs_endpoint_) {
+    return;
+  }
+
+  const auto & vs = latest_vehicle_state_;
+
+  // ICD §4.6: heading is cdeg in [0, 36000) — VehicleState.heading is rad
+  // from North and may be negative, so convert to degrees and wrap.
+  double heading_deg = std::fmod(vs.heading * 180.0 / M_PI, 360.0);
+  if (heading_deg < 0.0) {
+    heading_deg += 360.0;
+  }
+
+  mavlink_message_t msg;
+  pack_mc_status(
+    msg, system_id_, kComponentId, static_cast<uint64_t>(now().nanoseconds() / 1000),
+    static_cast<int32_t>(std::lround(vs.lat * 1e7)),
+    static_cast<int32_t>(std::lround(vs.lon * 1e7)),
+    static_cast<int32_t>(std::lround(vs.alt_msl * 1000.0)),
+    static_cast<uint16_t>(std::lround(heading_deg * 100.0)),
+    static_cast<uint16_t>(std::lround(vs.groundspeed * 100.0)),
+    // Climb rate is positive-up (ICD §4.6); VehicleState.vz is NED down.
+    static_cast<int16_t>(std::lround(-vs.vz * 100.0)),
+    latest_fault_mask_, static_cast<uint8_t>(std::lround(vs.battery_pct * 100.0)),
+    latest_mission_phase_, latest_localisation_mode_,
+    // peer_count/isr_role: no swarm-state topic is in this ticket's scope
+    // (GCS-003 AC lists only vehicle_state/mission_phase/detections/
+    // health/localisation_mode) — left at 0 pending a future ticket wiring
+    // /mc/swarm/peer_states and /mc/swarm/isr_role in here too.
+    /*peer_count=*/ 0, /*isr_role=*/ 0);
+  send_frame(msg, last_gcs_endpoint_);
+}
+
+void GcsMavlinkNode::send_mc_detection(const mc_msgs::msg::Detection & detection)
+{
+  std::lock_guard<std::mutex> lock(send_mutex_);
+  if (!has_gcs_endpoint_) {
+    return;
+  }
+
+  char class_name[24] = {};
+  // ICD §4.6: char[24], null-terminated — truncate rather than overflow if
+  // a longer class label ever reaches perception_down_node/
+  // perception_front_node's class registry.
+  std::strncpy(class_name, detection.class_name.c_str(), sizeof(class_name) - 1);
+
+  mavlink_message_t msg;
+  pack_mc_detection(
+    msg, system_id_, kComponentId, detection.frame_timestamp_us, detection.detection_id,
+    detection.class_id, static_cast<uint16_t>(std::lround(detection.confidence * 10000.0)),
+    static_cast<int32_t>(std::lround(detection.lat * 1e7)),
+    static_cast<int32_t>(std::lround(detection.lon * 1e7)),
+    static_cast<int32_t>(std::lround(detection.alt_msl * 1000.0)),
+    static_cast<uint16_t>(std::lround(detection.pos_uncertainty_m * 100.0)),
+    // This drone's own ID — /mc/detections is this MC's own perception
+    // output (ICD §4.6 "Reporting drone ID").
+    system_id_, class_name);
+  send_frame(msg, last_gcs_endpoint_);
+}
+
+void GcsMavlinkNode::send_mc_health(const mc_msgs::msg::SystemHealth & health)
+{
+  std::lock_guard<std::mutex> lock(send_mutex_);
+  if (!has_gcs_endpoint_) {
+    return;
+  }
+
+  mavlink_message_t msg;
+  pack_mc_health(
+    msg, system_id_, kComponentId, static_cast<uint64_t>(now().nanoseconds() / 1000),
+    health.cpu_pct, health.mem_pct, health.disk_pct, health.gpu_temp_c, health.cpu_temp_c,
+    health.fault_mask, health.node_alive_mask, health.uptime_s);
+  send_frame(msg, last_gcs_endpoint_);
 }
 
 }  // namespace gcs_comms

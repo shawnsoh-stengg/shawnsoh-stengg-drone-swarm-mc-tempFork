@@ -1,0 +1,110 @@
+<?xml version="1.0"?>
+<!--
+  mc_mavlink_defs.xml — custom MAVLink dialect for the GCS<->MC Channel B
+  telemetry multiplexer (SDD-MC-001 §11.3, GCS-003) and the ICD-MC-001.md
+  §4.6 custom-message catalogue. User-defined ID range 50100-50199 per
+  ICD §4.6; 50104/50105 are reserved for the (proposed, not yet
+  implemented) Mission Orchestrator interface and must not be reused here
+  (MISSION-ORCHESTRATOR-MAVLINK-INTERFACE-SPEC.md §4).
+
+  Implementation note (gcs_mavlink_node, 2026-08-02): this file is the
+  authoritative field-list/documentation source for MC_STATUS/MC_DETECTION/
+  MC_HEALTH, but gcs_mavlink_node.cpp does NOT generate C headers from it
+  via mavgen at build time — ros-humble-mavlink (docker/ros2-core/Dockerfile)
+  ships only pre-generated common-dialect headers, not the generator
+  itself, and adding a pymavlink/mavgen build dependency for three messages
+  would be a heavier toolchain footprint than this project's existing
+  "no MAVROS, raw mavlink.h" decision (gcs_comms/CMakeLists.txt) already
+  accepted for the whole node. Instead, the three messages below are
+  hand-packed in gcs_mavlink_node.cpp using the same generic,
+  dialect-independent helpers mavgen's own output would call
+  (_mav_put_*/_MAV_RETURN_* in protocol.h, mavlink_finalize_message() in
+  mavlink_helpers.h — both already pulled in transitively by
+  <mavlink/v2.0/common/mavlink.h>). The wire offsets and CRC_EXTRA values
+  hard-coded there were derived from this exact field list by running
+  pymavlink's own field-sort (descending type size, stable on ties) and
+  X25 CRC-extra algorithm offline, then cross-checked against known-good
+  dialect constants (HEARTBEAT=50, GLOBAL_POSITION_INT=104) before being
+  committed. If this file's field list for MC_STATUS/MC_DETECTION/MC_HEALTH
+  ever changes, gcs_mavlink_node.cpp's hard-coded LEN/CRC_EXTRA constants
+  must be re-derived the same way — they will not update themselves.
+-->
+<mavlink>
+  <version>1</version>
+  <dialect>0</dialect>
+  <include>common.xml</include>
+  <enums>
+    <enum name="MC_MISSION_PHASE">
+      <description>Mission state machine phase (ICD-MC-001 §10.6, mc_msgs/MissionPhase).</description>
+      <entry value="0" name="MC_MISSION_PHASE_PREFLIGHT"/>
+      <entry value="1" name="MC_MISSION_PHASE_ARMING"/>
+      <entry value="2" name="MC_MISSION_PHASE_TAKEOFF"/>
+      <entry value="3" name="MC_MISSION_PHASE_INGRESS"/>
+      <entry value="4" name="MC_MISSION_PHASE_MUSTER"/>
+      <entry value="5" name="MC_MISSION_PHASE_ISR_SELECTION"/>
+      <entry value="6" name="MC_MISSION_PHASE_VORONOI_PARTITION"/>
+      <entry value="7" name="MC_MISSION_PHASE_SEARCH"/>
+      <entry value="8" name="MC_MISSION_PHASE_RETURN"/>
+      <entry value="9" name="MC_MISSION_PHASE_LAND"/>
+      <entry value="255" name="MC_MISSION_PHASE_FAULT"/>
+    </enum>
+    <enum name="MC_LOCALISATION_MODE">
+      <description>GNSS/visual-odometry handover state (mc_msgs/LocalisationMode).</description>
+      <entry value="0" name="MC_LOCALISATION_MODE_GNSS"/>
+      <entry value="1" name="MC_LOCALISATION_MODE_VISUAL_ODOMETRY"/>
+    </enum>
+  </enums>
+  <messages>
+    <message id="50100" name="MC_STATUS">
+      <description>
+        MC-specific vehicle/mission status, replacing/supplementing standard
+        GLOBAL_POSITION_INT (ICD-MC-001 §4.6). Rate: >= 2 Hz (FR-062).
+        Direction: MC -> GCS.
+      </description>
+      <field type="uint64_t" name="time_usec" units="us">UTC timestamp</field>
+      <field type="int32_t" name="lat" units="degE7">Latitude</field>
+      <field type="int32_t" name="lon" units="degE7">Longitude</field>
+      <field type="int32_t" name="alt_msl" units="mm">Altitude MSL</field>
+      <field type="uint16_t" name="heading" units="cdeg">Vehicle heading, 0-36000</field>
+      <field type="uint16_t" name="groundspeed" units="cm/s">Groundspeed</field>
+      <field type="int16_t" name="climb_rate" units="cm/s">Climb rate, positive = up</field>
+      <field type="uint8_t" name="battery_remaining" units="%">Battery state of charge, 0-100</field>
+      <field type="uint8_t" name="mission_phase" enum="MC_MISSION_PHASE">Current mission phase</field>
+      <field type="uint8_t" name="localisation_mode" enum="MC_LOCALISATION_MODE">GNSS vs visual-odometry</field>
+      <field type="uint16_t" name="fault_mask">Active faults bitmask (ICD §10.8, mc_msgs/FaultEvent bits)</field>
+      <field type="uint8_t" name="peer_count">Number of swarm peers currently ALIVE</field>
+      <field type="uint8_t" name="isr_role">0=non-ISR, 1=ISR</field>
+    </message>
+    <message id="50101" name="MC_DETECTION">
+      <description>
+        Event-driven AI detection report, published within 1 s of detection
+        (FR-043, ICD-MC-001 §4.6). Direction: MC -> GCS.
+      </description>
+      <field type="uint64_t" name="time_usec" units="us">UTC timestamp of frame capture</field>
+      <field type="uint32_t" name="detection_id">Monotonically increasing detection counter</field>
+      <field type="uint16_t" name="class_id">Detection class label ID</field>
+      <field type="uint16_t" name="confidence">Confidence x 10000 (9500 = 0.95)</field>
+      <field type="int32_t" name="lat" units="degE7">Estimated geodetic latitude of target</field>
+      <field type="int32_t" name="lon" units="degE7">Estimated geodetic longitude of target</field>
+      <field type="int32_t" name="alt" units="mm">Estimated target altitude MSL</field>
+      <field type="uint16_t" name="pos_uncertainty" units="cm">1-sigma horizontal position uncertainty</field>
+      <field type="uint8_t" name="drone_id">Reporting drone ID</field>
+      <field type="char[24]" name="class_name">Null-terminated class label string</field>
+    </message>
+    <message id="50103" name="MC_HEALTH">
+      <description>
+        Aggregate system health, rate >= 1 Hz (FR-071, ICD-MC-001 §4.6).
+        Direction: MC -> GCS.
+      </description>
+      <field type="uint64_t" name="time_usec" units="us">UTC timestamp</field>
+      <field type="uint8_t" name="cpu_load" units="%">Total CPU utilisation</field>
+      <field type="uint8_t" name="mem_used" units="%">RAM utilisation</field>
+      <field type="uint8_t" name="disk_used" units="%">Disk utilisation, primary partition</field>
+      <field type="uint8_t" name="gpu_temp" units="degC">GPU temperature</field>
+      <field type="uint8_t" name="cpu_temp" units="degC">CPU package temperature</field>
+      <field type="uint16_t" name="fault_mask">Active faults bitmask (ICD §10.8)</field>
+      <field type="uint16_t" name="node_alive_mask">Node liveness flags (ICD §10.9)</field>
+      <field type="uint32_t" name="uptime_s" units="s">MC uptime</field>
+    </message>
+  </messages>
+</mavlink>

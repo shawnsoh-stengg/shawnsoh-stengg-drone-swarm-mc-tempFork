@@ -7,20 +7,28 @@
 
 #include <mavlink/v2.0/common/mavlink.h>
 
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 
+#include "mc_msgs/msg/detection.hpp"
+#include "mc_msgs/msg/detection_array.hpp"
 #include "mc_msgs/msg/gcs_command.hpp"
 #include "mc_msgs/msg/link_status.hpp"
+#include "mc_msgs/msg/localisation_mode.hpp"
+#include "mc_msgs/msg/mission_phase.hpp"
 #include "mc_msgs/msg/mission_upload.hpp"
+#include "mc_msgs/msg/system_health.hpp"
+#include "mc_msgs/msg/vehicle_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 
-// GCS-001/GCS-002: gcs_mavlink_node — GCS<->MC Channel B transport (ICD
-// §4.1/§4.2), GCS command decode (§4.5), link-status heartbeat monitoring
-// (§4.8, SDD §11.1), and the mission-upload state machine (SDD §11.2, ICD
-// §4.6 MC_MISSION_UPLOAD). MC_STATUS/MC_DETECTION/MC_HEALTH telemetry
-// multiplexer (SDD §11.3) is still GCS-003 — that piece only reads other
-// topics and republishes them, matching fcc_bridge_node's "thin adapter"
-// philosophy for the equivalent MC<->FCC seam.
+// GCS-001/GCS-002/GCS-003: gcs_mavlink_node — GCS<->MC Channel B transport
+// (ICD §4.1/§4.2), GCS command decode (§4.5), link-status heartbeat
+// monitoring (§4.8, SDD §11.1), the mission-upload state machine (SDD §11.2,
+// ICD §4.6 MC_MISSION_UPLOAD), and the MC_STATUS/MC_DETECTION/MC_HEALTH
+// telemetry multiplexer (SDD §11.3). Matches fcc_bridge_node's "thin
+// adapter" philosophy for the equivalent MC<->FCC seam: it only reads other
+// topics and republishes them, zero business logic.
 namespace gcs_comms
 {
 
@@ -76,6 +84,61 @@ private:
   void decode_search_area_vertex_item(const mavlink_mission_item_int_t & item);
   void decode_swarm_peer_entry_item(const mavlink_mission_item_int_t & item);
 
+  // --- GCS-003: telemetry multiplexer (SDD §11.3, ICD §4.6 MC_STATUS/
+  // MC_DETECTION/MC_HEALTH). Subscriptions run on mux_sub_cb_group_
+  // (reentrant) and the aggregation timer on mux_timer_cb_group_ (mutually
+  // exclusive) — both distinct from timer_cb_group_ above, so a burst of
+  // detection traffic can never queue behind, or delay, GCS-001's
+  // command-decode path on recv_timer_ (SDD §2.1 threading model:
+  // reentrant for subscription callbacks, mutually exclusive for timers).
+  void on_vehicle_state(const mc_msgs::msg::VehicleState::SharedPtr msg);
+  void on_mission_phase(const mc_msgs::msg::MissionPhase::SharedPtr msg);
+  void on_localisation_mode(const mc_msgs::msg::LocalisationMode::SharedPtr msg);
+  // Also the event-driven trigger for an immediate MC_HEALTH publish (SDD
+  // §11.3: "health updates are event-driven").
+  void on_health(const mc_msgs::msg::SystemHealth::SharedPtr msg);
+  // Event-driven: emits one MC_DETECTION per element (ICD §4.6 MC_DETECTION
+  // is a single-target message; DetectionArray may carry several per frame).
+  void on_detections(const mc_msgs::msg::DetectionArray::SharedPtr msg);
+  // 500 ms (SDD §11.3): aggregates the cached latest_* values below into one
+  // outgoing MC_STATUS.
+  void on_mc_status_timer();
+
+  void send_mc_status();
+  void send_mc_detection(const mc_msgs::msg::Detection & detection);
+  void send_mc_health(const mc_msgs::msg::SystemHealth & health);
+
+  mc_msgs::msg::VehicleState latest_vehicle_state_;
+  // Gates on_mc_status_timer() — nothing meaningful to report before
+  // fcc_bridge_node's first /mc/fcc/vehicle_state publish.
+  bool has_vehicle_state_{false};
+  uint8_t latest_mission_phase_{mc_msgs::msg::MissionPhase::PREFLIGHT};
+  uint8_t latest_localisation_mode_{mc_msgs::msg::LocalisationMode::MODE_GNSS_PRIMARY};
+  // Cached from /mc/health for MC_STATUS.fault_mask; the full SystemHealth
+  // message itself is relayed immediately as MC_HEALTH in on_health(),
+  // rather than waiting for the next timer tick (SDD §11.3).
+  uint16_t latest_fault_mask_{0};
+
+  rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
+  rclcpp::Subscription<mc_msgs::msg::MissionPhase>::SharedPtr sub_mission_phase_;
+  rclcpp::Subscription<mc_msgs::msg::LocalisationMode>::SharedPtr sub_localisation_mode_;
+  rclcpp::Subscription<mc_msgs::msg::SystemHealth>::SharedPtr sub_health_;
+  rclcpp::Subscription<mc_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
+  rclcpp::CallbackGroup::SharedPtr mux_sub_cb_group_;
+  rclcpp::CallbackGroup::SharedPtr mux_timer_cb_group_;
+  rclcpp::TimerBase::SharedPtr mc_status_timer_;
+
+  // Guards last_gcs_endpoint_/has_gcs_endpoint_ and serializes every
+  // pack+finalize+send call site (existing ones included). Before GCS-003,
+  // every outbound frame was sent from recv_timer_/heartbeat_timer_, which
+  // already shared one MutuallyExclusive group — safe by construction.
+  // GCS-003 adds a second, concurrently-running execution context
+  // (mux_sub_cb_group_/mux_timer_cb_group_ above) that also sends, and
+  // mavlink_finalize_message() (mavlink_helpers.h) mutates process-global
+  // per-channel state (MAVLINK_COMM_0's outbound sequence counter) that was
+  // never designed for concurrent callers — this mutex is the fix.
+  std::mutex send_mutex_;
+
   MissionUploadState mission_state_{MissionUploadState::IDLE};
   uint16_t mission_expected_count_{0};
   uint16_t mission_items_received_{0};
@@ -113,7 +176,10 @@ private:
   bool has_gcs_heartbeat_{false};
   rclcpp::Time last_gcs_heartbeat_;
   uint32_t rx_packet_count_{0};
-  uint32_t tx_packet_count_{0};
+  // Written under send_mutex_ (every send site), but read by
+  // publish_link_status() on timer_cb_group_ without taking that lock —
+  // atomic rather than requiring a lock just for this one read.
+  std::atomic<uint32_t> tx_packet_count_{0};
   uint32_t rx_drop_count_{0};
 
   rclcpp::Publisher<mc_msgs::msg::GcsCommand>::SharedPtr pub_command_;
