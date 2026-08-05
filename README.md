@@ -55,7 +55,7 @@ sudo systemctl start drone-mc.target
 ```
 
 Each numbered script has a `<n>b-smoke-test-*.sh` companion that verifies
-the previous step. See `CLAUDE.md` for build variants (debug builds,
+the previous step. See /docs for build variants (debug builds,
 alternate install directories, versioned image tags) and native
 per-package `colcon build`/`colcon test` usage.
 

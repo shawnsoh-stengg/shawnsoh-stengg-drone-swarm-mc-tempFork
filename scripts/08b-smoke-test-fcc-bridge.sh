@@ -19,7 +19,13 @@ check() {
     fi
 }
 
-RUN=(docker run --rm --volume "${INSTALL_DIR}:/opt/drone-mc/install:ro" "${IMAGE}")
+# --network=host matches every drone-mc-*.service unit (config/systemd/) —
+# without it, this container gets its own network namespace and misses the
+# net.core.rmem_max/wmem_max floor 01-install-os.sh sets on the host's
+# default netns (those sysctls are per-netns, not global), so
+# rmw_cyclonedds_cpp's domain creation fails the same way it would if the
+# host had never been tuned.
+RUN=(docker run --rm --network=host --volume "${INSTALL_DIR}:/opt/drone-mc/install:ro" "${IMAGE}")
 SOURCE="source /opt/ros/humble/install/setup.bash && source /opt/drone-mc/install/setup.bash"
 
 check "fcc_bridge package registered" "${RUN[@]}" bash -c \

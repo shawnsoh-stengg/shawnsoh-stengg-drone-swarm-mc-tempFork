@@ -41,7 +41,12 @@ cid=""
 cleanup() { [[ -n "${cid}" ]] && docker rm -f "${cid}" &>/dev/null || true; }
 trap cleanup EXIT
 
-cid="$(docker run -d --rm --name mc-xrce-agent-smoke \
+# --network=host matches every drone-mc-*.service unit (config/systemd/) —
+# without it this container gets its own netns and misses the
+# net.core.rmem_max/wmem_max floor 01-install-os.sh sets on the host's
+# default netns (those sysctls are per-netns), so fcc_bridge_node's
+# rmw_cyclonedds_cpp domain creation aborts on startup.
+cid="$(docker run -d --rm --network=host --name mc-xrce-agent-smoke \
     -e FCC_TRANSPORT=ethernet \
     -e FCC_ETH_PORT="${AGENT_PORT}" \
     -e FCC_ETH_IP=127.0.0.1 \

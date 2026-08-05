@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 01-install-os.sh — Base OS configuration on the Jetson: dual-IP Netplan
-# (HIF-002/HIF-004) and the ttyTHS1 udev rule (HIF-001).
+# (HIF-002/HIF-004), the ttyTHS1 udev rule (HIF-001), and the CycloneDDS
+# socket buffer sysctl floor (INFRA-004).
 # Companion smoke test: 01b-smoke-test-os.sh
 #
 # Prerequisite: the Jetson module has already been flashed with JetPack 6.2.2
@@ -55,6 +56,10 @@ echo "==> Installing /etc/udev/rules.d/99-drone-mc.rules (HIF-001 ttyTHS1 permis
 install -m 644 "${REPO_ROOT}/config/udev/99-drone-mc.rules" /etc/udev/rules.d/99-drone-mc.rules
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=tty
+
+echo "==> Installing /etc/sysctl.d/99-drone-mc.conf (CycloneDDS socket buffer floor)"
+install -m 644 "${REPO_ROOT}/config/sysctl/99-drone-mc.conf" /etc/sysctl.d/99-drone-mc.conf
+sysctl --system &>/dev/null
 
 TARGET_USER="${SUDO_USER:-${USER}}"
 if ! id -nG "${TARGET_USER}" | grep -qw dialout; then
