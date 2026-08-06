@@ -1,33 +1,45 @@
 <?xml version="1.0"?>
 <!--
   mc_mavlink_defs.xml — custom MAVLink dialect for the GCS<->MC Channel B
-  telemetry multiplexer (SDD-MC-001 §11.3, GCS-003) and the ICD-MC-001.md
-  §4.6 custom-message catalogue. User-defined ID range 50100-50199 per
-  ICD §4.6; 50104/50105 are reserved for the (proposed, not yet
-  implemented) Mission Orchestrator interface and must not be reused here
-  (MISSION-ORCHESTRATOR-MAVLINK-INTERFACE-SPEC.md §4).
+  telemetry multiplexer (SDD-MC-001 §11.3, GCS-003), the GCS-004/IFD-008
+  Mission Orchestrator interface (Channel C, mission_orchestrator_node),
+  and the ICD-MC-001.md §4.6/§12.2 custom-message catalogue. User-defined
+  ID range 50100-50199 per ICD §4.6.
 
-  Implementation note (gcs_mavlink_node, 2026-08-02): this file is the
-  authoritative field-list/documentation source for MC_STATUS/MC_DETECTION/
-  MC_HEALTH, but gcs_mavlink_node.cpp does NOT generate C headers from it
-  via mavgen at build time — ros-humble-mavlink (docker/ros2-core/Dockerfile)
-  ships only pre-generated common-dialect headers, not the generator
-  itself, and adding a pymavlink/mavgen build dependency for three messages
-  would be a heavier toolchain footprint than this project's existing
-  "no MAVROS, raw mavlink.h" decision (gcs_comms/CMakeLists.txt) already
-  accepted for the whole node. Instead, the three messages below are
-  hand-packed in gcs_mavlink_node.cpp using the same generic,
-  dialect-independent helpers mavgen's own output would call
+  Implementation note (gcs_mavlink_node/mission_orchestrator_node): this
+  file is the authoritative field-list/documentation source for all five
+  messages below, but neither node generates C headers from it via mavgen
+  at build time — ros-humble-mavlink (docker/ros2-core/Dockerfile) ships
+  only pre-generated common-dialect headers, not the generator itself, and
+  adding a pymavlink/mavgen build dependency for five messages would be a
+  heavier toolchain footprint than this project's existing "no MAVROS, raw
+  mavlink.h" decision (gcs_comms/CMakeLists.txt) already accepted for the
+  whole package. Instead, every message below is hand-packed using the
+  same generic, dialect-independent helpers mavgen's own output would call
   (_mav_put_*/_MAV_RETURN_* in protocol.h, mavlink_finalize_message() in
   mavlink_helpers.h — both already pulled in transitively by
   <mavlink/v2.0/common/mavlink.h>). The wire offsets and CRC_EXTRA values
-  hard-coded there were derived from this exact field list by running
-  pymavlink's own field-sort (descending type size, stable on ties) and
-  X25 CRC-extra algorithm offline, then cross-checked against known-good
-  dialect constants (HEARTBEAT=50, GLOBAL_POSITION_INT=104) before being
-  committed. If this file's field list for MC_STATUS/MC_DETECTION/MC_HEALTH
-  ever changes, gcs_mavlink_node.cpp's hard-coded LEN/CRC_EXTRA constants
-  must be re-derived the same way — they will not update themselves.
+  hard-coded in each node's .cpp were derived from this exact field list by
+  running pymavlink's own field-sort (descending type size, stable on ties)
+  and X25 CRC-extra algorithm offline (an actual `mavgen` run against this
+  file, not by hand), then cross-checked against known-good dialect
+  constants (HEARTBEAT=50, GLOBAL_POSITION_INT=104) before being committed.
+
+  mission_orchestrator_node additionally cannot use mavlink_parse_char() to
+  *receive* MC_MISSION_PLAN_ACTIVATE (50104) — that function looks up
+  CRC_EXTRA by msgid from whichever dialect headers are #included in the
+  translation unit, and this package only ever includes the plain common
+  dialect (per the toolchain decision above), which has no entry for
+  50104. mavlink_parse_char() then treats every such frame as a checksum
+  failure and silently drops it rather than decoding it (same finding
+  gcs_comms/test/test_gcs_mavlink_node.cpp's RawMavlinkFrame comment
+  documents for the send side). mission_orchestrator_node.cpp works around
+  this by decoding the raw MAVLink v2 frame directly (safe because each
+  recvfrom() datagram on this UDP loopback is exactly one complete frame)
+  rather than routing through mavlink_parse_char() at all. If this file's
+  field list for any of the five messages below ever changes, both nodes'
+  hard-coded LEN/CRC_EXTRA constants must be re-derived the same way — they
+  will not update themselves.
 -->
 <mavlink>
   <version>1</version>
@@ -105,6 +117,30 @@
       <field type="uint16_t" name="fault_mask">Active faults bitmask (ICD §10.8)</field>
       <field type="uint16_t" name="node_alive_mask">Node liveness flags (ICD §10.9)</field>
       <field type="uint32_t" name="uptime_s" units="s">MC uptime</field>
+    </message>
+    <message id="50104" name="MC_MISSION_PLAN_ACTIVATE">
+      <description>
+        GCS-004/IFD-008 (ICD-MC-001 §12.2, MISSION-ORCHESTRATOR-MAVLINK-
+        INTERFACE-SPEC.md §4.2): tells mission_orchestrator_node which
+        already-stored plan under /var/drone-mc/mission_plans/ to activate.
+        Everything else in that interface (create/update/list/read/delete)
+        is standard MAVFTP, not a custom message. Direction: Orchestrator ->
+        MC, on Channel C only (never seen on Channel B).
+      </description>
+      <field type="uint32_t" name="client_request_id">Orchestrator-assigned correlation ID, echoed in MC_MISSION_PLAN_ACK</field>
+      <field type="char[64]" name="filename">e.g. "recon_alpha.json" - must already exist under /var/drone-mc/mission_plans/</field>
+    </message>
+    <message id="50105" name="MC_MISSION_PLAN_ACK">
+      <description>
+        Ack for MC_MISSION_PLAN_ACTIVATE only (ICD-MC-001 §12.2) - MAVFTP's
+        own Ack/Nak opcodes already serve this role for create/update/list/
+        delete, so there is no second ack layered on top of those. Direction:
+        MC -> Orchestrator, Channel C only.
+      </description>
+      <field type="uint32_t" name="client_request_id">Echoed from the request</field>
+      <field type="char[64]" name="filename">Echoed from the request</field>
+      <field type="uint8_t" name="result">0=ACCEPTED, 1=REJECTED_INVALID_JSON, 2=REJECTED_NOT_FOUND, 3=REJECTED_PHASE</field>
+      <field type="char[50]" name="error_message">Empty on success</field>
     </message>
   </messages>
 </mavlink>

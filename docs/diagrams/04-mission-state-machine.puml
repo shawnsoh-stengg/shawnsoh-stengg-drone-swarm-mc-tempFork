@@ -1,0 +1,146 @@
+@startuml 04-mission-state-machine
+' ─────────────────────────────────────────────────────────────
+' Diagram 04: Mission Phase State Machine
+' mission_manager_node — Swarm Search Drone MC
+' MC-SRS-001  FR-001, FR-002, FR-003
+' ─────────────────────────────────────────────────────────────
+
+title "04 — Mission Phase State Machine\nmission_manager_node"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam ArrowColor #3D5A80
+skinparam ArrowFontColor #3D5A80
+skinparam ArrowFontSize 9
+
+skinparam state {
+  BackgroundColor #D8E8F8
+  BorderColor #3D5A80
+  BorderThickness 1.5
+  FontSize 10
+  FontColor #1C2334
+  ArrowColor #3D5A80
+}
+
+skinparam StateBorderColor #3D5A80
+skinparam StateBackgroundColor #D8E8F8
+skinparam StateArrowColor #3D5A80
+skinparam StateArrowFontSize 9
+skinparam StateArrowFontColor #4A6080
+
+' ── States ──────────────────────────────────────────────────
+
+[*] --> PREFLIGHT : Power-on /\nSystem boot
+
+state PREFLIGHT #B8D4F0 : **PREFLIGHT**\n──────────────\nSelf-test · Peer discovery\nAwait mission upload from GCS\nAll services operational check
+
+state ARMING #C8E4F0 : **ARMING**\n──────────────\nGCS ARM authorisation received\nMC pre-arm checks pass\nFCC arm commanded
+
+state TAKEOFF #C8E4F0 : **TAKEOFF**\n──────────────\nFCC commanded to takeoff mode\nClimb to assigned altitude\nConfirm position hold
+
+state INGRESS #B8E0C8 : **INGRESS**\n──────────────\nFormation keeping active (MISSION or\nOFFBOARD, per-leg plan flag — FCC-009)\nFormation controller → FCC ≥5 Hz\nGCS retains authority
+
+state MUSTER #B8E0C8 : **MUSTER**\n──────────────\nNavigate to muster waypoint\nReport arrival to GCS + peers\nAwait swarm quorum
+
+state ISR_SELECTION #E8D8F8 : **ISR_SELECTION**\n──────────────\nDistributed election algorithm\nBased on: battery · sensor · position\nAll drones participate
+
+state VORONOI_PARTITION #E8D8F8 : **VORONOI_PARTITION**\n──────────────\nExchange positions with peers\nConsensus Voronoi decomposition\nAccept assigned cell (<10 s)
+
+state SEARCH #FFE8C0 : **SEARCH**\n──────────────\nBoustrophedon coverage path\nAI detection inference active\nDetections → GCS in real-time
+
+state RETURN #C8E8C8 : **RETURN**\n──────────────\nNavigate to home waypoint\nMaintain safe altitude
+
+state LAND #C8E8C8 : **LAND**\n──────────────\nFCC land mode commanded\nDescend · Touchdown\nFCC disarm on landing confirm
+
+state FAULT #F8D0D0 : **FAULT**\n──────────────\nCritical failure declared\nRTL commanded via FccBackend\nGCS notified with fault code
+
+[*] <-- LAND : Disarmed
+
+' ── Nominal transitions (GCS-commanded or autonomous) ───────
+
+PREFLIGHT --> ARMING : GCS: ARM authorised\n+ pre-arm checks pass [FR-010]
+
+ARMING --> TAKEOFF : FCC armed ✓\n[FR-012]
+
+TAKEOFF --> INGRESS : Altitude hold confirmed\nGCS: begin ingress
+
+INGRESS --> MUSTER : Muster waypoint reached\n(via FCC mission complete)
+
+MUSTER --> ISR_SELECTION : Swarm quorum reached\n[FR-033]
+
+ISR_SELECTION --> VORONOI_PARTITION : ISR role agreed\n[FR-034]
+
+VORONOI_PARTITION --> SEARCH : Voronoi cell accepted\ncoverage path ready [FR-040]
+
+SEARCH --> RETURN : Coverage path complete\nOR GCS: end-mission [FR-046]
+
+RETURN --> LAND : Home waypoint reached
+
+LAND --> [*]
+
+' ── GCS override transitions (any state → target) ───────────
+
+INGRESS --> RETURN : GCS: abort ingress
+MUSTER --> RETURN : GCS: abort mission
+ISR_SELECTION --> RETURN : GCS: abort
+VORONOI_PARTITION --> RETURN : GCS: abort
+SEARCH --> RETURN : GCS: end-mission
+
+' ── Failsafe transitions (any autonomous state) ─────────────
+
+INGRESS -[#CC3333]-> FAULT : FCC link lost >1 s\nOR battery <LOW_THRESHOLD [FR-015]
+SEARCH -[#CC3333]-> FAULT : Node restart ×3 failed [FR-075]\nOR battery <LOW_THRESHOLD [FR-072]
+VORONOI_PARTITION -[#CC3333]-> FAULT : Critical fault
+MUSTER -[#CC3333]-> FAULT : Critical fault
+
+' ── GCS-link-lost HOLD (shown as self-loop note) ────────────
+INGRESS -[#E07000]-> INGRESS : GCS link lost >10 s\n→ FCC HOLD commanded [SFR-007]
+SEARCH -[#E07000]-> SEARCH : GCS link lost >10 s\n→ FCC HOLD commanded [SFR-007]
+
+FAULT --> [*] : RTL complete\nSystem shutdown
+
+' ── Notes ───────────────────────────────────────────────────
+
+note right of FAULT
+  SFR-003: Watchdog → HOLD on
+  manager silence >5 s
+  SFR-004: 3× restart failure → RTL
+end note
+
+note left of ISR_SELECTION
+  If drone not selected for ISR:
+  transitions directly to RETURN
+  after ISR_SELECTION completes
+end note
+
+note bottom of VORONOI_PARTITION
+  Peer loss during SEARCH (FR-036):
+  remaining drones re-run
+  VORONOI_PARTITION to redistribute
+  uncovered cells
+end note
+
+note right of INGRESS
+  OFFBOARD is an FCC flight-mode choice
+  within this phase, not a separate state.
+  mission_manager_node is sole mode-command
+  authority — never health_monitor_node.
+  Stream-staleness fault (OFFBOARD_STREAM_STALE,
+  >500 ms) is handled via the same
+  exit-sequencing path as a normal
+  OFFBOARD→MISSION phase exit, falling
+  back to MISSION (or HOLD if no mission
+  loaded)  [SFR-009, design decisions 4-5]
+end note
+
+legend right
+  | Arrow style | Meaning |
+  | Black | Nominal transition |
+  | <#CC3333> Red | Failsafe / fault |
+  | <#E07000> Orange | GCS-link-loss HOLD |
+endlegend
+
+@enduml

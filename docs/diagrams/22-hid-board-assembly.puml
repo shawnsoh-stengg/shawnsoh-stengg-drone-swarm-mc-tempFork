@@ -1,0 +1,158 @@
+@startuml 22-hid-board-assembly
+' ─────────────────────────────────────────────────────────────
+' Diagram 22: Hardware Assembly and Connector Map
+' MC-HID-001 §2
+' ─────────────────────────────────────────────────────────────
+
+title "22 — Hardware Assembly and Connector Map\nHolybro Pixhawk Jetson Baseboard  ·  MC-HID-001 §2"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 4
+
+skinparam package {
+  BorderThickness 2
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam rectangle {
+  BorderThickness 1.5
+  FontSize 9
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam arrow {
+  Color #3D5A80
+  FontColor #2A4060
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' EXTERNAL PERIPHERALS  (left column)
+' ═══════════════════════════════════════════════════
+
+rectangle "LiPo Battery\n4S–6S  14.8–25.2 V\nXT60 female" as BAT #FFD4A8
+rectangle "IMX219 Camera\n22-pin FPC cable" as CAM #D8C0F0
+rectangle "MANET Radio\n(Air Unit)\nRJ45 Cat5e" as AU #B8DCA8
+rectangle "Gimbal IP Camera\n192.168.10.200\nRJ45 via JST-GH pigtail" as GIMCAM #EDE0F8
+rectangle "USB-C Debug Host\n(laptop / bench PC)" as USB #D8D8F8
+rectangle "UART Console\n(FTDI USB-UART)\nJST-GH 6-pin" as CONS #D8D8F8
+
+' ═══════════════════════════════════════════════════
+' BASEBOARD  (centre)
+' ═══════════════════════════════════════════════════
+
+package "Holybro Pixhawk Jetson Baseboard  (120 × 40 mm)" as BB #E4EEF8 {
+
+  ' ── TOP-SIDE MODULES ─────────────────────────────
+
+  package "Jetson Orin NX 16GB\n(260-pin SO-DIMM)\nUbuntu 22.04 aarch64\nJetPack 6.2.2" as JET #A8CCEE {
+    rectangle "CPU / GPU / ISP\neth0  ttyTHS1  ttyTHS0\nCSI port 0  USB3.2" as JET_CORE #90B8DC
+  }
+
+  package "Pixhawk 6X\n(PAM connector)\nPX4 v1.14 / NuttX" as PX4 #FFD4A8 {
+    rectangle "STM32H7\nUART B  Ethernet\nuORB  MAVLink" as PX4_CORE #F4BC88
+  }
+
+  ' ── BASEBOARD CIRCUITRY ──────────────────────────
+
+  rectangle "Power Regulator\nVBAT → 5V_SYS (5A)\nVBAT → 5V_FC (2A)\n3.3V_PERIPH · 1.8V_PERIPH\nINA226 power monitor" as PWR #F4C88A
+
+  rectangle "Ethernet Switch\n100BASE-T\nJetson eth0 ↔ Pixhawk\n↔ External RJ45 ↔ Gimbal cam (J15)\n(single switch, no 2nd PHY)" as SW #C0D8C0
+
+  rectangle "UART Bridge\nOn-board PCB trace\nJetson ttyTHS1\n↔ Pixhawk UART B\n(no cable required)" as UART_BRIDGE #C0D0E8
+
+  ' ── CONNECTORS (board-edge) ──────────────────────
+
+  rectangle "J1\nXT60 (male)\nVBAT IN" as J1 #FFD4A8
+  rectangle "J2\n22-pin FPC ZIF\nJetson CSI port 0" as J2 #D8C0F0
+  rectangle "J3\nRJ45\nExternal Ethernet" as J3 #B8DCA8
+  rectangle "J4\nUSB-C\nJetson USB 3.2 Gen2" as J4 #D8D8F8
+  rectangle "J5\n6-pin JST-GH\nJetson UART0 console" as J5 #D8D8F8
+  rectangle "J6\n6-pin JST-SH\nPixhawk debug / SWD" as J6 #F0C890
+  rectangle "J7\nMicroSD slot\nJetson OS / logs" as J7 #E0E0E0
+  rectangle "J8\nMicroSD slot\nPX4 flight logs" as J8 #E0E0E0
+  rectangle "J9–J14\nJST-GH (4–10 pin)\nGPS · RC · TELEM1\nAUX · I²C · CAN" as J9 #F0C890
+  rectangle "J15\n6-pin JST-GH\nETH port 1\n(shared switch port)" as J15 #B8DCA8
+}
+
+' ═══════════════════════════════════════════════════
+' CONNECTIONS  (external)
+' ═══════════════════════════════════════════════════
+
+BAT   -[#E07000,thickness=3]-> J1 : VBAT\n14.8–25.2 V
+CAM   -[#7030A0,thickness=2]-> J2 : MIPI CSI-2\n22-pin FPC
+AU    -[#208040,thickness=2]-> J3 : 1000BASE-T\nCat 5e STP
+GIMCAM -[#208040,thickness=2]-> J15 : 100BASE-TX\nJST-GH→RJ45 pigtail ≤2m
+USB   -[#3050C0,thickness=1]-> J4 : USB-C
+CONS  -[#3050C0,thickness=1]-> J5 : 3.3 V UART\n115200 bps
+
+' ═══════════════════════════════════════════════════
+' INTERNAL CONNECTIONS
+' ═══════════════════════════════════════════════════
+
+J1     -[#E07000,thickness=2]--> PWR        : VBAT
+PWR    -[#E07000]--> JET_CORE : 5V_SYS 5A
+PWR    -[#E07000]--> PX4_CORE : 5V_FC  2A
+PWR    -[#D08000]--> UART_BRIDGE : 3.3V logic
+PWR    -[#D08000]--> J2 : 3.3V+1.8V → camera
+
+UART_BRIDGE -[#3D5A80,thickness=2]--> JET_CORE  : ttyTHS1\n921600 bps
+UART_BRIDGE -[#3D5A80,thickness=2]--> PX4_CORE  : UART B
+
+SW          -[#208040]--> JET_CORE  : eth0\n192.168.10.11\n192.168.12.1
+SW          -[#208040]--> PX4_CORE  : Ethernet\n192.168.10.31\n192.168.12.2
+SW          -[#208040]--> J3         : external port
+SW          -[#208040]--> J15        : ETH port 1\n(gimbal camera)
+
+J2     -[#7030A0]--> JET_CORE : CSI-2 + I2C + CLKIN
+J4     -[#3050C0]--> JET_CORE : USB 3.2
+J5     -[#3050C0]--> JET_CORE : ttyTHS0 console
+J6     -[#C06010]--> PX4_CORE : NuttX console / SWD
+J7     -[#808080]--> JET_CORE : SDMMC
+J8     -[#808080]--> PX4_CORE : SDIO
+J9     -[#C06010]--> PX4_CORE : GPS · RC · TEL · AUX
+
+' ═══════════════════════════════════════════════════
+' NOTES
+' ═══════════════════════════════════════════════════
+
+note bottom of BB
+  Mounting: 4× M3 through-holes at 30.5 × 30.5 mm grid.
+  Mount on silicone grommets (shore 40A) for vibration isolation.
+  Star-point grounding — do not add external ground straps.
+  Assembly mass ≈ 85 g (board + modules, no cables).
+end note
+
+note right of UART_BRIDGE
+  HIF-001: on-board trace only.
+  No external JST connector exists
+  for this interface — it is a direct
+  PCB-level connection.
+  Check board revision compatibility
+  before assembly.
+end note
+
+legend right
+  | Line | Signal type |
+  | <#E07000><b>───</b>  Orange (thick) | Power (VBAT) |
+  | <#E07000> Orange (thin) | Power rail distribution |
+  | <#3D5A80> Blue | UART serial |
+  | <#208040> Green | Ethernet |
+  | <#7030A0> Purple | MIPI CSI-2 |
+  | <#3050C0> Blue-grey | USB / console |
+  | <#C06010> Amber | Pixhawk peripherals |
+  | <#808080> Grey | MicroSD |
+endlegend
+
+@enduml

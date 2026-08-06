@@ -3,7 +3,7 @@
 Multi-drone swarm mission computer (MC) software for a Jetson Orin NX +
 Pixhawk 6X platform, built on ROS 2 Humble. A companion MC runs on each
 drone and coordinates with peers over a MANET radio for GCS-supervised,
-autonomous ISR search missions (elect a role, partition the search area via
+autonomous search abd Rescue missions (elect a role, partition the search area via
 Voronoi cells, fly boustrophedon coverage, detect and geolocate targets).
 
 ## Status

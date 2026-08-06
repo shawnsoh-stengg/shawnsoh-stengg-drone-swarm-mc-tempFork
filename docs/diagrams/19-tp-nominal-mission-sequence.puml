@@ -1,0 +1,263 @@
+@startuml 19-tp-nominal-mission-sequence
+' ─────────────────────────────────────────────────────────────
+' Diagram 19: TP-ST-001 Nominal Mission Test Sequence
+' Full 2-drone nominal SITL mission with test assertions
+' MC-TP-001 §6 TP-ST-001
+' ─────────────────────────────────────────────────────────────
+
+title "19 — TP-ST-001 Nominal 2-Drone Mission Test Sequence\nGCS Commands · Phase Transitions · Test Assertions  ·  MC-TP-001 §6"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+
+skinparam sequence {
+  ArrowColor #3D5A80
+  ArrowFontColor #1C2334
+  ArrowFontSize 9
+  ParticipantBorderColor #3D5A80
+  ParticipantFontSize 10
+  ParticipantFontStyle bold
+  LifeLineBorderColor #9AB0CC
+  BoxLineColor #8AA8C8
+  BoxBackgroundColor #F4F8FF
+  DividerBackgroundColor #E0EAFF
+  DividerBorderColor #3D5A80
+  DividerBorderThickness 1
+  DividerFontSize 10
+  DividerFontStyle bold
+  DividerFontColor #1C2334
+  GroupBodyBackgroundColor #F8FAFF
+  NoteBackgroundColor #FFFAE8
+  NoteBorderColor #C09030
+  NoteFontSize 9
+}
+
+participant "pytest\ntest script" as TEST #D0E8D0
+participant "mock_gcs_node\n(GCS)" as GCS #B8DCA8
+participant "MC Instance 1\n[Drone 1 — Coordinator]" as MC1 #A8CCEE
+participant "MC Instance 2\n[Drone 2]" as MC2 #C8B0E8
+participant "FCC SITL 1\n(PX4 SITL)" as FCC1 #FFD4A8
+participant "FCC SITL 2\n(PX4 SITL)" as FCC2 #FFE0C0
+
+' ═══════════════════════════════════════════════════
+' SETUP
+' ═══════════════════════════════════════════════════
+== Test Setup: Start SITL, MC stacks, wait for ready ==
+
+TEST -> FCC1 : start PX4 SITL instance 1
+TEST -> FCC2 : start PX4 SITL instance 2
+TEST -> MC1  : docker start drone-mc.target (SIMULATION_MODE=true DRONE_ID=1)
+TEST -> MC2  : docker start drone-mc.target (SIMULATION_MODE=true DRONE_ID=2)
+TEST -> GCS  : launch mock_gcs_node
+
+MC1 --> TEST : /mc/manager/heartbeat visible ✓
+MC2 --> TEST : /mc/manager/heartbeat visible ✓
+
+note over TEST #C8EEC8
+  ASSERT: Both MC instances reach PREFLIGHT phase
+  within 30 s of service start.
+  Timeout: 30 s.
+end note
+
+' ═══════════════════════════════════════════════════
+' MISSION UPLOAD
+' ═══════════════════════════════════════════════════
+== Phase: PREFLIGHT — Mission Upload ==
+
+GCS -> MC1 : MISSION_COUNT=15\n→ MISSION_ITEM_INT ×15\n(ingress wpt · muster · 2× formation offset\n 5× polygon vertex · 2× peer entry)
+MC1 --> GCS : MISSION_ACK(ACCEPTED)
+
+GCS -> MC2 : MISSION_COUNT=15 → MISSION_ITEM_INT ×15
+MC2 --> GCS : MISSION_ACK(ACCEPTED)
+
+note over TEST #C8EEC8
+  ASSERT: Both MC instances publish
+  /mc/gcs/mission_upload with:
+  - waypoint count matches sent items
+  - formation offset vectors correct
+  - peer manifest contains Drone 1 and Drone 2
+end note
+
+' ═══════════════════════════════════════════════════
+' ARMING
+' ═══════════════════════════════════════════════════
+== Phase: PREFLIGHT → ARMING ==
+
+GCS -> MC1 : MC_CMD_ARM_AUTHORISE (50002)\n  param1 = mission_upload_id
+MC1 --> GCS : COMMAND_ACK(MAV_RESULT_ACCEPTED)
+GCS -> MC2 : MC_CMD_ARM_AUTHORISE (50002)
+MC2 --> GCS : COMMAND_ACK(MAV_RESULT_ACCEPTED)
+
+MC1 -> FCC1 : vehicle_command: ARM (400)
+MC2 -> FCC2 : vehicle_command: ARM (400)
+FCC1 --> MC1 : arming_state = ARMED
+FCC2 --> MC2 : arming_state = ARMED
+
+MC1 --> GCS : MC_STATUS: mission_phase = ARMING
+MC2 --> GCS : MC_STATUS: mission_phase = ARMING
+
+note over TEST #C8EEC8
+  ASSERT: Both MC instances transition to ARMING
+  within 5 s of ARM_AUTHORISE.
+  ASSERT: COMMAND_ACK latency ≤ 500 ms.
+end note
+
+' ═══════════════════════════════════════════════════
+' TAKEOFF
+' ═══════════════════════════════════════════════════
+== Phase: ARMING → TAKEOFF ==
+
+MC1 -> FCC1 : vehicle_command: TAKEOFF (22)\nalt = 50.0 m AGL
+MC2 -> FCC2 : vehicle_command: TAKEOFF (22)
+
+FCC1 --> MC1 : nav_state = AUTO_TAKEOFF
+FCC2 --> MC2 : nav_state = AUTO_TAKEOFF
+
+FCC1 --> MC1 : vehicle_local_position.z ≈ −50 m (at altitude)
+FCC2 --> MC2 : vehicle_local_position.z ≈ −50 m
+
+MC1 --> GCS : MC_STATUS: mission_phase = TAKEOFF
+MC2 --> GCS : MC_STATUS: mission_phase = TAKEOFF
+
+' ═══════════════════════════════════════════════════
+' INGRESS
+' ═══════════════════════════════════════════════════
+== Phase: TAKEOFF → INGRESS (GCS command) ==
+
+GCS -> MC1 : MC_CMD_PHASE_TRANSITION (50001)\n  param1 = PHASE_INGRESS
+GCS -> MC2 : MC_CMD_PHASE_TRANSITION (50001)\n  param1 = PHASE_INGRESS
+
+MC1 -> FCC1 : vehicle_command: SET_MODE MISSION\nupload FORMATION_SLOT (Drone 1 = leader)
+MC2 -> FCC2 : vehicle_command: SET_MODE MISSION\nupload FORMATION_SLOT (Drone 2 = −10 m behind leader)
+
+note over MC1, MC2
+  formation_controller_node active.
+  Drone 1 tracks ingress waypoint.
+  Drone 2 follows Drone 1 at formation_offset.
+end note
+
+FCC1 --> MC1 : position approaching ingress waypoint
+FCC2 --> MC2 : position following Drone 1 ± 2 m
+
+MC1 --> GCS : MC_STATUS: mission_phase = INGRESS
+
+note over TEST #C8EEC8
+  ASSERT: Both at INGRESS within 10 s of command.
+  ASSERT: formation_controller mission-item update rate ≥ 5 Hz
+  on /mc/fcc/mission_item_update (Drone 2).
+end note
+
+' ═══════════════════════════════════════════════════
+' MUSTER
+' ═══════════════════════════════════════════════════
+== Phase: INGRESS → MUSTER (FCC waypoint complete) ==
+
+FCC1 --> MC1 : mission item reached (muster waypoint)
+FCC2 --> MC2 : mission item reached
+
+MC1 --> GCS : MC_STATUS: mission_phase = MUSTER
+MC2 --> GCS : MC_STATUS: mission_phase = MUSTER
+MC1 <-> MC2 : SWARM_HEARTBEAT (phase=MUSTER)\n→ quorum = 2/2 met
+
+note over TEST #C8EEC8
+  ASSERT: Both at MUSTER within 60 s.
+  ASSERT: /mc/swarm/peer_states shows both
+  peers in MUSTER state.
+end note
+
+' ═══════════════════════════════════════════════════
+' ISR SELECTION
+' ═══════════════════════════════════════════════════
+== Phase: MUSTER → ISR_SELECTION (autonomous) ==
+
+MC1 <-> MC2 : ISR_CANDIDATE (0x10)
+MC1 -> MC1  : score Drone 1 and Drone 2
+MC1 -> MC2  : ISR_RESULT (0x11)  isr_ids=[1]
+MC2 -> MC1  : ISR_RESULT_ACK (0x12)
+
+MC1 --> GCS : MC_STATUS: mission_phase = ISR_SELECTION\nisr_role = ISR_SELECTED
+MC2 --> GCS : MC_STATUS: isr_role = SEARCH_RESERVE
+
+note over TEST #C8EEC8
+  ASSERT: ISR_SELECTION complete < 15 s.
+  ASSERT: Exactly isr_count = ceil(2/2) = 1 drone elected.
+  ASSERT: GCS receives isr_role field in MC_STATUS.
+end note
+
+' ═══════════════════════════════════════════════════
+' VORONOI PARTITION
+' ═══════════════════════════════════════════════════
+== Phase: ISR_SELECTION → VORONOI_PARTITION (autonomous) ==
+
+MC1 <-> MC2 : VORONOI_PROPOSAL · VORONOI_ACCEPT
+MC1 -> MC1  : Fortune's + clip → own cell
+MC2 -> MC2  : Fortune's + clip → own cell
+MC1 <-> MC2 : consensus check ✓
+
+MC1 --> GCS : MC_STATUS: mission_phase = VORONOI_PARTITION
+MC2 --> GCS : MC_STATUS: mission_phase = VORONOI_PARTITION
+
+note over TEST #C8EEC8
+  ASSERT: /mc/swarm/voronoi_cell published
+  on both instances within 10 s of phase entry.
+  ASSERT: sum(cell areas) ≈ search_polygon_area ± 5%.
+end note
+
+' ═══════════════════════════════════════════════════
+' SEARCH
+' ═══════════════════════════════════════════════════
+== Phase: VORONOI_PARTITION → SEARCH (autonomous) ==
+
+MC1 -> FCC1 : MAVLink mission upload (boustrophedon path 1)
+MC2 -> FCC2 : MAVLink mission upload (boustrophedon path 2)
+MC1 -> FCC1 : vehicle_command: SET_MODE AUTO_MISSION
+MC2 -> FCC2 : vehicle_command: SET_MODE AUTO_MISSION
+
+FCC1 --> MC1 : nav_state = AUTO_MISSION
+FCC2 --> MC2 : nav_state = AUTO_MISSION
+
+MC1 --> GCS : MC_STATUS: mission_phase = SEARCH
+MC2 --> GCS : MC_STATUS: mission_phase = SEARCH
+
+note over TEST #C8EEC8
+  ASSERT: Both at SEARCH within 20 s of VORONOI done.
+  ASSERT: Coverage path generated < 5 s (PR-008).
+  ASSERT: FCC mission item count > 60 (adequate coverage).
+  ASSERT: MC_DETECTION messages received during search
+  (triggered by mock_camera_node's target frame).
+end note
+
+' ═══════════════════════════════════════════════════
+' END MISSION
+' ═══════════════════════════════════════════════════
+== Phase: SEARCH → RETURN → LAND (GCS end-mission) ==
+
+GCS -> MC1 : MC_CMD_END_MISSION (50003)
+GCS -> MC2 : MC_CMD_END_MISSION (50003)
+
+MC1 -> FCC1 : vehicle_command: RTL (20)
+MC2 -> FCC2 : vehicle_command: RTL (20)
+
+FCC1 --> MC1 : nav_state = AUTO_RTL → AUTO_LAND
+FCC2 --> MC2 : nav_state = AUTO_RTL → AUTO_LAND
+
+FCC1 --> MC1 : arming_state = STANDBY (disarmed)
+FCC2 --> MC2 : arming_state = STANDBY (disarmed)
+
+MC1 --> GCS : MC_STATUS: mission_phase = LAND
+MC2 --> GCS : MC_STATUS: mission_phase = LAND
+
+note over TEST #C8EEC8
+  ASSERT: Both drones disarmed within 20 min total.
+  ASSERT: mission_phase = LAND on both instances.
+  ASSERT: No S1 fault events on /mc/fault during entire test.
+  ASSERT: MC_STATUS rate ≥ 2 Hz throughout (TP-ST-011).
+end note
+
+TEST -> TEST : PASS — all assertions satisfied
+
+@enduml

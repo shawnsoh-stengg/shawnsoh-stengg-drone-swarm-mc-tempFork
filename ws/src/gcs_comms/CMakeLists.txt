@@ -15,6 +15,7 @@ find_package(mavlink REQUIRED)
 find_package(mc_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(geographic_msgs REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # GCS-001: gcs_mavlink_node — raw-MAVLink Channel B transport (ICD §4.1/§4.2),
 # GCS command decode, link-status heartbeat monitoring (SDD §11.1). Uses the
@@ -39,18 +40,40 @@ add_executable(gcs_mavlink_node
 )
 target_link_libraries(gcs_mavlink_node gcs_mavlink_node_lib)
 
+# GCS-004: mission_orchestrator_node — MAVFTP server + MC_MISSION_PLAN_ACTIVATE/
+# ACK over Channel C (ICD §12). Same raw-mavlink.h, no-MAVROS approach as
+# gcs_mavlink_node_lib above; additionally links nlohmann_json for plan JSON
+# parsing (ICD §12.4) — the one new library dependency this package didn't
+# already have.
+add_library(mission_orchestrator_node_lib
+  src/mission_orchestrator_node.cpp
+)
+target_include_directories(mission_orchestrator_node_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${mavlink_INCLUDE_DIRS}
+)
+ament_target_dependencies(mission_orchestrator_node_lib PUBLIC
+  rclcpp mc_msgs geometry_msgs geographic_msgs)
+target_link_libraries(mission_orchestrator_node_lib PUBLIC nlohmann_json::nlohmann_json)
+
+add_executable(mission_orchestrator_node
+  src/mission_orchestrator_node_main.cpp
+)
+target_link_libraries(mission_orchestrator_node mission_orchestrator_node_lib)
+
 install(
   DIRECTORY include/
   DESTINATION include
 )
 install(
-  TARGETS gcs_mavlink_node_lib
+  TARGETS gcs_mavlink_node_lib mission_orchestrator_node_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 install(
-  TARGETS gcs_mavlink_node
+  TARGETS gcs_mavlink_node mission_orchestrator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 install(
@@ -79,6 +102,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_gcs_mavlink_node test/test_gcs_mavlink_node.cpp)
   target_link_libraries(test_gcs_mavlink_node gcs_mavlink_node_lib)
   target_include_directories(test_gcs_mavlink_node PRIVATE ${mavlink_INCLUDE_DIRS})
+
+  ament_add_gtest(test_mission_orchestrator_node test/test_mission_orchestrator_node.cpp)
+  target_link_libraries(test_mission_orchestrator_node mission_orchestrator_node_lib)
+  target_include_directories(test_mission_orchestrator_node PRIVATE ${mavlink_INCLUDE_DIRS})
 endif()
 
 ament_package()

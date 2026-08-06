@@ -1,0 +1,206 @@
+@startuml 06-swarm-coordination-sequence
+' ─────────────────────────────────────────────────────────────
+' Diagram 06: Swarm Coordination Sequence
+' MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH
+' MC-SRS-001  FR-030 to FR-046
+' ─────────────────────────────────────────────────────────────
+
+title "06 — Swarm Coordination Sequence\nMUSTER → ISR Selection → Voronoi Partition → SEARCH"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+
+skinparam sequence {
+  ArrowColor #3D5A80
+  ArrowFontColor #2A4060
+  ArrowFontSize 9
+  ActorBorderColor #3D5A80
+  ActorBackgroundColor #D8E8F8
+  ActorFontSize 10
+  ActorFontStyle bold
+  ParticipantBorderColor #3D5A80
+  ParticipantBackgroundColor #D8E8F8
+  ParticipantFontSize 10
+  ParticipantFontStyle bold
+  LifeLineBorderColor #8AA8C8
+  LifeLineBackgroundColor #D8E8F8
+  BoxLineColor #8AA8C8
+  BoxBackgroundColor #F4F8FF
+  DividerBackgroundColor #E8F0FA
+  DividerBorderColor #3D5A80
+  DividerFontSize 10
+  DividerFontStyle bold
+  GroupHeaderFontColor #1C2334
+  GroupHeaderFontSize 10
+  GroupBodyBackgroundColor #FAFBFF
+  NoteBackgroundColor #FFFAE8
+  NoteBorderColor #C09030
+  NoteFontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' PARTICIPANTS
+' ═══════════════════════════════════════════════════
+participant "GCS\n(QGroundControl)" as GCS #D8EED8
+participant "MC #1\n(This Drone)" as MC1 #A8CCEE
+participant "MC #2\n(Peer)" as MC2 #D8C0F0
+participant "MC #3\n(Peer)" as MC3 #D8C0F0
+participant "FCC #1\n(Pixhawk)" as FCC1 #FFD4A8
+
+' ═══════════════════════════════════════════════════
+' PREFLIGHT: Mission Upload
+' ═══════════════════════════════════════════════════
+== PREFLIGHT: Mission Upload ==
+
+GCS -> MC1 : MAVLink: mission_upload\n{waypoints, formation_offsets,\nsearch_polygon, swarm_manifest}
+MC1 --> GCS : ACK: success
+
+GCS -> MC2 : mission_upload
+MC2 --> GCS : ACK: success
+
+GCS -> MC3 : mission_upload
+MC3 --> GCS : ACK: success
+
+note over MC1, MC3
+  All drones store mission data persistently.
+  Swarm manifest provides peer IPs:
+    MC#1: 192.168.10.11
+    MC#2: 192.168.10.12
+    MC#3: 192.168.10.13
+end note
+
+' ── Peer Discovery ────────────────────────────────
+group Peer Discovery  [FR-030 — within 30 s of PREFLIGHT]
+  MC1 -> MC2 : Swarm heartbeat (PREFLIGHT)
+  MC1 -> MC3 : Swarm heartbeat (PREFLIGHT)
+  MC2 -> MC1 : Swarm heartbeat (PREFLIGHT)
+  MC3 -> MC1 : Swarm heartbeat (PREFLIGHT)
+  MC1 --> GCS : /mc/health: all peers discovered
+end
+
+GCS -> MC1 : MAVLink: ARM authorised
+MC1 -> FCC1 : vehicle_command: ARM
+FCC1 --> MC1 : armed ✓
+
+' ═══════════════════════════════════════════════════
+' INGRESS: Formation Keeping
+' ═══════════════════════════════════════════════════
+== INGRESS: Formation Keeping ==
+
+GCS -> MC1 : phase_command: INGRESS
+MC1 -> FCC1 : vehicle_command: SET_MODE MISSION\nupload FORMATION_SLOT (seq 0)
+MC1 -> MC2 : heartbeat (phase=INGRESS, pos, vel)
+MC1 -> MC3 : heartbeat (phase=INGRESS, pos, vel)
+
+loop Formation keeping  ≥5 Hz  [FR-020 to FR-024]
+  MC1 -> MC2 : peer state (pos, vel)
+  MC1 -> MC3 : peer state (pos, vel)
+  MC2 -> MC1 : peer state (leader pos, vel)
+  MC1 -> FCC1 : mission item replace (seq 0)\n(NED offset from leader → geodetic)
+end
+
+MC1 --> GCS : status telemetry @≥2 Hz (phase=INGRESS)
+
+' ═══════════════════════════════════════════════════
+' MUSTER
+' ═══════════════════════════════════════════════════
+== MUSTER: Converge on Operation Area ==
+
+MC1 -> FCC1 : vehicle_command: MISSION mode\n(muster waypoint)
+FCC1 --> MC1 : waypoint reached
+
+MC1 -> MC2 : heartbeat (phase=MUSTER, pos, ARRIVED)
+MC1 -> MC3 : heartbeat (phase=MUSTER, pos, ARRIVED)
+MC2 -> MC1 : heartbeat (phase=MUSTER, ARRIVED)
+MC3 -> MC1 : heartbeat (phase=MUSTER, ARRIVED)
+
+MC1 --> GCS : status: phase=MUSTER, quorum=3/3
+
+' ═══════════════════════════════════════════════════
+' ISR SELECTION
+' ═══════════════════════════════════════════════════
+== ISR_SELECTION: Distributed Election  [FR-033] ==
+
+MC1 -> MC2 : ISR_CANDIDATE\n{id=1, battery=82%, sensor=OK, dist_to_centroid=120m}
+MC1 -> MC3 : ISR_CANDIDATE\n{id=1, battery=82%, sensor=OK, dist_to_centroid=120m}
+MC2 -> MC1 : ISR_CANDIDATE\n{id=2, battery=75%, sensor=OK, dist_to_centroid=95m}
+MC3 -> MC1 : ISR_CANDIDATE\n{id=3, battery=61%, sensor=DEGRADED, dist_to_centroid=180m}
+
+note over MC1, MC3
+  Election algorithm:
+  Score = battery_weight × battery%
+        + proximity_weight × (1/dist)
+        + sensor_penalty × sensor_ok
+  Top-N drones by score → ISR subnet.
+  Coordinator (MC#1) broadcasts result.
+end note
+
+MC1 -> MC2 : ISR_RESULT {isr_set=[1,2], non_isr=[3]}
+MC1 -> MC3 : ISR_RESULT {isr_set=[1,2], non_isr=[3]}
+MC2 --> MC1 : ISR_RESULT_ACK
+MC3 --> MC1 : ISR_RESULT_ACK
+
+MC1 --> GCS : status: phase=ISR_SELECTION, isr_role=ISR
+
+note right of MC3
+  MC#3 not selected for ISR
+  (sensor degraded, low battery).
+  Transitions to RETURN after
+  ISR_SELECTION completes.
+end note
+
+' ═══════════════════════════════════════════════════
+' VORONOI PARTITION
+' ═══════════════════════════════════════════════════
+== VORONOI_PARTITION: Consensus Decomposition  [FR-034, FR-035] ==
+
+MC1 -> MC2 : VORONOI_PROPOSAL\n{positions: [MC1_pos, MC2_pos],\nsearch_polygon: [...]}
+MC2 -> MC1 : VORONOI_PROPOSAL\n{positions: [MC1_pos, MC2_pos],\nsearch_polygon: [...]}
+
+note over MC1, MC2
+  Each drone independently computes
+  the same Voronoi decomposition from
+  the same inputs (positions + polygon).
+  Deterministic algorithm → identical results.
+  Convergence confirmed via ACK exchange.
+  Timeout: 10 s  [FR-034]
+end note
+
+MC1 -> MC2 : VORONOI_ACCEPT {cell_id=1, boundary=[...]}
+MC2 -> MC1 : VORONOI_ACCEPT {cell_id=2, boundary=[...]}
+
+MC1 --> GCS : status: phase=VORONOI_PARTITION\ncell_assigned: [polygon vertices]
+
+' ═══════════════════════════════════════════════════
+' SEARCH
+' ═══════════════════════════════════════════════════
+== SEARCH: Autonomous Coverage  [FR-040 to FR-046] ==
+
+MC1 -> MC1 : search_planner_node:\ncompute boustrophedon path\n(Voronoi cell + sensor footprint)
+
+note right of MC1
+  Path computation: ≤5 s  [PR-008]
+  Row spacing = footprint_width × (1 - overlap)
+end note
+
+MC1 -> FCC1 : mission_upload: coverage waypoints
+MC1 -> FCC1 : vehicle_command: START_MISSION
+
+loop Coverage path execution  [FR-042, FR-043]
+  FCC1 -> MC1 : vehicle_local_position @10 Hz
+  MC1 -> MC1 : perception_down_node: AI inference\n(camera frame → detection)
+  MC1 --> GCS : /mc/detections: {class, lat, lon, alt,\nconfidence, timestamp}  [within 1 s]
+  MC1 -> MC2 : heartbeat (phase=SEARCH, pos)
+end
+
+FCC1 --> MC1 : mission complete (all waypoints reached)
+MC1 --> GCS : status: SEARCH complete
+
+GCS -> MC1 : phase_command: RETURN
+MC1 -> FCC1 : vehicle_command: RTL
+MC1 --> GCS : status: phase=RETURN
+
+@enduml

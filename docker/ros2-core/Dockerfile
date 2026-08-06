@@ -27,6 +27,10 @@ RUN rm -f /etc/apt/sources.list.d/ros2.list \
 # ros-humble-geographic-msgs: geographic_msgs/GeoPoint — not part of
 #   ros-base, but mc_msgs (ICD §9.2) depends on it for VoronoiCell.vertices
 #   and MissionUpload.search_polygon.
+# nlohmann-json3-dev: header-only JSON library — mission_orchestrator_node
+#   (GCS-004, ICD §12.4) parses/writes plan files with it rather than
+#   hand-rolling a JSON parser, same "reuse rather than invent" call this
+#   project already made for MAVFTP itself (PX4's mavlink_ftp.cpp).
 # python3-colcon-*: workspace build tooling for service container build stages (SDD §12.1).
 #
 # `rosdep init` is scoped in its own `|| true` subshell — `&&`/`||` share
@@ -38,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-cyclonedds \
         ros-humble-mavlink \
         ros-humble-geographic-msgs \
+        nlohmann-json3-dev \
         python3-colcon-common-extensions \
         python3-colcon-mixin \
         python3-rosdep \

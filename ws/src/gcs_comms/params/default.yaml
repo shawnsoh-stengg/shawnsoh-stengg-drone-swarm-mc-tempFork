@@ -3,3 +3,7 @@ gcs_mavlink_node:
     gcs_link_timeout_s: 10.0  # ICD-MC-001 §4.8
     mission_request_retry_s: 1.0  # SDD-MC-001 §11.2
     mission_upload_timeout_s: 5.0  # SDD-MC-001 §11.2, ICD-MC-001 §4.8
+
+mission_orchestrator_node:
+  ros__parameters:
+    plans_dir: /var/drone-mc/mission_plans  # ICD-MC-001 §12.4

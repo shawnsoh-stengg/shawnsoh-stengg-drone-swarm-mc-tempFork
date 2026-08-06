@@ -1,0 +1,171 @@
+@startuml 18-tp-ci-pipeline
+' ─────────────────────────────────────────────────────────────
+' Diagram 18: CI/CD Test Pipeline
+' MC-TP-001 §2.3 / §10
+' ─────────────────────────────────────────────────────────────
+
+title "18 — CI/CD Test Pipeline\nAutomation Flow · Gates · Milestone Schedule  ·  MC-TP-001 §2.3 / §10"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 5
+
+skinparam activity {
+  BackgroundColor #D8E8F8
+  BorderColor #3D5A80
+  BorderThickness 1.5
+  FontSize 10
+  DiamondBackgroundColor #FFE8C0
+  DiamondBorderColor #C07000
+  DiamondFontSize 9
+  ArrowColor #3D5A80
+  ArrowFontSize 9
+  ArrowFontColor #2A4060
+  StartColor #1A3860
+  EndColor #1A3860
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam swimlane {
+  BorderColor #8AA8C8
+  TitleFontSize 10
+  TitleFontStyle bold
+  TitleBackgroundColor #E0EAF8
+}
+
+|Pull Request CI  (every PR, ~10 min)|
+
+start
+
+fork
+  :TP-SM-001–010\nSmoke tests\nin Docker image;
+fork again
+  :TP-UT-001–018\nUnit tests\ngtest (colcon test);
+end fork
+
+note right
+  Run in parallel.
+  Both must pass before next stage.
+end note
+
+if (All pass?) then (yes)
+  :TP-NI-001–007\nCore node integration tests\n(fcc_bridge · formation · peer · manager heartbeat);
+
+  if (All pass?) then (yes)
+    :PR gate PASS\nMerge allowed;
+    stop
+  else (no)
+    :<color:#C02020>PR gate FAIL\nMerge blocked</color>;
+    :Create S2 defect\nNotify author;
+    stop
+  endif
+else (no)
+  :<color:#C02020>PR gate FAIL\nMerge blocked</color>;
+  :Create S1/S2 defect\nNotify author;
+  stop
+endif
+
+|Nightly CI  (00:00 UTC on main branch, ~45 min)|
+
+start
+
+:Build all Docker images\n(aarch64 cross-build via QEMU);
+
+:TP-SM-001–010  (full smoke suite);
+
+fork
+  :TP-UT-001–018  (all unit tests);
+fork again
+  :TP-NI-001–016  (all node integration tests);
+end fork
+
+note right
+  Full TP-NI suite runs nightly
+  (TP-NI-008–016 excluded from PR CI
+  due to longer runtime).
+end note
+
+if (All pass?) then (yes)
+  :TP-ST-001  Nominal 2-drone mission;
+  :TP-ST-002  GCS link loss → HOLD;
+  :TP-ST-003  Low battery RTL;
+  :TP-ST-006  FCC comms loss;
+  :TP-ST-007  Mission upload decoding;
+
+  if (All SITL pass?) then (yes)
+    :Nightly CI PASS\nPublish test report;
+    stop
+  else (no)
+    :<color:#C02020>Nightly CI FAIL\nOpen S2 defect\nEmail team lead</color>;
+    stop
+  endif
+else (no)
+  :<color:#C02020>Nightly CI FAIL\nOpen S2/S3 defect</color>;
+  stop
+endif
+
+|Milestone CI  (manual trigger on milestone branch)|
+
+start
+
+:Full smoke + unit + node integration suite\n(TP-SM + TP-UT-001–018 + TP-NI-001–016);
+
+if (Pass?) then (yes)
+  :Full SITL suite\nTP-ST-001–012\n(~2 hours);
+
+  if (All SITL pass?) then (yes)
+    :Generate test evidence report\n(coverage, latency histograms, resource traces);
+
+    :Gate: all S1/S2 defects closed?;
+
+    if (Defects closed?) then (yes)
+      :Milestone CI PASS\nTag release candidate;
+      :Trigger HIL test notification\n(engineer team);
+      stop
+    else (no)
+      :<color:#C02020>Milestone blocked\nS1/S2 defects open</color>;
+      stop
+    endif
+  else (no)
+    :<color:#C02020>Milestone CI FAIL\nOpen defects · rework</color>;
+    stop
+  endif
+else (no)
+  :<color:#C02020>Milestone CI FAIL</color>;
+  stop
+endif
+
+|HIL Testing  (manual, M5 and M6)|
+
+start
+
+:Configure physical DUT\n(Jetson Orin NX + Pixhawk 6X);
+
+:Run TP-SM-001–010 on physical hardware;
+
+:TP-HW-001  uXRCE-DDS latency;
+:TP-HW-002  Camera frame rate;
+:TP-HW-003  TensorRT sustained load;
+:TP-HW-004  Serial reliability (30 min);
+:TP-HW-005  Boot time (×5 trials);
+:TP-HW-006  Smoke suite on DUT;
+
+if (All HIL pass?) then (yes)
+  :Record HIL Test Record Sheet\nSign off by two engineers;
+  :HIL PASS — milestone complete;
+  stop
+else (no)
+  :<color:#C02020>HIL FAIL\nOpen S1/S2 defect\nblock milestone sign-off</color>;
+  stop
+endif
+
+@enduml

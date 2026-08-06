@@ -1,0 +1,138 @@
+@startuml 21-tp-mock-architecture
+' ─────────────────────────────────────────────────────────────
+' Diagram 21: Mock Node Architecture per Test Level
+' Shows what is real vs mocked at TP-UT / TP-NI / TP-ST / TP-HW
+' MC-TP-001 §2.4 / §3
+' ─────────────────────────────────────────────────────────────
+
+title "21 — Mock Node Architecture per Test Level\nReal vs Mocked Nodes at Each Test Level  ·  MC-TP-001 §2.4"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 9
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+skinparam RoundCorner 5
+skinparam Padding 4
+
+skinparam package {
+  BorderThickness 2
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam rectangle {
+  BorderThickness 1.5
+  FontSize 9
+}
+
+skinparam note {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam legend {
+  FontSize 9
+}
+
+' ═══════════════════════════════════════════════════
+' KEY
+' ═══════════════════════════════════════════════════
+
+note as KEY
+  <b>Colour key</b>
+  <back:#C8EEC8>Green</back>  Real node / component (under test or production code)
+  <back:#FFD4A8>Orange</back> Mock / stub (pre-recorded data or scripted behaviour)
+  <back:#D0D0D0>Grey</back>   Not present at this test level
+  <back:#E0D0F8>Purple</back> Test harness (pytest / gtest / launch_testing)
+end note
+
+' ═══════════════════════════════════════════════════
+' LEVEL 1 — TP-UT (Unit Tests)
+' ═══════════════════════════════════════════════════
+
+package "TP-UT — Unit Tests  (gtest, colcon test)" as UT_PKG #F4F0FF {
+
+  rectangle "<b>Algorithm under test</b>\n(single C++ function or class)\n\nISR scoring\nBoustrophedon path generator\nVoronoi clip\nPD controller output\nGeolocation ray-cast\nHealth monitor thresholds" as UT_REAL #C8EEC8
+
+  rectangle "Input fixtures\n(hardcoded structs in gtest)\nNo ROS 2 runtime\nNo DDS required" as UT_FIXTURE #FFD4A8
+
+  rectangle "NOT PRESENT\nNo ROS 2 nodes\nNo topics\nNo hardware" as UT_ABSENT #D0D0D0
+
+  rectangle "gtest harness\nASSERT_NEAR / EXPECT_EQ\ncolcon test --packages-select" as UT_HARNESS #E0D0F8
+}
+
+' ═══════════════════════════════════════════════════
+' LEVEL 2 — TP-NI (Node Integration)
+' ═══════════════════════════════════════════════════
+
+package "TP-NI — Node Integration Tests  (launch_testing + rclpy)" as NI_PKG #F4F8FF {
+
+  rectangle "<b>Nodes under test (real code)</b>\nfcc_bridge_node\nformation_controller_node\nswarm_coordinator_node\nmission_manager_node\nsearch_planner_node\nvisual_localisation_node\nperception_down_node\ngcs_mavlink_node\nhealth_monitor_node" as NI_REAL #C8EEC8
+
+  rectangle "<b>Mock nodes (test stubs)</b>\nmock_fcc_node\n  ← bags/fcc_nominal.bag replayed\n  → accepts /mc/fcc/mission_upload\n  → accepts /mc/fcc/mission_item_update\n\nmock_camera_node\n  ← bags/camera_outdoor.bag replayed\n  ← bags/gnss_lost.bag for VO tests\n\nmock_peer_node\n  UDP loopback swarm heartbeats\n\nmock_gcs_node\n  MAVLink 2 on UDP loopback\n  sends cmds · records ACKs" as NI_MOCK #FFD4A8
+
+  rectangle "NOT PRESENT\nPhysical Pixhawk\nIMX219 camera\nGazebo / PX4 SITL\nMANET radio" as NI_ABSENT #D0D0D0
+
+  rectangle "launch_testing + pytest\nrclpy assertions: rate · content\ntopic_monitor(rate_hz) checks\nmock_gcs_node records for assert" as NI_HARNESS #E0D0F8
+}
+
+' ═══════════════════════════════════════════════════
+' LEVEL 3 — TP-ST (SITL)
+' ═══════════════════════════════════════════════════
+
+package "TP-ST — SITL System Tests  (pytest + rclpy + PX4 SITL)" as ST_PKG #F4FFF4 {
+
+  rectangle "<b>Real MC nodes (full production code)</b>\nAll 9 application nodes\nAll Docker containers\ndrone-mc.target\nFCC_TRANSPORT=mavlink_udp" as ST_REAL #C8EEC8
+
+  rectangle "<b>Simulated / mock components</b>\nPX4 SITL + Gazebo\n  (replaces physical FCC)\n\nMicroXRCEAgent\n  (real binary, UDP to SITL)\n\nmock_camera_node\n  (still replays bags)\n\nmock_gcs_node\n  (scripted command sequences)" as ST_MOCK #FFD4A8
+
+  rectangle "NOT PRESENT\nPhysical Pixhawk\nIMX219 CSI camera\nMANET radio hardware" as ST_ABSENT #D0D0D0
+
+  rectangle "pytest test scripts\niptables (link drop injection)\ndocker kill (process injection)\nrclpy topic assertions\nros2 topic hz / delay / echo" as ST_HARNESS #E0D0F8
+}
+
+' ═══════════════════════════════════════════════════
+' LEVEL 4 — TP-HW (HIL)
+' ═══════════════════════════════════════════════════
+
+package "TP-HW — Hardware-in-the-Loop  (physical hardware, manual)" as HW_PKG #FFFBF0 {
+
+  rectangle "<b>ALL production code + hardware</b>\nAll 9 application nodes\ndrone-mc.target\nFCC_TRANSPORT=xrce_dds\n\n<b>Physical hardware</b>\nJetson Orin NX 16GB\nPixhawk 6X on ttyTHS1\nIMX219 CSI-2 camera\nBench PSU" as HW_REAL #C8EEC8
+
+  rectangle "<b>Partial simulation</b>\nQGroundControl on GCS laptop\n  (real GCS software)\n\nmock_camera_node\n  OPTIONAL: replaced by real\n  IMX219 depending on test" as HW_MOCK #FFD4A8
+
+  rectangle "NOT PRESENT\nGazebo / SITL\nMANET radio\n(single-drone bench test)" as HW_ABSENT #D0D0D0
+
+  rectangle "Manual execution by two engineers\nrclpy observer scripts\ntegrastats · wireshark\nHIL Test Record Sheet" as HW_HARNESS #E0D0F8
+}
+
+' ═══════════════════════════════════════════════════
+' PROGRESSION ARROW
+' ═══════════════════════════════════════════════════
+
+UT_PKG -[#3D5A80,thickness=3]down-> NI_PKG : Gate: all 18 unit tests pass
+NI_PKG -[#3D5A80,thickness=3]down-> ST_PKG : Gate: all 16 NI tests pass
+ST_PKG -[#3D5A80,thickness=3]down-> HW_PKG : Gate: all 12 SITL tests pass\nall S1/S2 defects closed
+
+' ═══════════════════════════════════════════════════
+' DATA ASSETS
+' ═══════════════════════════════════════════════════
+
+package "Test Data Assets  (bags/ and test_data/)" as DATA #F8F8F0 {
+  rectangle "bags/fcc_nominal.bag\nbags/camera_outdoor.bag\nbags/gnss_lost.bag\ntest_data/search_polygon_500m.json\ntest_data/mission_upload_3drone.yaml\ntest_data/detection_ground_truth.json" as BAGS #F0EECC
+}
+
+NI_MOCK ..[#A0A000].. DATA : replayed by mock nodes
+ST_MOCK ..[#A0A000].. DATA : camera bag replayed
+
+note bottom of DATA
+  All test data collected from physical hardware
+  during initial lab bring-up (M2).
+  Bags are version-controlled in test_data/ repo.
+  SHA256 checksums verified before each test run.
+end note
+
+@enduml

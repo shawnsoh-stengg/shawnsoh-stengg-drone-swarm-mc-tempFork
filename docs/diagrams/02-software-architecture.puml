@@ -1,0 +1,232 @@
+@startuml 02-software-architecture
+' ─────────────────────────────────────────────────────────────
+' Diagram 02: Software Architecture — ROS 2 Node Topology
+' Swarm Search Drone — Mission Computer (AI MC)
+' MC-SRS-001
+' ─────────────────────────────────────────────────────────────
+
+title "02 — Software Architecture\nROS 2 Node Topology · Mission Computer"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam ArrowColor #4A6080
+skinparam ArrowFontColor #3A5070
+skinparam ArrowFontSize 9
+skinparam RoundCorner 4
+skinparam Padding 4
+
+skinparam package {
+  BackgroundColor #F4F8FF
+  BorderColor #3D5A80
+  BorderThickness 2
+  FontSize 10
+  FontStyle bold
+}
+
+skinparam component {
+  BackgroundColor #D8E8F8
+  BorderColor #3A70A0
+  BorderThickness 1
+  FontSize 10
+}
+
+skinparam interface {
+  BackgroundColor #FFFAE8
+  BorderColor #C09030
+  FontSize 9
+}
+
+skinparam database {
+  BackgroundColor #F0F0F0
+  BorderColor #707070
+  FontSize 10
+}
+
+' ═══════════════════════════════════════════════════
+' EXTERNAL SYSTEMS
+' ═══════════════════════════════════════════════════
+
+package "PX4 FCC  (uXRCE-DDS bridge)" as FCC_PKG #FFECD8 {
+  component "uORB Topics\nvehicle_local_position\nvehicle_status · battery_status\nvehicle_attitude · vehicle_odometry" as UORB #FFD4A8
+}
+
+package "GCS  (MAVLink 2/UDP  ·  192.168.10.10)" as GCS_PKG #D8EED8 {
+  component "QGroundControl\nVehicle telemetry/control\nCommands · Detections" as QGC #B8DCA8
+}
+
+' "GCS" is two separate actors: QGC above (MAVLink Channels A/B, unchanged)
+' and the Mission Orchestrator below (MAVLink Channel C + MAVFTP,
+' MISSION-ORCHESTRATOR-MAVLINK-INTERFACE-SPEC.md; transport reversed from
+' an earlier Zenoh proposal on 2026-07-24). GCS-004 (this project's
+' MC-side implementation — mission_orchestrator_node, mavlink-router-
+' channel-c) is done as of 2026-08-05. The Orchestrator App box below is
+' still the OTHER team's deliverable and has not been built yet — dashed.
+package "Mission Orchestrator  (MAVLink Channel C  ·  another team's app)\n[not yet built]" as ORCH_PKG #E0E8F8 {
+  component "Mission Orchestrator App\nMission plan library\nCreate · List · Update\nActivate · Delete" as ORCH_APP #C8D8F0;line.dashed
+}
+
+package "Swarm Peers  (MANET · 192.168.10.x)" as PEER_PKG #F5ECF5 {
+  component "Peer MCs\nHeartbeat · ISR selection\nVoronoi consensus" as PEERS #E0C8F0
+}
+
+database "IMX219 CSI Camera" as CAM #EDE0F8
+
+database "Gimbal IP Camera\n192.168.10.200 (shared switch)" as GIMCAM #EDE0F8
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: fcc-bridge
+' ═══════════════════════════════════════════════════
+package "fcc-bridge" as C_FCC #E0ECF8 {
+  component "fcc_bridge_node\n[FccBackend interface]\nTransport-agnostic FCC adapter\nuXRCE-DDS ↔ ROS 2" as FCC_BRIDGE #A8CCEE
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: mavlink-router + gcs-comms
+' ═══════════════════════════════════════════════════
+package "mavlink-router / gcs-comms" as C_GCS #E0F0E8 {
+  component "mavlink_router\nv4 daemon\nChannel A/B routing" as MLR #B8DCA8
+  component "gcs_mavlink_node\n[MAVROS bridge]\nGCS↔MC MAVLink channel\nCommand · Telemetry · Detections" as GCS_NODE #90C890
+  component "mavlink_router\nv4 daemon (channel-c.conf)\nChannel C routing — isolated\nprocess/ports from A/B" as MLR_C #90C890
+  component "mission_orchestrator_node\nMAVFTP server\nMission plan library (JSON)\nCreate · List · Update\nActivate · Delete" as ORCH_NODE #90C890
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: swarm-coord
+' ═══════════════════════════════════════════════════
+package "swarm-coord" as C_SWARM #F0E8F8 {
+  component "swarm_coordinator_node\nPeer discovery · Heartbeat\nISR selection\nVoronoi consensus" as SWARM #C8A8E8
+  component "formation_controller_node\nPD position controller\nNED setpoints ≥5 Hz" as FORM #D8B8F0
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: mission-exec
+' ═══════════════════════════════════════════════════
+package "mission-exec" as C_EXEC #FFF0E0 {
+  component "mission_manager_node\n[State machine]\nPREFLIGHT → FAULT\nGCS authority · Autonomous triggers\nWatchdog heartbeat ≥1 Hz" as EXEC #FFD090
+  component "search_planner_node\nBoustrophedon path\nVoronoi cell → waypoints" as PLAN #FFE0A8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: vision
+' ═══════════════════════════════════════════════════
+package "vision" as C_VIS #F4EEF8 {
+  component "camera_node\n(gscam2)\nIMX219 CSI driver\n/camera/image_raw ≥15 FPS" as CAMNODE #E0C8F8
+  component "visual_localisation_node\nVisual odometry + IMU fusion\n6-DoF pose ≥10 Hz\nGNSS-denied fallback" as VISLOC #D0B0F0
+  component "perception_down_node\n(renamed from detection_node)\nAI inference (GPU)\nTarget detection\n≤500 ms latency" as DET #C0A0E8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: video-ingest (renamed from shared video-uplink container,
+' split 2026-07-22 — perception_front_node's RTSP-link flakiness/GPU
+' inference no longer shares a restart cycle with video_mux_node, which
+' now also serves the unrelated downward-camera stream (Stream B, FR-086)
+' ═══════════════════════════════════════════════════
+package "video-ingest" as C_INGEST #E8F4F0 {
+  component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nSearch & detection (front-facing)\nIndependent of vision pipeline" as PFRONT #A8E0C8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: video-downlink (renamed from video-uplink; split from
+' video-ingest into its own container, 2026-07-22 — both nodes still
+' live in the one video_downlink ROS 2 package)
+' ═══════════════════════════════════════════════════
+package "video-downlink" as C_VIDEO #DCF0E8 {
+  component "video_mux_node\nRe-encode + metadata mux\nStream A :8555 (gimbal)\nStream B :8556 (downward)" as VMUX #90D0B0
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: health-monitor
+' ═══════════════════════════════════════════════════
+package "health-monitor" as C_HEALTH #F0F0F0 {
+  component "health_monitor_node\nCPU · Memory · GPU temp\nNode liveness · Failsafe trigger\n/mc/health ≥1 Hz" as HEALTH #D0D0D0
+}
+
+' ═══════════════════════════════════════════════════
+' EXTERNAL ↔ INTERNAL CONNECTIONS
+' ═══════════════════════════════════════════════════
+UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
+QGC <--> MLR : "MAVLink 2/UDP\nGCS↔MC channel"
+MLR <--> GCS_NODE
+ORCH_APP ..> MLR_C : "MAVLink 2/UDP (Channel C)\n:14571/14572, MAVFTP\n[dashed: Orchestrator App not yet built]"
+MLR_C --> ORCH_NODE : ":14580 (loopback)"
+PEERS <--> SWARM : "Swarm protocol/UDP\nMANET · 192.168.10.x"
+CAM --> CAMNODE : "CSI"
+GIMCAM --> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)"
+
+' ═══════════════════════════════════════════════════
+' INTERNAL ROS 2 TOPIC FLOWS
+' ═══════════════════════════════════════════════════
+
+' FCC bridge → consumers
+FCC_BRIDGE -down-> EXEC : "/mc/fcc/vehicle_state"
+FCC_BRIDGE -down-> FORM : "/mc/fcc/vehicle_state"
+FCC_BRIDGE -down-> VISLOC : "(IMU data)"
+
+' Mission manager → all
+EXEC -right-> GCS_NODE : "/mc/mission_phase"
+EXEC --> HEALTH : "/mc/manager/heartbeat"
+
+' GCS node → manager
+GCS_NODE -left-> EXEC : "/mc/gcs/command\n/mc/gcs/mission_upload"
+
+' Mission Orchestrator → manager (same topic, on activate — mission_manager_node
+' needs zero changes to accept either source, see
+' MISSION-ORCHESTRATOR-MAVLINK-INTERFACE-SPEC.md §5.4)
+ORCH_NODE --> EXEC : "/mc/gcs/mission_upload (on activate)"
+
+' Swarm → consumers
+SWARM -down-> FORM : "/mc/swarm/peer_states"
+SWARM -down-> PLAN : "/mc/swarm/voronoi_cell"
+SWARM --> EXEC : "/mc/swarm/isr_role"
+
+' Formation → FCC
+FORM -up-> FCC_BRIDGE : "/mc/fcc/mission_item_update\n(MISSION mode)"
+
+' Search planner → manager
+PLAN --> EXEC : "/mc/search/coverage_path"
+
+' Vision pipeline
+CAMNODE -down-> VISLOC : "/camera/image_raw"
+CAMNODE -down-> DET : "/camera/image_raw"
+VISLOC --> DET : "/mc/local_pose"
+VISLOC -up-> FCC_BRIDGE : "(vehicle_visual_odometry)"
+
+' Detections → GCS (both cameras report their own detections over MAVLink,
+' per ICD §9.1's topic catalogue — gcs_mavlink is a documented subscriber
+' of both /mc/detections and /mc/perception/front/detections)
+DET --> GCS_NODE : "/mc/detections"
+PFRONT --> GCS_NODE : "/mc/perception/front/detections"
+
+' Gimbal video pipeline (Stream A, independent of vision pipeline and GCS MAVLink channel)
+PFRONT --> VMUX : "/mc/perception/front/detections\n/mc/perception/front/tracks"
+VMUX --> QGC : "RTSP/H.265 + metadata\nStream A :8555 (gimbal)\nStream B :8556 (downward)"
+PFRONT --> HEALTH : "(liveness heartbeat)"
+VMUX --> HEALTH : "/mc/video/downlink_status\n/mc/video/down_downlink_status"
+
+' Downward camera video pipeline (Stream B — additive, perception_down_node's
+' detection role is unchanged; this is a new consumer of existing topics)
+CAMNODE --> VMUX : "/camera/image_raw\n(Stream B input)"
+DET --> VMUX : "/mc/detections\n(Stream B metadata)"
+
+' Health → GCS + manager
+HEALTH --> GCS_NODE : "/mc/health"
+HEALTH --> EXEC : "/mc/fault (failsafe trigger)"
+
+legend right
+  | Color | Container |
+  | <#A8CCEE> | fcc-bridge |
+  | <#90C890> | gcs-comms |
+  | <#C8A8E8> | swarm-coord |
+  | <#FFD090> | mission-exec |
+  | <#C0A0E8> | vision |
+  | <#E8F4F0> | video-ingest |
+  | <#90D0B0> | video-downlink |
+  | <#D0D0D0> | health-monitor |
+  | <#C8D8F0> | Mission Orchestrator (another team's app, not yet built) |
+  | Dashed border/line | Orchestrator App awaiting other team — not GCS-004 itself, which is done |
+endlegend
+
+@enduml
