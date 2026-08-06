@@ -1,4 +1,7 @@
-# drone-mc-gcs-comms.service — gcs_mavlink_node (raw-MAVLink GCS<->MC channel).
+# drone-mc-gcs-comms.service — gcs_mavlink_node (raw-MAVLink GCS<->MC
+# channel) + MAVROS (Channel A vehicle-telemetry mirror, GCS-005,
+# SDD §11.1/§12.1). mission_orchestrator_node (GCS-004, Channel C) is NOT
+# part of this container — SDD §12.4 resolved that as out of scope here.
 # SDD §12.4: after fcc-bridge and mavlink-router.
 # Installed by scripts/02-install-systemd-units.sh.
 [Unit]

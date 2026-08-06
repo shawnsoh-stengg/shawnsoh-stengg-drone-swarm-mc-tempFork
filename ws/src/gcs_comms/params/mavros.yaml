@@ -1,0 +1,25 @@
+# MAVROS (ros-humble-mavros, apt package — not a gcs_comms build/link
+# dependency; see CMakeLists.txt's own header comment on why
+# gcs_mavlink_node deliberately doesn't link MAVROS, which this file does
+# not change). Minimal override on top of mavros_node's own defaults —
+# everything else (plugin allowlist, message rates) is whatever the
+# package ships out of the box.
+#
+# fcu_url points at mavlink-router-channel-a.conf's MAVROS_CHANNEL_A
+# endpoint (ICD-MC-001.md §4.2) — a mirror of the live GCS<->FCC vehicle
+# telemetry, not gcs_mavlink_node's own Channel B (GCS-005, SDD-MC-001.md
+# §11.1). "udp://:14553@" binds locally and learns the remote address from
+# the first packet mavlink-router relays in, same convention
+# gcs_mavlink_node/mission_orchestrator_node use for their own loopback
+# sockets (no fixed, advertisable remote address either).
+#
+# target_system_id is overridden at container start via --ros-args -p
+# (docker/gcs-comms/entrypoint.sh, DRONE_ID env var) — the default below
+# only applies to a standalone `ros2 run mavros mavros_node` invocation
+# without that override.
+mavros:
+  ros__parameters:
+    fcu_url: "udp://:14553@"
+    fcu_protocol: "v2.0"
+    target_system_id: 1
+    target_component_id: 1

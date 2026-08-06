@@ -8,7 +8,11 @@
 # entrypoint.sh runs the two channels as independent mavlink-routerd
 # processes, not one shared config · the systemd unit bind-mounts
 # /etc/drone-mc read-only · scripts/02-install-systemd-units.sh provisions
-# both conf files onto the host.
+# both conf files onto the host. Also verifies Channel A's one deliberate
+# exception (GCS-005's MAVROS_CHANNEL_A endpoint, channel-a.conf's own
+# header comment) is exactly what's documented — present, loopback-only,
+# and not colliding with any Channel B/C port — rather than an accidental
+# widening of what was previously a strict two-party channel.
 #
 # Set LIVE_CHECK=1 to additionally start the built image against
 # loopback-rewritten copies of both conf files and use tcpdump to confirm a
@@ -47,6 +51,21 @@ check "channel-a: no Channel B port 14551" bash -c "! grep -qE 'Port = 14551' '$
 check "channel-a: no Channel B port 14552" bash -c "! grep -qE 'Port = 14552' '${CONF_A}'"
 check "channel-a: no Channel B port 14560" bash -c "! grep -qE 'Port = 14560' '${CONF_A}'"
 check "channel-a: no GCS_MAVLINK_NODE endpoint" bash -c "! grep -q 'GCS_MAVLINK_NODE' '${CONF_A}'"
+
+# MAVROS_CHANNEL_A (GCS-005) is a deliberate exception to the "no MC-facing
+# endpoint" property Channel A otherwise still holds — verify it's the
+# narrow, reviewed addition documented in channel-a.conf's own header, not
+# an accidental extra endpoint or a cross-channel port collision.
+check "channel-a: MAVROS endpoint present" grep -q 'MAVROS_CHANNEL_A' "${CONF_A}"
+check "channel-a: MAVROS endpoint on loopback" \
+    bash -c "awk '/\[UdpEndpoint MAVROS_CHANNEL_A\]/{f=1} f && /^Address/{print; exit}' '${CONF_A}' | grep -qE '127\.0\.0\.1'"
+check "channel-a: MAVROS port 14553 declared" grep -qE 'Port = 14553' "${CONF_A}"
+check "channel-a: MAVROS port does not collide with Channel B (14551/14552/14560)" \
+    bash -c "! grep -qE 'Port = 1455[12]$|Port = 14560' '${CONF_A}'"
+check "channel-a: MAVROS port does not collide with Channel C (14571/14572/14580)" \
+    bash -c "! grep -qE 'Port = 1457[12]$|Port = 14580' '${CONF_A}'"
+check "channel-a: exactly one MAVROS endpoint (no accidental duplicate)" \
+    bash -c "[[ \$(grep -c '\[UdpEndpoint MAVROS_CHANNEL_A\]' '${CONF_A}') -eq 1 ]]"
 
 # Channel B: GCS<->MC only, ports 14551/14552/14560.
 check "channel-b: GCS endpoint at 192.168.10.10:14551" \
