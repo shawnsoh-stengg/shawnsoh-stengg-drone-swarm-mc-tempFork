@@ -1,12 +1,741 @@
+// Copyright 2026 Jun Hong Lee. All rights reserved.
+// Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §4, ICD-MC-001 §9).
+
+// EXEC-001: mission_manager_node node-integration tests — one per SDD §4.1
+// transition table row (guard false -> no transition, guard true -> commit
+// with the correct entry-action side effect), plus FR-003's 500 ms GCS
+// override latency bound (TP-UT-012 style) and FCC-006's ack-blocks-
+// advancement behaviour. swarm_coordinator_node/search_planner_node are
+// mocked here via a harness node publishing directly on their documented
+// output topics (TP-MC-001 §2.4 mock strategy), matching test_fcc_bridge_
+// node.cpp's own technique of standing in for a peer node with a plain
+// rclcpp::Node rather than launch_testing infrastructure.
+
 #include <gtest/gtest.h>
+
+#include <array>
+#include <chrono>
+#include <memory>
+#include <thread>
+#include <vector>
+
+#include <geographic_msgs/msg/geo_point.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+#include <mc_msgs/msg/fault_event.hpp>
+#include <mc_msgs/msg/fcc_command.hpp>
+#include <mc_msgs/msg/fcc_mission.hpp>
+#include <mc_msgs/msg/fcc_mission_ack.hpp>
+#include <mc_msgs/msg/fcc_mission_item.hpp>
+#include <mc_msgs/msg/formation_offset.hpp>
+#include <mc_msgs/msg/gcs_command.hpp>
+#include <mc_msgs/msg/isr_role.hpp>
+#include <mc_msgs/msg/mission_phase.hpp>
+#include <mc_msgs/msg/mission_upload.hpp>
+#include <mc_msgs/msg/swarm_peer.hpp>
+#include <mc_msgs/msg/swarm_peer_array.hpp>
+#include <mc_msgs/msg/vehicle_state.hpp>
+#include <mc_msgs/msg/voronoi_cell.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/header.hpp>
 
 #include "mission_exec/mission_manager_node.hpp"
 
-TEST(MissionManagerNode, ConstructsWithExpectedName)
+namespace
 {
-  rclcpp::init(0, nullptr);
-  auto node = std::make_shared<mission_exec::MissionManagerNode>();
-  EXPECT_STREQ(node->get_name(), "mission_manager_node");
-  rclcpp::shutdown();
+class RclcppEnvironment : public ::testing::Environment
+{
+public:
+  void SetUp() override {rclcpp::init(0, nullptr);}
+  void TearDown() override {rclcpp::shutdown();}
+};
+
+::testing::Environment * const kRclcppEnv =
+  ::testing::AddGlobalTestEnvironment(new RclcppEnvironment);
+
+template<typename Predicate>
+bool spin_until(
+  std::initializer_list<rclcpp::Node::SharedPtr> nodes, Predicate predicate,
+  std::chrono::milliseconds timeout)
+{
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    for (const auto & n : nodes) {
+      rclcpp::spin_some(n);
+    }
+    if (predicate()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return false;
+}
+
+constexpr uint8_t kArmingStateStandby = 1;
+constexpr uint8_t kArmingStateArmed = 2;
+constexpr uint8_t kNavStateAutoLoiter = 4;
+constexpr uint32_t kMavCmdComponentArmDisarm = 400;
+constexpr uint32_t kMavCmdNavReturnToLaunch = 20;
+constexpr uint32_t kMavCmdNavTakeoff = 22;
+constexpr uint32_t kMcCmdEndMission = 50003;
+}  // namespace
+
+class MissionManagerNodeTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::NodeOptions opts;
+    opts.parameter_overrides(
+    {
+      rclcpp::Parameter("control_loop_period_s", 0.02),
+      rclcpp::Parameter("mission_ack_timeout_s", 1.0),
+      rclcpp::Parameter("mission_ack_max_retries", 1),
+      rclcpp::Parameter("muster_quorum_count", 1),
+      rclcpp::Parameter("takeoff_altitude_m", 10.0),
+      rclcpp::Parameter("takeoff_altitude_tolerance_m", 1.0),
+      rclcpp::Parameter("waypoint_acceptance_radius_m", 3.0),
+      rclcpp::Parameter("home_position_tolerance_m", 3.0),
+    });
+    node_ = std::make_shared<mission_exec::MissionManagerNode>(opts);
+    harness_ = std::make_shared<rclcpp::Node>("mission_manager_node_test_harness");
+
+    pub_vehicle_state_ = harness_->create_publisher<mc_msgs::msg::VehicleState>(
+      "/mc/fcc/vehicle_state", rclcpp::QoS(10));
+    pub_mission_upload_ = harness_->create_publisher<mc_msgs::msg::MissionUpload>(
+      "/mc/gcs/mission_upload", rclcpp::QoS(10));
+    pub_gcs_command_ =
+      harness_->create_publisher<mc_msgs::msg::GcsCommand>("/mc/gcs/command", rclcpp::QoS(10));
+    pub_peer_states_ = harness_->create_publisher<mc_msgs::msg::SwarmPeerArray>(
+      "/mc/swarm/peer_states", rclcpp::QoS(10));
+    pub_isr_role_ =
+      harness_->create_publisher<mc_msgs::msg::IsrRole>("/mc/swarm/isr_role", rclcpp::QoS(10));
+    pub_voronoi_cell_ = harness_->create_publisher<mc_msgs::msg::VoronoiCell>(
+      "/mc/swarm/voronoi_cell", rclcpp::QoS(10));
+    pub_coverage_path_ =
+      harness_->create_publisher<nav_msgs::msg::Path>("/mc/search/coverage_path", rclcpp::QoS(10));
+    pub_fault_ = harness_->create_publisher<mc_msgs::msg::FaultEvent>("/mc/fault", rclcpp::QoS(10));
+    pub_mission_ack_ = harness_->create_publisher<mc_msgs::msg::FccMissionAck>(
+      "/mc/fcc/mission_ack", rclcpp::QoS(10));
+
+    sub_phase_ = harness_->create_subscription<mc_msgs::msg::MissionPhase>(
+      "/mc/mission_phase", rclcpp::QoS(10),
+      [this](mc_msgs::msg::MissionPhase::SharedPtr msg) {phases_.push_back(msg);});
+    sub_heartbeat_ = harness_->create_subscription<std_msgs::msg::Header>(
+      "/mc/manager/heartbeat", rclcpp::QoS(10),
+      [this](std_msgs::msg::Header::SharedPtr msg) {heartbeats_.push_back(msg);});
+    sub_send_command_ = harness_->create_subscription<mc_msgs::msg::FccCommand>(
+      "/mc/fcc/send_command", rclcpp::QoS(10),
+      [this](mc_msgs::msg::FccCommand::SharedPtr msg) {send_commands_.push_back(msg);});
+    sub_mission_item_update_ = harness_->create_subscription<mc_msgs::msg::FccMissionItem>(
+      "/mc/fcc/mission_item_update", rclcpp::QoS(10),
+      [this](mc_msgs::msg::FccMissionItem::SharedPtr msg) {mission_item_updates_.push_back(msg);});
+    sub_fcc_mission_upload_ = harness_->create_subscription<mc_msgs::msg::FccMission>(
+      "/mc/fcc/mission_upload", rclcpp::QoS(10),
+      [this](mc_msgs::msg::FccMission::SharedPtr msg) {fcc_mission_uploads_.push_back(msg);});
+
+    // Let publishers/subscriptions discover each other before any test body
+    // starts asserting on timing-sensitive behaviour.
+    spin_until({node_, harness_}, [this] {return sub_send_command_->get_publisher_count() > 0;},
+      std::chrono::seconds(2));
+  }
+
+  void TearDown() override
+  {
+    node_.reset();
+    harness_.reset();
+  }
+
+  mc_msgs::msg::VehicleState good_vehicle_state() const
+  {
+    mc_msgs::msg::VehicleState vs;
+    vs.header.stamp = harness_->now();
+    vs.lat = 1.3;
+    vs.lon = 103.8;
+    vs.alt_msl = 40.0F;
+    vs.x = 0.0F;
+    vs.y = 0.0F;
+    vs.z = 0.0F;
+    vs.arming_state = kArmingStateStandby;
+    vs.nav_state = 0;
+    vs.battery_pct = 1.0F;
+    vs.gnss_ok = true;
+    vs.fcc_link_ok = true;
+    return vs;
+  }
+
+  mc_msgs::msg::MissionUpload full_mission_upload(bool arm_authorised) const
+  {
+    mc_msgs::msg::MissionUpload up;
+    up.header.stamp = harness_->now();
+    up.upload_id = 42;
+    geometry_msgs::msg::PoseStamped wp;
+    wp.pose.position.x = 0.0;
+    wp.pose.position.y = 0.0;
+    wp.pose.position.z = 0.0;
+    up.ingress_waypoints = {wp};
+    mc_msgs::msg::FormationOffset offset;
+    offset.drone_id = 1;
+    up.formation_offsets = {offset};
+    geographic_msgs::msg::GeoPoint pt;
+    up.search_polygon = {pt, pt, pt};
+    mc_msgs::msg::SwarmPeer peer;
+    peer.drone_id = 1;
+    up.swarm_manifest = {peer};
+    up.arm_authorised = arm_authorised;
+    up.low_battery_threshold = 0.20F;
+    return up;
+  }
+
+  void send_gcs_command(uint32_t cmd, std::array<float, 7> params)
+  {
+    mc_msgs::msg::GcsCommand out;
+    out.header.stamp = harness_->now();
+    out.command = cmd;
+    out.params = params;
+    pub_gcs_command_->publish(out);
+  }
+
+  // Drives the node from PREFLIGHT through ARMING, TAKEOFF, and INGRESS
+  // (acking the FORMATION_SLOT item-update along the way) so later-phase
+  // tests can start from a realistic precondition instead of re-deriving
+  // every earlier phase's setup — mirrors TP-ST-001's own full-mission
+  // structure.
+  void advance_to_ingress()
+  {
+    pub_mission_upload_->publish(full_mission_upload(/*arm_authorised=*/true));
+    pub_vehicle_state_->publish(good_vehicle_state());
+    ASSERT_TRUE(spin_until(
+        {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+      std::chrono::seconds(2)));
+
+    auto vs = good_vehicle_state();
+    vs.arming_state = kArmingStateArmed;
+    pub_vehicle_state_->publish(vs);
+    ASSERT_TRUE(spin_until(
+        {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+      std::chrono::seconds(2)));
+
+    vs.z = -10.0F;  // NED down => 10 m AGL, matches takeoff_altitude_m_ override
+    pub_vehicle_state_->publish(vs);
+    wait_for_ticks();  // ensure the updated altitude lands before the GCS command below
+    send_gcs_command(50001 /*MC_CMD_PHASE_TRANSITION*/, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+    ASSERT_TRUE(spin_until(
+        {node_, harness_}, [this] {return !mission_item_updates_.empty();},
+      std::chrono::seconds(2)));
+    mc_msgs::msg::FccMissionAck ack;
+    ack.request_type = mc_msgs::msg::FccMissionAck::ITEM_UPDATE;
+    ack.seq = 0;
+    ack.success = true;
+    pub_mission_ack_->publish(ack);
+    ASSERT_TRUE(spin_until(
+        {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::INGRESS);},
+      std::chrono::seconds(2)));
+  }
+
+  bool phase_reached(uint8_t phase) const
+  {
+    return !phases_.empty() && phases_.back()->phase == phase;
+  }
+
+  // Blocks until at least `ticks` further control-loop cycles have
+  // completed (observed via the heartbeat published at the end of every
+  // cycle, SDD §4.4) — guarantees a just-published message the node
+  // subscribes to has actually been processed before the caller proceeds,
+  // avoiding a race between an async publish and a synchronous follow-up
+  // action like a GCS command that depends on it.
+  void wait_for_ticks(int ticks = 2)
+  {
+    const size_t baseline = heartbeats_.size();
+    ASSERT_TRUE(spin_until(
+        {node_, harness_},
+        [this, baseline, ticks] {return heartbeats_.size() >= baseline + static_cast<size_t>(ticks);},
+      std::chrono::seconds(2)));
+  }
+
+  std::shared_ptr<mission_exec::MissionManagerNode> node_;
+  rclcpp::Node::SharedPtr harness_;
+
+  rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
+  rclcpp::Publisher<mc_msgs::msg::MissionUpload>::SharedPtr pub_mission_upload_;
+  rclcpp::Publisher<mc_msgs::msg::GcsCommand>::SharedPtr pub_gcs_command_;
+  rclcpp::Publisher<mc_msgs::msg::SwarmPeerArray>::SharedPtr pub_peer_states_;
+  rclcpp::Publisher<mc_msgs::msg::IsrRole>::SharedPtr pub_isr_role_;
+  rclcpp::Publisher<mc_msgs::msg::VoronoiCell>::SharedPtr pub_voronoi_cell_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_coverage_path_;
+  rclcpp::Publisher<mc_msgs::msg::FaultEvent>::SharedPtr pub_fault_;
+  rclcpp::Publisher<mc_msgs::msg::FccMissionAck>::SharedPtr pub_mission_ack_;
+
+  rclcpp::Subscription<mc_msgs::msg::MissionPhase>::SharedPtr sub_phase_;
+  rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr sub_heartbeat_;
+  rclcpp::Subscription<mc_msgs::msg::FccCommand>::SharedPtr sub_send_command_;
+  rclcpp::Subscription<mc_msgs::msg::FccMissionItem>::SharedPtr sub_mission_item_update_;
+  rclcpp::Subscription<mc_msgs::msg::FccMission>::SharedPtr sub_fcc_mission_upload_;
+
+  std::vector<mc_msgs::msg::MissionPhase::SharedPtr> phases_;
+  std::vector<std_msgs::msg::Header::SharedPtr> heartbeats_;
+  std::vector<mc_msgs::msg::FccCommand::SharedPtr> send_commands_;
+  std::vector<mc_msgs::msg::FccMissionItem::SharedPtr> mission_item_updates_;
+  std::vector<mc_msgs::msg::FccMission::SharedPtr> fcc_mission_uploads_;
+};
+
+TEST_F(MissionManagerNodeTest, ConstructsWithExpectedNameAndStartsInPreflight)
+{
+  EXPECT_STREQ(node_->get_name(), "mission_manager_node");
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+}
+
+// --- PREFLIGHT -> ARMING ---
+
+TEST_F(MissionManagerNodeTest, PreflightToArming_GuardFalseWithoutArmAuthorisation)
+{
+  pub_vehicle_state_->publish(good_vehicle_state());
+  // No mission upload published -> arm_authorised_ stays false.
+  spin_until({node_, harness_}, [this] {return !heartbeats_.empty();}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+  EXPECT_TRUE(send_commands_.empty());
+}
+
+TEST_F(MissionManagerNodeTest, PreflightToArming_GuardTrueCommandsArmAndTransitions)
+{
+  pub_mission_upload_->publish(full_mission_upload(/*arm_authorised=*/true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdComponentArmDisarm);
+  EXPECT_FLOAT_EQ(send_commands_.back()->params[0], 1.0F);
+}
+
+// --- ARMING -> TAKEOFF ---
+
+TEST_F(MissionManagerNodeTest, ArmingToTakeoff_GuardFalseUntilFccReportsArmed)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 3;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::ARMING);
+}
+
+TEST_F(MissionManagerNodeTest, ArmingToTakeoff_GuardTrueSendsTakeoffCommand)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  pub_vehicle_state_->publish(vs);
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+    std::chrono::seconds(2)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdNavTakeoff);
+}
+
+// --- TAKEOFF -> INGRESS (mission-channel, ack-blocking) ---
+
+TEST_F(MissionManagerNodeTest, TakeoffToIngress_StaysAtTakeoffWithoutGcsIngressCommand)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+    std::chrono::seconds(2)));
+
+  // Altitude reached but no GCS PHASE_TRANSITION(INGRESS) yet -> guard false.
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::TAKEOFF);
+  EXPECT_TRUE(mission_item_updates_.empty());
+}
+
+TEST_F(MissionManagerNodeTest, TakeoffToIngress_BlocksOnAckThenCommitsOnSuccess)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+    std::chrono::seconds(2)));
+
+  send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // PHASE_TRANSITION(INGRESS)
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !mission_item_updates_.empty();},
+    std::chrono::seconds(2)));
+  EXPECT_EQ(mission_item_updates_.back()->seq, 0);
+
+  // No ack yet -> the state machine must not have optimistically advanced.
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::TAKEOFF);
+
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::ITEM_UPDATE;
+  ack.seq = 0;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::INGRESS);},
+    std::chrono::seconds(2)));
+}
+
+TEST_F(MissionManagerNodeTest, TakeoffToIngress_FailedAckRetriesThenEscalatesToFault)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+    std::chrono::seconds(2)));
+
+  send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !mission_item_updates_.empty();},
+    std::chrono::seconds(2)));
+
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::ITEM_UPDATE;
+  ack.seq = 0;
+  ack.success = false;
+  pub_mission_ack_->publish(ack);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return mission_item_updates_.size() >= 2U;},
+    std::chrono::seconds(2)))
+    << "expected a retry resend after the first failed ack";
+  pub_mission_ack_->publish(ack);  // mission_ack_max_retries_ == 1 -> this 2nd failure escalates
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+    std::chrono::seconds(3)))
+    << "expected escalation to FAULT after exhausting ack retries";
+}
+
+// --- INGRESS -> MUSTER ---
+
+TEST_F(MissionManagerNodeTest, IngressToMuster_GuardFalseUntilMusterWaypointReached)
+{
+  advance_to_ingress();
+  // Still far from the mission upload's single (0,0) muster waypoint.
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  vs.x = 100.0F;
+  vs.y = 100.0F;
+  pub_vehicle_state_->publish(vs);
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
+}
+
+TEST_F(MissionManagerNodeTest, IngressToMuster_GuardTrueOnReachingMusterWaypoint)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  vs.x = 0.0F;
+  vs.y = 0.0F;  // matches ingress_waypoints' single (0,0) waypoint
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::MUSTER);},
+    std::chrono::seconds(2)));
+}
+
+// --- MUSTER -> ISR_SELECTION ---
+
+TEST_F(MissionManagerNodeTest, MusterToIsrSelection_GuardTrueWithSoloQuorum)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::MUSTER);},
+    std::chrono::seconds(2)));
+
+  // muster_quorum_count_ override == 1 (solo drone) -> no peer_states needed.
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ISR_SELECTION);},
+    std::chrono::seconds(2)));
+}
+
+// --- ISR_SELECTION -> VORONOI_PARTITION ---
+
+TEST_F(MissionManagerNodeTest, IsrSelectionToVoronoiPartition_GuardFalseUntilAllPeersAcked)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ISR_SELECTION);},
+    std::chrono::seconds(2)));
+
+  mc_msgs::msg::IsrRole role;
+  role.role = mc_msgs::msg::IsrRole::ISR;
+  role.all_peers_acked = false;
+  pub_isr_role_->publish(role);
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::ISR_SELECTION);
+}
+
+TEST_F(MissionManagerNodeTest, IsrSelectionToVoronoiPartition_GuardTrueOnAllPeersAcked)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ISR_SELECTION);},
+    std::chrono::seconds(2)));
+
+  mc_msgs::msg::IsrRole role;
+  role.role = mc_msgs::msg::IsrRole::ISR;
+  role.all_peers_acked = true;
+  pub_isr_role_->publish(role);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [this] {return phase_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION);},
+    std::chrono::seconds(2)));
+}
+
+// --- VORONOI_PARTITION -> SEARCH (mission-channel, ack-blocking) ---
+
+TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardFalseUntilCellAndPathReceived)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  mc_msgs::msg::IsrRole role;
+  role.all_peers_acked = true;
+  pub_isr_role_->publish(role);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [this] {return phase_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION);},
+    std::chrono::seconds(2)));
+
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::VORONOI_PARTITION);
+  EXPECT_TRUE(fcc_mission_uploads_.empty());
+}
+
+TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardTrueUploadsCoveragePath)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  mc_msgs::msg::IsrRole role;
+  role.all_peers_acked = true;
+  pub_isr_role_->publish(role);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [this] {return phase_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION);},
+    std::chrono::seconds(2)));
+
+  mc_msgs::msg::VoronoiCell cell;
+  cell.upload_id = 42;  // matches full_mission_upload()'s upload_id
+  pub_voronoi_cell_->publish(cell);
+
+  nav_msgs::msg::Path path;
+  geometry_msgs::msg::PoseStamped p1;
+  p1.pose.position.x = 103.8;  // lon
+  p1.pose.position.y = 1.3;    // lat
+  p1.pose.position.z = 50.0;   // alt_msl
+  path.poses = {p1};
+  pub_coverage_path_->publish(path);
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
+    std::chrono::seconds(2)));
+  ASSERT_EQ(fcc_mission_uploads_.back()->items.size(), 1U);
+
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
+    std::chrono::seconds(2)));
+}
+
+// --- SEARCH -> RETURN ---
+
+TEST_F(MissionManagerNodeTest, SearchToReturn_GuardTrueOnFccMissionComplete)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  mc_msgs::msg::IsrRole role;
+  role.all_peers_acked = true;
+  pub_isr_role_->publish(role);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [this] {return phase_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION);},
+    std::chrono::seconds(2)));
+
+  mc_msgs::msg::VoronoiCell cell;
+  cell.upload_id = 42;
+  pub_voronoi_cell_->publish(cell);
+  nav_msgs::msg::Path path;
+  geometry_msgs::msg::PoseStamped p1;
+  path.poses = {p1};
+  pub_coverage_path_->publish(path);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
+    std::chrono::seconds(2)));
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
+    std::chrono::seconds(2)));
+
+  vs.nav_state = kNavStateAutoLoiter;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+    std::chrono::seconds(2)));
+}
+
+// --- RETURN -> LAND ---
+
+TEST_F(MissionManagerNodeTest, ReturnToLand_GuardTrueAtHomePositionSendsLandCommand)
+{
+  advance_to_ingress();
+  send_gcs_command(kMcCmdEndMission, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+    std::chrono::seconds(2)));
+
+  auto vs = good_vehicle_state();
+  vs.x = 0.0F;
+  vs.y = 0.0F;  // within home_position_tolerance_m_ of the NED origin
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::LAND);},
+    std::chrono::seconds(2)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, 21U /*MAV_CMD_NAV_LAND*/);
+}
+
+// --- Any -> RETURN (GCS END_MISSION / ABORT) ---
+
+TEST_F(MissionManagerNodeTest, AnyToReturn_EndMissionCommandAbortsFromAnyPhase)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  send_gcs_command(kMcCmdEndMission, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+    std::chrono::seconds(2)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdNavReturnToLaunch);
+}
+
+// --- Any -> FAULT (health_monitor CRITICAL_FAULT event) ---
+
+TEST_F(MissionManagerNodeTest, AnyToFault_FccLinkLostFaultCommandsRtl)
+{
+  pub_vehicle_state_->publish(good_vehicle_state());
+  spin_until({node_, harness_}, [this] {return !heartbeats_.empty();}, std::chrono::seconds(1));
+
+  mc_msgs::msg::FaultEvent fault;
+  fault.fault_id = mc_msgs::msg::FaultEvent::FCC_LINK_LOST;
+  fault.severity = 2;
+  pub_fault_->publish(fault);
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+    std::chrono::seconds(2)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdNavReturnToLaunch);
+  // FaultEvent's own doc comment / is_critical_fault(): this reacts only to
+  // the /mc/fault content, never to /mc/fcc/vehicle_state.fcc_link_ok.
+}
+
+// --- FR-002: undefined transitions are rejected, phase unchanged ---
+
+TEST_F(MissionManagerNodeTest, InvalidTransitionRequestIsRejected)
+{
+  pub_vehicle_state_->publish(good_vehicle_state());
+  spin_until({node_, harness_}, [this] {return !heartbeats_.empty();}, std::chrono::seconds(1));
+
+  // PREFLIGHT's only row targets ARMING — request SEARCH directly.
+  send_gcs_command(50001, {7.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+}
+
+// --- FR-003: GCS emergency command acted on within 500 ms, any phase ---
+
+TEST_F(MissionManagerNodeTest, GcsDisarmCommandActedOnWithin500msFromSearchPhase)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  const auto t0 = std::chrono::steady_clock::now();
+  send_gcs_command(kMavCmdComponentArmDisarm, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // DISARM
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+    std::chrono::milliseconds(500)));
+  const auto elapsed = std::chrono::steady_clock::now() - t0;
+
+  EXPECT_LE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 500);
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdComponentArmDisarm);
+  EXPECT_FLOAT_EQ(send_commands_.back()->params[0], 0.0F);
+}
+
+// --- FR-074 / TP-NI-011: heartbeat continuity ---
+
+TEST_F(MissionManagerNodeTest, HeartbeatPublishesAtLeastOneHertz)
+{
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return heartbeats_.size() >= 20U;}, std::chrono::seconds(2)));
 }

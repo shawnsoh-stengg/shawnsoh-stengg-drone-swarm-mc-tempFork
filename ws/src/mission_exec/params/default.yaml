@@ -1,6 +1,25 @@
-# Placeholder — real tunables land with the mission_manager_node /
-# search_planner_node implementation (SDD-MC-001 §2.4).
+# mission_manager_node tunables (SDD-MC-001 §4, EXEC-001).
 mission_manager_node:
-  ros__parameters: {}
+  ros__parameters:
+    control_loop_period_s: 0.1
+    # FCC-006 ack wait for a mission_upload/mission_item_update forwarded
+    # request. Kept above fcc_bridge_node's own internal upload timeout
+    # (5 s, MissionProtocolClient::upload_mission) so a genuinely-slow but
+    # still-succeeding FCC handshake isn't mistaken for a dropped request.
+    mission_ack_timeout_s: 6.0
+    mission_ack_max_retries: 3
+    # Minimum count of (self + ALIVE peers in MUSTER) required to advance
+    # MUSTER -> ISR_SELECTION. Default 1 = solo drone, no peers required.
+    muster_quorum_count: 1
+    takeoff_altitude_m: 30.0
+    takeoff_altitude_tolerance_m: 2.0
+    waypoint_acceptance_radius_m: 5.0
+    home_position_tolerance_m: 5.0
+    low_battery_margin: 0.10
+    local_pose_stale_timeout_s: 2.0
+
+# search_planner_node — scaffold only, real tunables land with the
+# boustrophedon coverage implementation (SDD-MC-001 §7, out of scope for
+# EXEC-001).
 search_planner_node:
   ros__parameters: {}

@@ -11,7 +11,13 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(mc_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 
+# EXEC-001: mission_manager_node — 11-phase mission state machine, table-
+# driven per SDD-MC-001 §4.1 (SDD-MC-001 §4, ICD-MC-001 §9).
 add_library(mission_manager_node_lib
   src/mission_manager_node.cpp
 )
@@ -19,7 +25,8 @@ target_include_directories(mission_manager_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(mission_manager_node_lib PUBLIC rclcpp)
+ament_target_dependencies(mission_manager_node_lib PUBLIC
+  rclcpp mc_msgs std_msgs geometry_msgs nav_msgs)
 
 add_executable(mission_manager_node src/mission_manager_node_main.cpp)
 target_link_libraries(mission_manager_node mission_manager_node_lib)

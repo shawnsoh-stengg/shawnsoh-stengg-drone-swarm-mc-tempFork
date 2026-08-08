@@ -1,17 +1,255 @@
+// Copyright 2026 Jun Hong Lee. All rights reserved.
+// Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §4, ICD-MC-001 §9).
+
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <mc_msgs/msg/fault_event.hpp>
+#include <mc_msgs/msg/fcc_command.hpp>
+#include <mc_msgs/msg/fcc_mission.hpp>
+#include <mc_msgs/msg/fcc_mission_ack.hpp>
+#include <mc_msgs/msg/fcc_mission_item.hpp>
+#include <mc_msgs/msg/gcs_command.hpp>
+#include <mc_msgs/msg/isr_role.hpp>
+#include <mc_msgs/msg/mission_phase.hpp>
+#include <mc_msgs/msg/mission_upload.hpp>
+#include <mc_msgs/msg/swarm_peer_array.hpp>
+#include <mc_msgs/msg/vehicle_state.hpp>
+#include <mc_msgs/msg/voronoi_cell.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/header.hpp>
 
 namespace mission_exec
 {
 
-// Mission phase state machine (SDD-MC-001 §4). Scaffold only — the
-// transition table and FCC/swarm integration land with the FCC-0xx
-// implementation work.
+// EXEC-001: mission_manager_node — 11-phase mission state machine
+// (SDD-MC-001 §4.1, FR-001-005/010-016/060-064). Table-driven: guards and
+// entry actions live as data in transition_table_, not a switch statement,
+// so the table is inspectable/testable independent of the dispatch
+// mechanism (the ticket's own framing).
+//
+// Deliberately excludes SDD §4.1a's OFFBOARD/MISSION hybrid-mode
+// arbitration (a separate, later addition layered on top of this same
+// table — OFFBOARD-MODE-SWITCHING-BACKLOG.md) and RETURN/LAND phase
+// detail beyond the abridged table's own two rows — both out of scope
+// per this ticket's own "Explicitly out of scope" section.
+enum class Phase : uint8_t
+{
+  PREFLIGHT = 0,
+  ARMING = 1,
+  TAKEOFF = 2,
+  INGRESS = 3,
+  MUSTER = 4,
+  ISR_SELECTION = 5,
+  VORONOI_PARTITION = 6,
+  SEARCH = 7,
+  RETURN = 8,
+  LAND = 9,
+  FAULT = 255,
+};
+
+struct Transition
+{
+  Phase target;
+  std::function<bool()> guard;
+  std::function<void()> action;
+};
+
+using TransitionTable = std::vector<Transition>;
+
 class MissionManagerNode : public rclcpp::Node
 {
 public:
-  MissionManagerNode();
+  explicit MissionManagerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+
+  // Test seam: current phase and a few derived predicates, exercised
+  // directly by TP-UT-010/011/012-style unit tests without needing a full
+  // topic round-trip.
+  Phase current_phase() const {return current_phase_;}
+  bool pre_arm_checks(std::string * reason = nullptr) const;
+
+private:
+  // --- transition table construction ---
+  void build_transition_table();
+
+  // --- guards (SDD §4.1 abridged table) ---
+  bool guard_preflight_to_arming() const;
+  bool guard_arming_to_takeoff() const;
+  bool guard_takeoff_to_ingress() const;
+  bool guard_ingress_to_muster() const;
+  bool guard_muster_to_isr_selection() const;
+  bool guard_isr_selection_to_voronoi_partition() const;
+  bool guard_voronoi_partition_to_search() const;
+  bool guard_search_to_return() const;
+  bool guard_return_to_land() const;
+  // "Any -> ..." overlay guards (SDD §4.1's two Phase-less rows).
+  bool guard_any_return() const;
+  bool guard_any_fault() const;
+
+  // --- entry actions ---
+  void action_enter_arming();
+  void action_notify_swarm();
+  void action_send_takeoff();
+  void action_begin_formation_slot_reservation();
+  void action_disable_formation_ctrl();
+  void action_disable_detection();
+  void action_begin_coverage_path_upload();
+  void action_send_land();
+  void action_log_mission_complete();
+  void action_cancel_active_mission();
+  void action_command_rtl();
+  void send_rtl_command();
+
+  // --- topic callbacks ---
+  void on_vehicle_state(mc_msgs::msg::VehicleState::SharedPtr msg);
+  void on_mission_ack(mc_msgs::msg::FccMissionAck::SharedPtr msg);
+  void on_gcs_command(mc_msgs::msg::GcsCommand::SharedPtr msg);
+  void on_gcs_mission_upload(mc_msgs::msg::MissionUpload::SharedPtr msg);
+  void on_peer_states(mc_msgs::msg::SwarmPeerArray::SharedPtr msg);
+  void on_isr_role(mc_msgs::msg::IsrRole::SharedPtr msg);
+  void on_voronoi_cell(mc_msgs::msg::VoronoiCell::SharedPtr msg);
+  void on_coverage_path(nav_msgs::msg::Path::SharedPtr msg);
+  void on_fault(mc_msgs::msg::FaultEvent::SharedPtr msg);
+  void on_control_timer();
+
+  // --- transition engine ---
+  // try_transition looks up `target` in the *current* phase's own table
+  // (an explicit GCS PHASE_TRANSITION request, FR-002) — `from_gcs_command`
+  // set true lets a guard that requires "GCS command received" (TAKEOFF ->
+  // INGRESS) observe gcs_phase_request_. evaluate_autonomous_transitions()
+  // instead walks the current phase's table looking for the first row
+  // whose guard is already true with no GCS request involved (the periodic
+  // sweep). Both consult any_transitions_ first (the two "Any -> ..." rows
+  // — SDD §4.1 can't key these by Phase since "Any" isn't a Phase value).
+  enum class TransitionResult { COMMITTED, PENDING_ACK, REJECTED, NO_MATCH };
+  TransitionResult try_transition(Phase target, bool from_gcs_command);
+  void evaluate_autonomous_transitions();
+  bool evaluate_any_transitions();
+  void commit_transition(Phase target, uint8_t source);
+  void publish_phase(bool force);
+
+  // --- mission-channel ack-blocking (FCC-006) ---
+  enum class AckKind { NONE, ITEM_UPDATE, UPLOAD };
+  void send_formation_slot_item();
+  void send_coverage_path_upload();
+  void check_ack_timeout();
+  void on_mission_channel_ack_success();
+  void on_mission_channel_ack_failure();
+
+  // --- GCS command dispatch (SDD §4.3) ---
+  void handle_gcs_command(const mc_msgs::msg::GcsCommand & cmd);
+
+  // --- fault handling (does not re-derive link health from vehicle_state) ---
+  bool is_critical_fault(const mc_msgs::msg::FaultEvent & fault) const;
+
+  // Params
+  double control_loop_period_s_{0.1};
+  double mission_ack_timeout_s_{6.0};
+  int mission_ack_max_retries_{3};
+  int muster_quorum_count_{1};
+  double takeoff_altitude_m_{30.0};
+  double takeoff_altitude_tolerance_m_{2.0};
+  double waypoint_acceptance_radius_m_{5.0};
+  double home_position_tolerance_m_{5.0};
+  double low_battery_margin_{0.10};
+  double local_pose_stale_timeout_s_{2.0};
+
+  // Transition table (SDD §4.1: std::unordered_map<Phase, TransitionTable>).
+  std::unordered_map<Phase, TransitionTable> transition_table_;
+  // Global "Any -> ..." overlay rows, checked before the per-phase table.
+  std::vector<Transition> any_transitions_;
+
+  Phase current_phase_{Phase::PREFLIGHT};
+  rclcpp::Time phase_entered_at_;
+  rclcpp::Time last_phase_publish_at_;
+  bool phase_published_once_{false};
+
+  // Latest received state, kept for guard evaluation.
+  mc_msgs::msg::VehicleState::SharedPtr vehicle_state_;
+  mc_msgs::msg::MissionUpload::SharedPtr mission_upload_;
+  mc_msgs::msg::SwarmPeerArray::SharedPtr peer_states_;
+  mc_msgs::msg::IsrRole::SharedPtr isr_role_;
+  mc_msgs::msg::VoronoiCell::SharedPtr voronoi_cell_;
+  nav_msgs::msg::Path::SharedPtr coverage_path_;
+  rclcpp::Time last_local_pose_at_;
+  bool local_pose_ever_received_{false};
+
+  // Transient flag: set for the duration of a single explicit GCS
+  // PHASE_TRANSITION(target) evaluation so guards that require "GCS
+  // command received" (TAKEOFF -> INGRESS) can observe it; cleared
+  // immediately after that one evaluation.
+  std::optional<Phase> gcs_phase_request_;
+
+  // arm_authorised_ mirrors mission_upload_->arm_authorised (FR-010) but
+  // can also be flipped live by MC_CMD_ARM_AUTHORISE (ICD §10.5, 50002)
+  // without requiring a full mission re-upload.
+  bool arm_authorised_{false};
+
+  // Mission-channel ack-blocking bookkeeping (FCC-006). Only one mission-
+  // channel request is ever in flight at a time — both transitions that
+  // use one (TAKEOFF -> INGRESS, VORONOI_PARTITION -> SEARCH) are
+  // themselves serialized by the state machine only ever being in one
+  // phase at a time.
+  AckKind pending_ack_kind_{AckKind::NONE};
+  uint32_t pending_upload_id_{0};
+  uint16_t pending_seq_{0};
+  Phase pending_target_phase_{Phase::PREFLIGHT};
+  uint8_t pending_source_{0};
+  rclcpp::Time pending_ack_sent_at_;
+  int pending_ack_retries_{0};
+
+  uint32_t next_upload_id_{1};
+
+  // Latched by on_fault()/handle_gcs_command() respectively (event-driven,
+  // not re-derived from other topics — see is_critical_fault()'s own doc
+  // comment on why /mc/fcc/vehicle_state.fcc_link_ok is deliberately not
+  // consulted here) and consumed by the any_transitions_ overlay both
+  // immediately (from those same callbacks) and again each control-loop
+  // tick as a safety net.
+  bool critical_fault_latched_{false};
+  bool return_requested_latched_{false};
+  bool mission_complete_logged_{false};
+
+  // Every callback that touches state-machine state (current_phase_,
+  // pending_ack_*, the various latest-message members) shares one
+  // mutually-exclusive group — unlike fcc_bridge_node's split
+  // (mission/command/timer each independent), this node's guards and
+  // actions all read/write the *same* shared state machine, so splitting
+  // them across groups would just reintroduce the data race a single
+  // group avoids, per the same reasoning fcc_bridge_node's own
+  // mission_cb_group_ comment gives for its narrower case. Every callback
+  // body here is non-blocking (guard checks, publishes; mission-ack
+  // waiting is polled from the timer tick, never blocked on), so
+  // serializing everything still leaves GCS-command handling well within
+  // the 500 ms bound (FR-003).
+  rclcpp::CallbackGroup::SharedPtr state_cb_group_;
+
+  rclcpp::TimerBase::SharedPtr control_timer_;
+
+  rclcpp::Publisher<mc_msgs::msg::MissionPhase>::SharedPtr pub_mission_phase_;
+  rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr pub_heartbeat_;
+  rclcpp::Publisher<mc_msgs::msg::FccCommand>::SharedPtr pub_send_command_;
+  rclcpp::Publisher<mc_msgs::msg::FccMissionItem>::SharedPtr pub_mission_item_update_;
+  rclcpp::Publisher<mc_msgs::msg::FccMission>::SharedPtr pub_mission_upload_;
+
+  rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
+  rclcpp::Subscription<mc_msgs::msg::FccMissionAck>::SharedPtr sub_mission_ack_;
+  rclcpp::Subscription<mc_msgs::msg::GcsCommand>::SharedPtr sub_gcs_command_;
+  rclcpp::Subscription<mc_msgs::msg::MissionUpload>::SharedPtr sub_gcs_mission_upload_;
+  rclcpp::Subscription<mc_msgs::msg::SwarmPeerArray>::SharedPtr sub_peer_states_;
+  rclcpp::Subscription<mc_msgs::msg::IsrRole>::SharedPtr sub_isr_role_;
+  rclcpp::Subscription<mc_msgs::msg::VoronoiCell>::SharedPtr sub_voronoi_cell_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_coverage_path_;
+  rclcpp::Subscription<mc_msgs::msg::FaultEvent>::SharedPtr sub_fault_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_local_pose_;
 };
 
 }  // namespace mission_exec
