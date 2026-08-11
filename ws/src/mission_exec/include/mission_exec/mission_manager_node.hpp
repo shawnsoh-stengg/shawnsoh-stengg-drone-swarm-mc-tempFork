@@ -17,6 +17,7 @@
 #include <mc_msgs/msg/fcc_mission_ack.hpp>
 #include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
+#include <mc_msgs/msg/gcs_command_ack.hpp>
 #include <mc_msgs/msg/isr_role.hpp>
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
@@ -28,6 +29,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
 
+#include "mission_exec/command_arbiter.hpp"
 #include "mission_exec/pre_arm_checks.hpp"
 
 namespace mission_exec
@@ -147,6 +149,11 @@ private:
   // — SDD §4.1 can't key these by Phase since "Any" isn't a Phase value).
   enum class TransitionResult { COMMITTED, PENDING_ACK, REJECTED, NO_MATCH };
   TransitionResult try_transition(Phase target, bool from_gcs_command);
+  // EXEC-003: publishes the SDD §4.3 priority-2 outcome ack for a
+  // PHASE_TRANSITION request — ACCEPTED for {COMMITTED, PENDING_ACK} (the
+  // guard passed; PENDING_ACK just means the FCC-side follow-through is
+  // still in flight), REJECTED for {REJECTED, NO_MATCH}.
+  void publish_command_ack(uint32_t command, TransitionResult result);
   void evaluate_autonomous_transitions();
   bool evaluate_any_transitions();
   void commit_transition(Phase target, uint8_t source);
@@ -160,8 +167,22 @@ private:
   void on_mission_channel_ack_success();
   void on_mission_channel_ack_failure();
 
-  // --- GCS command dispatch (SDD §4.3) ---
-  void handle_gcs_command(const mc_msgs::msg::GcsCommand & cmd);
+  // --- GCS command dispatch (SDD §4.3 / EXEC-003) ---
+  // on_gcs_command() only enqueues (fast, non-blocking); drain_gcs_command_
+  // queue() — called from on_control_timer(), before evaluate_autonomous_
+  // transitions() — pops and executes every queued command in
+  // command_arbiter_'s tier-priority order. Deferring execution to the
+  // timer, rather than handling inline in the subscription callback, is
+  // what lets a later-arriving EMERGENCY command still jump ahead of an
+  // earlier-arriving, not-yet-processed PHASE command: within a single
+  // rclcpp callback dispatch there is no way to "look ahead" at a second
+  // already-queued message before deciding processing order, so reordering
+  // requires batching at least one control-loop tick's worth of arrivals
+  // before draining. The default 0.1 s control_loop_period_s_ leaves ample
+  // headroom under both this ticket's 200 ms (Emergency) and 500 ms (Phase
+  // ack) bounds.
+  void drain_gcs_command_queue();
+  void handle_gcs_command(const GcsCommandEnvelope & cmd);
 
   // --- fault handling (does not re-derive link health from vehicle_state) ---
   bool is_critical_fault(const mc_msgs::msg::FaultEvent & fault) const;
@@ -202,6 +223,11 @@ private:
   // /mc/status_text — publish_pre_arm_status() only re-publishes when this
   // changes, per its own doc comment.
   std::vector<std::string> last_reported_pre_arm_failures_;
+
+  // EXEC-003: SDD §4.3 three-tier command priority — see drain_gcs_
+  // command_queue()'s own doc comment for why draining is deferred to the
+  // control timer rather than handled inline in on_gcs_command().
+  CommandArbiter command_arbiter_;
 
   // Transient flag: set for the duration of a single explicit GCS
   // PHASE_TRANSITION(target) evaluation so guards that require "GCS
@@ -261,6 +287,7 @@ private:
   rclcpp::Publisher<mc_msgs::msg::FccMissionItem>::SharedPtr pub_mission_item_update_;
   rclcpp::Publisher<mc_msgs::msg::FccMission>::SharedPtr pub_mission_upload_;
   rclcpp::Publisher<mc_msgs::msg::StatusText>::SharedPtr pub_status_text_;
+  rclcpp::Publisher<mc_msgs::msg::GcsCommandAck>::SharedPtr pub_command_ack_;
 
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
   rclcpp::Subscription<mc_msgs::msg::FccMissionAck>::SharedPtr sub_mission_ack_;

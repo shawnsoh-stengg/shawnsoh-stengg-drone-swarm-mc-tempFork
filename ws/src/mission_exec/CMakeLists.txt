@@ -21,6 +21,7 @@ find_package(nav_msgs REQUIRED)
 add_library(mission_manager_node_lib
   src/mission_manager_node.cpp
   src/pre_arm_checks.cpp
+  src/command_arbiter.cpp
 )
 target_include_directories(mission_manager_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -79,6 +80,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_pre_arm_checks test/test_pre_arm_checks.cpp)
   target_link_libraries(test_pre_arm_checks mission_manager_node_lib)
+
+  ament_add_gtest(test_command_arbiter test/test_command_arbiter.cpp)
+  target_link_libraries(test_command_arbiter mission_manager_node_lib)
 
   ament_add_gtest(test_search_planner_node test/test_search_planner_node.cpp)
   target_link_libraries(test_search_planner_node search_planner_node_lib)

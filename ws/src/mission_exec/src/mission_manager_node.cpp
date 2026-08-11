@@ -72,6 +72,8 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
     create_publisher<mc_msgs::msg::FccMission>("/mc/fcc/mission_upload", rclcpp::QoS(10));
   pub_status_text_ =
     create_publisher<mc_msgs::msg::StatusText>("/mc/status_text", rclcpp::QoS(10));
+  pub_command_ack_ =
+    create_publisher<mc_msgs::msg::GcsCommandAck>("/mc/gcs/command_ack", rclcpp::QoS(10));
 
   // See the state_cb_group_ doc comment in the header for why every
   // subscription and the control timer share this one group.
@@ -759,17 +761,32 @@ void MissionManagerNode::on_fault(mc_msgs::msg::FaultEvent::SharedPtr msg)
   }
 }
 
-void MissionManagerNode::handle_gcs_command(const mc_msgs::msg::GcsCommand & cmd)
+void MissionManagerNode::publish_command_ack(uint32_t command, TransitionResult result)
 {
-  // SDD §4.3 priority 1: emergency commands bypass the transition table
-  // and execute immediately. TP-UT-012 confirms this also forces the
-  // phase to FAULT (not just a raw pass-through) — generalised here to
-  // RTL too since SDD groups DISARM/RTL identically ("Emergency commands
-  // (DISARM, RTL): bypass transition table, execute immediately").
-  const bool is_disarm =
-    cmd.command == kMavCmdComponentArmDisarm && cmd.params[0] == 0.0F;
-  const bool is_rtl = cmd.command == kMavCmdNavReturnToLaunch;
-  if (is_disarm || is_rtl) {
+  mc_msgs::msg::GcsCommandAck ack;
+  ack.header.stamp = now();
+  ack.command = command;
+  if (result == TransitionResult::REJECTED || result == TransitionResult::NO_MATCH) {
+    ack.result = mc_msgs::msg::GcsCommandAck::RESULT_REJECTED;
+    ack.reason = result == TransitionResult::NO_MATCH ?
+      "no such transition from current phase" : "guard failed";
+  } else {
+    // PENDING_ACK just means the FCC-side mission-channel follow-through
+    // (FCC-006) is still in flight — the GCS's own request was accepted.
+    ack.result = mc_msgs::msg::GcsCommandAck::RESULT_ACCEPTED;
+  }
+  pub_command_ack_->publish(ack);
+}
+
+void MissionManagerNode::handle_gcs_command(const GcsCommandEnvelope & cmd)
+{
+  // SDD §4.3 priority 1 / EXEC-003: emergency commands bypass the
+  // transition table and execute immediately. TP-UT-012 confirms this also
+  // forces the phase to FAULT (not just a raw pass-through) — the same
+  // forward-and-fault behaviour now covers every command classify_command_
+  // tier() calls EMERGENCY (DISARM, RTL, and — new in EXEC-003 — MANUAL/
+  // ALTCTL/POSCTL/STABILIZED via MAV_CMD_DO_SET_MODE), not just DISARM/RTL.
+  if (classify_command_tier(cmd.command, cmd.params) == CommandTier::EMERGENCY) {
     mc_msgs::msg::FccCommand fwd;
     fwd.header.stamp = now();
     fwd.cmd = cmd.command;
@@ -785,7 +802,8 @@ void MissionManagerNode::handle_gcs_command(const mc_msgs::msg::GcsCommand & cmd
     case kMcCmdPhaseTransition: {
         const auto target = static_cast<Phase>(
           static_cast<uint8_t>(std::lround(cmd.params[0])));
-        try_transition(target, /*from_gcs_command=*/true);
+        const auto result = try_transition(target, /*from_gcs_command=*/true);
+        publish_command_ack(cmd.command, result);
         break;
       }
     case kMcCmdArmAuthorise:
@@ -813,16 +831,33 @@ void MissionManagerNode::handle_gcs_command(const mc_msgs::msg::GcsCommand & cmd
 
 void MissionManagerNode::on_gcs_command(mc_msgs::msg::GcsCommand::SharedPtr msg)
 {
-  handle_gcs_command(*msg);
+  // Enqueue only — see this method's own doc comment in the header for why
+  // draining is deferred to the control timer rather than handled here.
+  command_arbiter_.enqueue({msg->command, msg->params});
+}
+
+void MissionManagerNode::drain_gcs_command_queue()
+{
+  while (const auto cmd = command_arbiter_.pop_next()) {
+    handle_gcs_command(*cmd);
+  }
 }
 
 void MissionManagerNode::on_control_timer()
 {
+  drain_gcs_command_queue();
   check_ack_timeout();
   if (current_phase_ == Phase::PREFLIGHT) {
     publish_pre_arm_status();
   }
-  evaluate_autonomous_transitions();
+  // SDD §4.3 priority 3: autonomous transitions are evaluated only when no
+  // GCS command is pending. drain_gcs_command_queue() above already empties
+  // command_arbiter_ every tick, so this is always true by construction —
+  // kept explicit anyway so the third priority tier is visible in code, not
+  // merely implied by call order.
+  if (command_arbiter_.autonomous_transitions_allowed()) {
+    evaluate_autonomous_transitions();
+  }
 
   if (current_phase_ == Phase::LAND && !mission_complete_logged_) {
     constexpr uint8_t kArmingStateStandby = 1;

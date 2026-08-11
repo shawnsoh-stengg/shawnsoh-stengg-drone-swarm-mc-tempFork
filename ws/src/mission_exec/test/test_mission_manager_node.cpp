@@ -30,6 +30,7 @@
 #include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/formation_offset.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
+#include <mc_msgs/msg/gcs_command_ack.hpp>
 #include <mc_msgs/msg/isr_role.hpp>
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
@@ -80,6 +81,7 @@ constexpr uint8_t kNavStateAutoLoiter = 4;
 constexpr uint32_t kMavCmdComponentArmDisarm = 400;
 constexpr uint32_t kMavCmdNavReturnToLaunch = 20;
 constexpr uint32_t kMavCmdNavTakeoff = 22;
+constexpr uint32_t kMavCmdDoSetMode = 176;
 constexpr uint32_t kMcCmdEndMission = 50003;
 }  // namespace
 
@@ -139,6 +141,9 @@ protected:
     sub_status_text_ = harness_->create_subscription<mc_msgs::msg::StatusText>(
       "/mc/status_text", rclcpp::QoS(10),
       [this](mc_msgs::msg::StatusText::SharedPtr msg) {status_texts_.push_back(msg);});
+    sub_command_ack_ = harness_->create_subscription<mc_msgs::msg::GcsCommandAck>(
+      "/mc/gcs/command_ack", rclcpp::QoS(10),
+      [this](mc_msgs::msg::GcsCommandAck::SharedPtr msg) {command_acks_.push_back(msg);});
 
     // Let publishers/subscriptions discover each other before any test body
     // starts asserting on timing-sensitive behaviour.
@@ -278,6 +283,7 @@ protected:
   rclcpp::Subscription<mc_msgs::msg::FccMissionItem>::SharedPtr sub_mission_item_update_;
   rclcpp::Subscription<mc_msgs::msg::FccMission>::SharedPtr sub_fcc_mission_upload_;
   rclcpp::Subscription<mc_msgs::msg::StatusText>::SharedPtr sub_status_text_;
+  rclcpp::Subscription<mc_msgs::msg::GcsCommandAck>::SharedPtr sub_command_ack_;
 
   std::vector<mc_msgs::msg::MissionPhase::SharedPtr> phases_;
   std::vector<std_msgs::msg::Header::SharedPtr> heartbeats_;
@@ -285,6 +291,7 @@ protected:
   std::vector<mc_msgs::msg::FccMissionItem::SharedPtr> mission_item_updates_;
   std::vector<mc_msgs::msg::FccMission::SharedPtr> fcc_mission_uploads_;
   std::vector<mc_msgs::msg::StatusText::SharedPtr> status_texts_;
+  std::vector<mc_msgs::msg::GcsCommandAck::SharedPtr> command_acks_;
 };
 
 namespace
@@ -730,9 +737,10 @@ TEST_F(MissionManagerNodeTest, InvalidTransitionRequestIsRejected)
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
 }
 
-// --- FR-003: GCS emergency command acted on within 500 ms, any phase ---
+// --- FR-003 / EXEC-003: GCS emergency command acted on within 200 ms of
+// receipt, any phase ---
 
-TEST_F(MissionManagerNodeTest, GcsDisarmCommandActedOnWithin500msFromSearchPhase)
+TEST_F(MissionManagerNodeTest, GcsDisarmCommandActedOnWithin200msFromArmingPhase)
 {
   pub_mission_upload_->publish(full_mission_upload(true));
   pub_vehicle_state_->publish(good_vehicle_state());
@@ -744,13 +752,150 @@ TEST_F(MissionManagerNodeTest, GcsDisarmCommandActedOnWithin500msFromSearchPhase
   send_gcs_command(kMavCmdComponentArmDisarm, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // DISARM
   ASSERT_TRUE(spin_until(
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
-    std::chrono::milliseconds(500)));
+    std::chrono::milliseconds(200)));
   const auto elapsed = std::chrono::steady_clock::now() - t0;
 
-  EXPECT_LE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 500);
+  EXPECT_LE(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count(), 200);
   ASSERT_FALSE(send_commands_.empty());
   EXPECT_EQ(send_commands_.back()->cmd, kMavCmdComponentArmDisarm);
   EXPECT_FLOAT_EQ(send_commands_.back()->params[0], 0.0F);
+}
+
+// --- EXEC-003: the Emergency tier's new MANUAL/ALTCTL/POSCTL/STABILIZED
+// members (via MAV_CMD_DO_SET_MODE), not just DISARM/RTL ---
+
+TEST_F(MissionManagerNodeTest, GcsDoSetModeManualIsTreatedAsEmergency)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  send_gcs_command(kMavCmdDoSetMode, {1.F, 1.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // custom_main=MANUAL
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+    std::chrono::milliseconds(200)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdDoSetMode);
+}
+
+// --- EXEC-003: an Emergency command arriving while the state machine is
+// mid-autonomous-flow (SEARCH, actively evaluating autonomous transitions
+// every tick) still preempts immediately — "GCS commands always supersede
+// autonomous transitions" (this ticket's own story), not merely when idle. ---
+
+TEST_F(MissionManagerNodeTest, EmergencyCommandDuringAutonomousSearchPhasePreemptsImmediately)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  mc_msgs::msg::IsrRole role;
+  role.all_peers_acked = true;
+  pub_isr_role_->publish(role);
+  mc_msgs::msg::VoronoiCell cell;
+  cell.upload_id = 42;
+  pub_voronoi_cell_->publish(cell);
+  nav_msgs::msg::Path path;
+  path.poses = {geometry_msgs::msg::PoseStamped()};
+  pub_coverage_path_->publish(path);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();}, std::chrono::seconds(2)));
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
+    std::chrono::seconds(2)));
+
+  // Node is now autonomously in SEARCH, re-evaluating guard_search_to_
+  // return() every control-loop tick with no autonomous guard yet true
+  // (nav_state isn't AUTO_LOITER) — an Emergency command must still cut in.
+  send_gcs_command(kMavCmdNavReturnToLaunch, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+    std::chrono::milliseconds(200)));
+}
+
+// --- EXEC-003: a later-arriving Emergency command jumps ahead of an
+// earlier-arriving, not-yet-drained Phase-tier command — the behaviour
+// command_arbiter's own unit tests exercise directly; this proves the same
+// ordering holds through mission_manager_node's actual wiring. ---
+
+TEST_F(MissionManagerNodeTest, EmergencyCommandBypassesAnAlreadyQueuedPhaseCommand)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  // Both land in command_arbiter_ before the next control-loop tick drains
+  // it — PHASE_TRANSITION(SEARCH), which PREFLIGHT/ARMING's table rejects
+  // regardless, enqueued first; DISARM enqueued second.
+  send_gcs_command(50001, {7.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  send_gcs_command(kMavCmdComponentArmDisarm, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+    std::chrono::milliseconds(200)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdComponentArmDisarm);
+}
+
+// --- EXEC-003: Phase tier ACKed within 500 ms — RESULT_ACCEPTED when the
+// guard passes, RESULT_REJECTED (with a reason) when it fails ---
+
+TEST_F(MissionManagerNodeTest, PhaseTransitionAcceptedGetsAckWithin500ms)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
+
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+    std::chrono::seconds(2)));
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  wait_for_ticks();
+
+  const auto t0 = std::chrono::steady_clock::now();
+  send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // PHASE_TRANSITION(INGRESS)
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !command_acks_.empty();}, std::chrono::milliseconds(500)));
+  EXPECT_LE(
+    std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count(),
+    500);
+  EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_ACCEPTED);
+}
+
+TEST_F(MissionManagerNodeTest, PhaseTransitionRejectedGetsAckWithReasonWithin500ms)
+{
+  pub_vehicle_state_->publish(good_vehicle_state());
+  spin_until({node_, harness_}, [this] {return !heartbeats_.empty();}, std::chrono::seconds(1));
+
+  const auto t0 = std::chrono::steady_clock::now();
+  // PREFLIGHT's only row targets ARMING — request SEARCH directly.
+  send_gcs_command(50001, {7.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return !command_acks_.empty();}, std::chrono::milliseconds(500)));
+  EXPECT_LE(
+    std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count(),
+    500);
+  EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_REJECTED);
+  EXPECT_FALSE(command_acks_.back()->reason.empty());
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
 }
 
 // --- FR-074 / TP-NI-011: heartbeat continuity ---
