@@ -62,13 +62,16 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
 
   pub_mission_phase_ =
     create_publisher<mc_msgs::msg::MissionPhase>("/mc/mission_phase", rclcpp::QoS(10));
-  pub_heartbeat_ = create_publisher<std_msgs::msg::Header>("/mc/manager/heartbeat", rclcpp::QoS(10));
+  pub_heartbeat_ = create_publisher<std_msgs::msg::Header>("/mc/manager/heartbeat",
+      rclcpp::QoS(10));
   pub_send_command_ =
     create_publisher<mc_msgs::msg::FccCommand>("/mc/fcc/send_command", rclcpp::QoS(10));
   pub_mission_item_update_ = create_publisher<mc_msgs::msg::FccMissionItem>(
     "/mc/fcc/mission_item_update", rclcpp::QoS(10));
   pub_mission_upload_ =
     create_publisher<mc_msgs::msg::FccMission>("/mc/fcc/mission_upload", rclcpp::QoS(10));
+  pub_status_text_ =
+    create_publisher<mc_msgs::msg::StatusText>("/mc/status_text", rclcpp::QoS(10));
 
   // See the state_cb_group_ doc comment in the header for why every
   // subscription and the control timer share this one group.
@@ -178,67 +181,44 @@ void MissionManagerNode::build_transition_table()
 // Guards
 // ---------------------------------------------------------------------------
 
-bool MissionManagerNode::pre_arm_checks(std::string * reason) const
+PreArmCheckInputs MissionManagerNode::build_pre_arm_check_inputs() const
 {
-  auto fail = [&](const char * why) {
-      if (reason) {*reason = why;}
-      return false;
-    };
+  PreArmCheckInputs in;
+  in.vehicle_state = vehicle_state_;
+  in.mission_upload = mission_upload_;
+  in.peer_states = peer_states_;
+  in.arm_authorised = arm_authorised_;
+  in.low_battery_margin = low_battery_margin_;
+  in.visual_localisation_alive = local_pose_ever_received_ &&
+    (now() - last_local_pose_at_).seconds() <= local_pose_stale_timeout_s_;
+  return in;
+}
 
-  if (!vehicle_state_) {
-    return fail("no vehicle_state received yet");
+PreArmCheckReport MissionManagerNode::pre_arm_check_report() const
+{
+  return evaluate_pre_arm_checks(build_pre_arm_check_inputs());
+}
+
+void MissionManagerNode::publish_pre_arm_status()
+{
+  const auto report = pre_arm_check_report();
+  if (report.failed_checks == last_reported_pre_arm_failures_) {
+    return;
   }
-  if (!vehicle_state_->fcc_link_ok) {
-    return fail("FCC link not alive");
+  last_reported_pre_arm_failures_ = report.failed_checks;
+  for (const auto & reason : report.failed_checks) {
+    RCLCPP_WARN(get_logger(), "pre-arm check failed: %s", reason.c_str());
+    mc_msgs::msg::StatusText msg;
+    msg.header.stamp = now();
+    msg.severity = mc_msgs::msg::StatusText::SEVERITY_WARNING;
+    msg.text = reason;
+    pub_status_text_->publish(msg);
   }
-  // STANDBY_ERROR (ICD §10.2 value 3) is explicitly not STANDBY; any other
-  // non-STANDBY state (INIT/ARMED/SHUTDOWN/IN_AIR_RESTORE) also fails.
-  constexpr uint8_t kArmingStateStandby = 1;
-  if (vehicle_state_->arming_state != kArmingStateStandby) {
-    return fail("FCC arming_state != STANDBY");
-  }
-  if (!arm_authorised_) {
-    return fail("GCS ARM authorisation not set");
-  }
-  if (!mission_upload_) {
-    return fail("no mission upload received");
-  }
-  const double low_battery_threshold =
-    mission_upload_->low_battery_threshold > 0.0F ?
-    static_cast<double>(mission_upload_->low_battery_threshold) : 0.20;
-  if (vehicle_state_->battery_pct <
-    static_cast<float>(low_battery_threshold + low_battery_margin_))
-  {
-    return fail("battery remaining below low-battery threshold + margin");
-  }
-  if (peer_states_) {
-    for (const auto & peer : peer_states_->peers) {
-      const bool alive = peer.peer_status == mc_msgs::msg::SwarmPeer::STATUS_ALIVE;
-      const bool preflight_or_arming =
-        peer.mission_phase == static_cast<uint8_t>(Phase::PREFLIGHT) ||
-        peer.mission_phase == static_cast<uint8_t>(Phase::ARMING);
-      if (alive && !preflight_or_arming) {
-        return fail("a swarm peer is not in PREFLIGHT/ARMING");
-      }
-    }
-  }
-  if (mission_upload_->ingress_waypoints.empty() || mission_upload_->formation_offsets.empty() ||
-    mission_upload_->search_polygon.empty() || mission_upload_->swarm_manifest.empty())
-  {
-    return fail("mission upload incomplete (waypoints/offsets/polygon/manifest)");
-  }
-  if (!vehicle_state_->gnss_ok) {
-    const double age_s = (now() - last_local_pose_at_).seconds();
-    if (!local_pose_ever_received_ || age_s > local_pose_stale_timeout_s_) {
-      return fail("GNSS degraded and visual localisation not alive");
-    }
-  }
-  return true;
 }
 
 bool MissionManagerNode::guard_preflight_to_arming() const
 {
-  return arm_authorised_ && pre_arm_checks(nullptr);
+  return arm_authorised_ && pre_arm_check_report().passed;
 }
 
 bool MissionManagerNode::guard_arming_to_takeoff() const
@@ -839,6 +819,9 @@ void MissionManagerNode::on_gcs_command(mc_msgs::msg::GcsCommand::SharedPtr msg)
 void MissionManagerNode::on_control_timer()
 {
   check_ack_timeout();
+  if (current_phase_ == Phase::PREFLIGHT) {
+    publish_pre_arm_status();
+  }
   evaluate_autonomous_transitions();
 
   if (current_phase_ == Phase::LAND && !mission_complete_logged_) {

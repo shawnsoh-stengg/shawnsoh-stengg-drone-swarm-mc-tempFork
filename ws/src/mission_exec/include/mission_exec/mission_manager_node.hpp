@@ -20,12 +20,15 @@
 #include <mc_msgs/msg/isr_role.hpp>
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
+#include <mc_msgs/msg/status_text.hpp>
 #include <mc_msgs/msg/swarm_peer_array.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
 #include <mc_msgs/msg/voronoi_cell.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
+
+#include "mission_exec/pre_arm_checks.hpp"
 
 namespace mission_exec
 {
@@ -74,11 +77,24 @@ public:
   // directly by TP-UT-010/011/012-style unit tests without needing a full
   // topic round-trip.
   Phase current_phase() const {return current_phase_;}
-  bool pre_arm_checks(std::string * reason = nullptr) const;
+  // EXEC-002: runs all 7 pre_arm_checks.hpp checks against this node's own
+  // latest received state — no short-circuit, so every failing condition
+  // is reported at once, not just the first.
+  PreArmCheckReport pre_arm_check_report() const;
 
 private:
   // --- transition table construction ---
   void build_transition_table();
+
+  // --- EXEC-002: pre-arm checks ---
+  PreArmCheckInputs build_pre_arm_check_inputs() const;
+  // Called every control-loop tick while in PREFLIGHT (i.e. at the 10 Hz
+  // control_loop_period_s_ rate) — re-evaluates the full check suite and,
+  // whenever the set of failing checks changes, republishes each reason as
+  // an /mc/status_text StatusText (severity WARNING) and logs it. Not
+  // throttled beyond "only on change" — a persistent failure is reported
+  // once, not every tick, so it doesn't spam the operator.
+  void publish_pre_arm_status();
 
   // --- guards (SDD §4.1 abridged table) ---
   bool guard_preflight_to_arming() const;
@@ -182,6 +198,11 @@ private:
   rclcpp::Time last_local_pose_at_;
   bool local_pose_ever_received_{false};
 
+  // EXEC-002: last set of pre-arm failure reasons reported via
+  // /mc/status_text — publish_pre_arm_status() only re-publishes when this
+  // changes, per its own doc comment.
+  std::vector<std::string> last_reported_pre_arm_failures_;
+
   // Transient flag: set for the duration of a single explicit GCS
   // PHASE_TRANSITION(target) evaluation so guards that require "GCS
   // command received" (TAKEOFF -> INGRESS) can observe it; cleared
@@ -239,6 +260,7 @@ private:
   rclcpp::Publisher<mc_msgs::msg::FccCommand>::SharedPtr pub_send_command_;
   rclcpp::Publisher<mc_msgs::msg::FccMissionItem>::SharedPtr pub_mission_item_update_;
   rclcpp::Publisher<mc_msgs::msg::FccMission>::SharedPtr pub_mission_upload_;
+  rclcpp::Publisher<mc_msgs::msg::StatusText>::SharedPtr pub_status_text_;
 
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
   rclcpp::Subscription<mc_msgs::msg::FccMissionAck>::SharedPtr sub_mission_ack_;

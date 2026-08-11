@@ -13,9 +13,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -31,6 +33,7 @@
 #include <mc_msgs/msg/isr_role.hpp>
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
+#include <mc_msgs/msg/status_text.hpp>
 #include <mc_msgs/msg/swarm_peer.hpp>
 #include <mc_msgs/msg/swarm_peer_array.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
@@ -133,6 +136,9 @@ protected:
     sub_fcc_mission_upload_ = harness_->create_subscription<mc_msgs::msg::FccMission>(
       "/mc/fcc/mission_upload", rclcpp::QoS(10),
       [this](mc_msgs::msg::FccMission::SharedPtr msg) {fcc_mission_uploads_.push_back(msg);});
+    sub_status_text_ = harness_->create_subscription<mc_msgs::msg::StatusText>(
+      "/mc/status_text", rclcpp::QoS(10),
+      [this](mc_msgs::msg::StatusText::SharedPtr msg) {status_texts_.push_back(msg);});
 
     // Let publishers/subscriptions discover each other before any test body
     // starts asserting on timing-sensitive behaviour.
@@ -247,10 +253,10 @@ protected:
   void wait_for_ticks(int ticks = 2)
   {
     const size_t baseline = heartbeats_.size();
-    ASSERT_TRUE(spin_until(
-        {node_, harness_},
-        [this, baseline, ticks] {return heartbeats_.size() >= baseline + static_cast<size_t>(ticks);},
-      std::chrono::seconds(2)));
+    const auto reached = [this, baseline, ticks] {
+        return heartbeats_.size() >= baseline + static_cast<size_t>(ticks);
+      };
+    ASSERT_TRUE(spin_until({node_, harness_}, reached, std::chrono::seconds(2)));
   }
 
   std::shared_ptr<mission_exec::MissionManagerNode> node_;
@@ -271,13 +277,28 @@ protected:
   rclcpp::Subscription<mc_msgs::msg::FccCommand>::SharedPtr sub_send_command_;
   rclcpp::Subscription<mc_msgs::msg::FccMissionItem>::SharedPtr sub_mission_item_update_;
   rclcpp::Subscription<mc_msgs::msg::FccMission>::SharedPtr sub_fcc_mission_upload_;
+  rclcpp::Subscription<mc_msgs::msg::StatusText>::SharedPtr sub_status_text_;
 
   std::vector<mc_msgs::msg::MissionPhase::SharedPtr> phases_;
   std::vector<std_msgs::msg::Header::SharedPtr> heartbeats_;
   std::vector<mc_msgs::msg::FccCommand::SharedPtr> send_commands_;
   std::vector<mc_msgs::msg::FccMissionItem::SharedPtr> mission_item_updates_;
   std::vector<mc_msgs::msg::FccMission::SharedPtr> fcc_mission_uploads_;
+  std::vector<mc_msgs::msg::StatusText::SharedPtr> status_texts_;
 };
+
+namespace
+{
+bool any_status_text_contains(
+  const std::vector<mc_msgs::msg::StatusText::SharedPtr> & texts, const std::string & substr)
+{
+  return std::any_of(
+    texts.begin(), texts.end(),
+    [&](const mc_msgs::msg::StatusText::SharedPtr & msg) {
+      return msg->text.find(substr) != std::string::npos;
+    });
+}
+}  // namespace
 
 TEST_F(MissionManagerNodeTest, ConstructsWithExpectedNameAndStartsInPreflight)
 {
@@ -738,4 +759,65 @@ TEST_F(MissionManagerNodeTest, HeartbeatPublishesAtLeastOneHertz)
 {
   ASSERT_TRUE(spin_until(
       {node_, harness_}, [this] {return heartbeats_.size() >= 20U;}, std::chrono::seconds(2)));
+}
+
+// --- EXEC-002: pre-arm check suite, exercised through the node's mock-FCC
+// harness rather than pre_arm_checks.hpp's own unit tests (test_pre_arm_
+// checks.cpp), so these confirm the full wiring: guard_preflight_to_
+// arming() blocks on any single failing condition, multiple simultaneous
+// failures are all surfaced (not just the first), and each failure reaches
+// /mc/status_text with its specific reason. ---
+
+TEST_F(MissionManagerNodeTest, PreArmChecks_LowBatteryBlocksArmingAndReportsReason)
+{
+  pub_mission_upload_->publish(full_mission_upload(/*arm_authorised=*/true));
+  auto vs = good_vehicle_state();
+  vs.battery_pct = 0.05F;  // below default 0.20 threshold + 0.10 margin
+  pub_vehicle_state_->publish(vs);
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return any_status_text_contains(status_texts_, "battery");},
+    std::chrono::seconds(2)));
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+  EXPECT_TRUE(send_commands_.empty());
+}
+
+TEST_F(MissionManagerNodeTest, PreArmChecks_MultipleSimultaneousFailuresAllReported)
+{
+  // No mission upload at all (arm-auth unset, mission incomplete) and a
+  // vehicle_state reporting a dead FCC link and low battery — 4 of the 7
+  // checks fail at once; none should suppress reporting of the others.
+  auto vs = good_vehicle_state();
+  vs.fcc_link_ok = false;
+  vs.battery_pct = 0.05F;
+  pub_vehicle_state_->publish(vs);
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_},
+      [this] {
+        return any_status_text_contains(status_texts_, "FCC link") &&
+               any_status_text_contains(status_texts_, "battery") &&
+               any_status_text_contains(status_texts_, "ARM authorisation") &&
+               any_status_text_contains(status_texts_, "mission upload");
+      },
+    std::chrono::seconds(2)));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+}
+
+TEST_F(MissionManagerNodeTest, PreArmChecks_ReasonClearsOnceConditionIsFixed)
+{
+  pub_mission_upload_->publish(full_mission_upload(/*arm_authorised=*/true));
+  auto vs = good_vehicle_state();
+  vs.battery_pct = 0.05F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return any_status_text_contains(status_texts_, "battery");},
+    std::chrono::seconds(2)));
+
+  vs.battery_pct = 1.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+    std::chrono::seconds(2)));
 }

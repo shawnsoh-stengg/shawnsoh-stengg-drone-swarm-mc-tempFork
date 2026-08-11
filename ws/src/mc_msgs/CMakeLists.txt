@@ -32,6 +32,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SystemHealth.msg"
   "msg/LocalisationMode.msg"
   "msg/MissionUpload.msg"
+  "msg/StatusText.msg"
   DEPENDENCIES std_msgs geometry_msgs geographic_msgs
 )
 
