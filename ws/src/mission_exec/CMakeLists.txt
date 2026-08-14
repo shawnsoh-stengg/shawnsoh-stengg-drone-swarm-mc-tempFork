@@ -37,7 +37,15 @@ target_include_directories(mission_manager_node_lib PUBLIC
 )
 ament_target_dependencies(mission_manager_node_lib PUBLIC
   rclcpp mc_msgs std_msgs geometry_msgs geographic_msgs nav_msgs)
-target_link_libraries(mission_manager_node_lib PUBLIC yaml-cpp::yaml-cpp)
+# yaml-cpp's CMake config only started exporting the namespaced
+# yaml-cpp::yaml-cpp target in newer releases (e.g. what ships with Jazzy's
+# yaml_cpp_vendor); Humble's yaml_cpp_vendor wraps an older yaml-cpp that
+# only exports the bare `yaml-cpp` target.
+if(TARGET yaml-cpp::yaml-cpp)
+  target_link_libraries(mission_manager_node_lib PUBLIC yaml-cpp::yaml-cpp)
+else()
+  target_link_libraries(mission_manager_node_lib PUBLIC yaml-cpp)
+endif()
 
 add_executable(mission_manager_node src/mission_manager_node_main.cpp)
 target_link_libraries(mission_manager_node mission_manager_node_lib)
