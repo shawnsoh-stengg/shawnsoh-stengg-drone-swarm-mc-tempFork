@@ -48,17 +48,29 @@ sudo ./scripts/08b-smoke-test-fcc-bridge.sh
 sudo ./scripts/09-build-mavlink-router-image.sh
 sudo ./scripts/09b-smoke-test-routing.sh
 
-# 5. Install the drone-mc.target systemd orchestration
+# 5. Build the zenoh-bridge service image (ghcr.io/drone-mc/zenoh-bridge)
+# Standalone image, not FROM ros2-core.
+sudo ./scripts/10-build-zenoh-bridge-image.sh
+sudo ./scripts/10b-smoke-test-zenoh-bridge.sh
+
+# 6. Build the gcs-comms service image (ghcr.io/drone-mc/gcs-comms)
+sudo ./scripts/11-build-gcs-comms-image.sh
+sudo ./scripts/11b-smoke-test-gcs-comms.sh
+
+# 7. Build the mission-exec service image (ghcr.io/drone-mc/mission-exec)
+sudo ./scripts/12-build-mission-exec-image.sh
+sudo ./scripts/12b-smoke-test-mission-exec.sh
+
+# 8. Install the drone-mc.target systemd orchestration
 sudo ./scripts/02-install-systemd-units.sh
 sudo ./scripts/02b-smoke-test-units.sh
 sudo systemctl start drone-mc.target
 ```
 
 Each numbered script has a `<n>b-smoke-test-*.sh` companion that verifies
-the previous step. See /docs for build variants (debug builds,
+the previous step. See `CLAUDE.md` for build variants (debug builds,
 alternate install directories, versioned image tags) and native
 per-package `colcon build`/`colcon test` usage.
-
 ## Repository layout
 
 ```
