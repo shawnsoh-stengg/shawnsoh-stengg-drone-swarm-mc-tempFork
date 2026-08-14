@@ -30,6 +30,7 @@
 #include <std_msgs/msg/header.hpp>
 
 #include "mission_exec/command_arbiter.hpp"
+#include "mission_exec/mission_persistence.hpp"
 #include "mission_exec/pre_arm_checks.hpp"
 
 namespace mission_exec
@@ -198,6 +199,8 @@ private:
   double home_position_tolerance_m_{5.0};
   double low_battery_margin_{0.10};
   double local_pose_stale_timeout_s_{2.0};
+  // EXEC-004: SDD §4.5 mission upload disk persistence path.
+  std::string mission_upload_path_{"/var/drone-mc/mission_upload.yaml"};
 
   // Transition table (SDD §4.1: std::unordered_map<Phase, TransitionTable>).
   std::unordered_map<Phase, TransitionTable> transition_table_;

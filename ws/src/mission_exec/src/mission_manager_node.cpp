@@ -52,8 +52,25 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
   low_battery_margin_ = declare_parameter("low_battery_margin", low_battery_margin_);
   local_pose_stale_timeout_s_ =
     declare_parameter("local_pose_stale_timeout_s", local_pose_stale_timeout_s_);
+  mission_upload_path_ = declare_parameter("mission_upload_path", mission_upload_path_);
 
   build_transition_table();
+
+  // EXEC-004 / SDD §4.5: reload whichever mission upload was most recently
+  // persisted, so a watchdog-triggered restart (FR-074) doesn't require a
+  // fresh GCS upload. arm_authorised_ is re-derived the same way
+  // on_gcs_mission_upload() does it, so a reload behaves identically to a
+  // fresh live upload for every downstream guard/check.
+  if (auto loaded = load_mission_upload(mission_upload_path_)) {
+    mission_upload_ =
+      std::make_shared<mc_msgs::msg::MissionUpload>(std::move(*loaded));
+    arm_authorised_ = mission_upload_->arm_authorised;
+    RCLCPP_INFO(
+      get_logger(),
+      "reloaded persisted mission upload from %s (upload_id=%u, originally received at %d.%09u)",
+      mission_upload_path_.c_str(), mission_upload_->upload_id,
+      mission_upload_->header.stamp.sec, mission_upload_->header.stamp.nanosec);
+  }
 
   phase_entered_at_ = now();
   last_phase_publish_at_ = now();
@@ -716,6 +733,16 @@ void MissionManagerNode::on_gcs_mission_upload(mc_msgs::msg::MissionUpload::Shar
 {
   mission_upload_ = msg;
   arm_authorised_ = msg->arm_authorised;
+
+  // EXEC-004 / SDD §4.5: persist every accepted upload so a later watchdog
+  // restart can reload it (see the constructor's load_mission_upload() call)
+  // instead of requiring a fresh GCS upload. Best-effort: a write failure
+  // (e.g. disk full) doesn't block accepting the upload for the current
+  // session, it just means a restart during this session would lose it.
+  if (!save_mission_upload(mission_upload_path_, *msg)) {
+    RCLCPP_WARN(
+      get_logger(), "failed to persist mission upload to %s", mission_upload_path_.c_str());
+  }
 }
 
 void MissionManagerNode::on_peer_states(mc_msgs::msg::SwarmPeerArray::SharedPtr msg)
