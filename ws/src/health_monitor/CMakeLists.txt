@@ -11,15 +11,17 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(mc_msgs REQUIRED)
 
 add_library(health_monitor_node_lib
   src/health_monitor_node.cpp
+  src/resource_sampler.cpp
 )
 target_include_directories(health_monitor_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-ament_target_dependencies(health_monitor_node_lib PUBLIC rclcpp)
+ament_target_dependencies(health_monitor_node_lib PUBLIC rclcpp mc_msgs)
 
 add_executable(health_monitor_node
   src/health_monitor_node_main.cpp
@@ -58,6 +60,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_health_monitor_node test/test_health_monitor_node.cpp)
   target_link_libraries(test_health_monitor_node health_monitor_node_lib)
+
+  ament_add_gtest(test_resource_sampler test/test_resource_sampler.cpp)
+  target_link_libraries(test_resource_sampler health_monitor_node_lib)
 endif()
 
 ament_package()

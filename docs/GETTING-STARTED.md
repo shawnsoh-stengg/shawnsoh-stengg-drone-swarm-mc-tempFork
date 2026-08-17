@@ -127,17 +127,15 @@ docs/diagrams/     28 PlantUML architecture diagrams (.puml + rendered .png)
 docs/              this guide + ARCHITECTURE.md, API-REFERENCE.md, TESTING.md, DEPLOYMENT.md, CONTRIBUTING.md
 ```
 
-The formal project documents (requirements, interfaces, design, hardware)
-live under `docs/design/` — `SRS-MC-001.md`, `ICD-MC-001.md`,
-`SDD-MC-001.md`, `HID-MC-001.md`.
+The formal project documents (requirements, interfaces, design, hardware,
+test plan, delivery backlog) live at the repo root — see the table in
+`README.md` or `CLAUDE.md`'s Document Map.
 
 ## Where to go next
 
-- Picking up a ticket? There's no backlog doc in this repo — ticket status
-  (planned/in-progress/done) lives in Linear (`NEAR-<N>` IDs). See
-  `docs/CONTRIBUTING.md`'s [Ticket IDs](CONTRIBUTING.md#ticket-ids) section
-  for how those map to this repo's own `<PREFIX>-<NNN>` IDs.
-- Touching the MC↔FCC or GCS↔MC wire format? Read
-  `docs/design/ICD-MC-001.md` first.
+- Picking up a ticket? Check `PROJECT-PLAN-5-MONTH.md` for the backlog and
+  `FCC-MISSION-CHANNEL-BACKLOG.md` / `OFFBOARD-MODE-SWITCHING-BACKLOG.md`
+  for follow-on work.
+- Touching the MC↔FCC or GCS↔MC wire format? Read `ICD-MC-001.md` first.
 - Rendering or editing a diagram? The `.puml` sources under
   `docs/diagrams/` use PlantUML v1.2026-compatible syntax.

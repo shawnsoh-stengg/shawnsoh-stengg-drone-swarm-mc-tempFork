@@ -123,7 +123,7 @@ endif()
 | `fcc_bridge` | `test_fcc_backend_contract`, `test_factory`, `test_mission_protocol_client`, `test_xrce_dds_backend`, `test_mavlink_udp_backend`, `test_fcc_bridge_node` |
 | `gcs_comms` | `test_gcs_mavlink_node`, `test_mission_orchestrator_node` |
 | `mission_exec` | `test_mission_manager_node`, `test_pre_arm_checks`, `test_command_arbiter`, `test_mission_persistence`, `test_mission_manager_node_persistence`, `test_search_planner_node` |
-| `health_monitor` | `test_health_monitor_node` (placeholder — node is a stub, see below) |
+| `health_monitor` | `test_resource_sampler`, `test_health_monitor_node` (HEALTH-001: real resource-sampling tests; liveness/failsafe still land in HEALTH-002/003) |
 | `swarm_coord` | `test_swarm_coordinator_node`, `test_formation_controller_node` (placeholders — stubs) |
 | `vision` | `test_visual_localisation_node`, `test_perception_down_node` (placeholders — stubs) |
 | `video_downlink` | `test_perception_front_node`, `test_video_mux_node` (placeholders — stubs) |
@@ -167,9 +167,9 @@ exercising the real interface contract.
 ### Node-level tests
 
 This is the pattern used for `fcc_bridge_node`, `gcs_mavlink_node`,
-`mission_orchestrator_node`, and `mission_manager_node` today — it plays the
-role TP-NI's `launch_testing` is meant to play, using plain `gtest` and a
-harness node instead:
+`mission_orchestrator_node`, `mission_manager_node`, and `health_monitor_node`
+today — it plays the role TP-NI's `launch_testing` is meant to play, using
+plain `gtest` and a harness node instead:
 
 1. **One global `rclcpp::init`/`shutdown`** per test binary via a
    `::testing::Environment`, not per-test — registered once at file scope:
@@ -230,19 +230,19 @@ harness node instead:
 
 ### Placeholder tests for stub nodes
 
-`health_monitor_node`, `swarm_coordinator_node`,
-`formation_controller_node`, `perception_down_node`,
-`visual_localisation_node`, `perception_front_node`, `video_mux_node`, and
-`search_planner_node` are currently empty constructor stubs (see
-`docs/API-REFERENCE.md`'s implementation-status note). Their test files are
-placeholders that just confirm the node constructs under its expected name:
+`swarm_coordinator_node`, `formation_controller_node`,
+`perception_down_node`, `visual_localisation_node`, `perception_front_node`,
+`video_mux_node`, and `search_planner_node` are currently empty constructor
+stubs (see `docs/API-REFERENCE.md`'s implementation-status note). Their test
+files are placeholders that just confirm the node constructs under its
+expected name:
 
 ```cpp
-TEST(HealthMonitorNode, ConstructsWithExpectedName)
+TEST(VideoMuxNode, ConstructsWithExpectedName)
 {
   rclcpp::init(0, nullptr);
-  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
-  EXPECT_STREQ(node->get_name(), "health_monitor_node");
+  auto node = std::make_shared<video_downlink::VideoMuxNode>();
+  EXPECT_STREQ(node->get_name(), "video_mux_node");
   rclcpp::shutdown();
 }
 ```

@@ -2,8 +2,8 @@
 
 This is a synthesized, developer-facing entry point into the system design.
 For the authoritative, exhaustive design (node internals, algorithm proofs,
-deployment rationale) see `SDD-MC-001.md` at repo - /docs/design folder. For requirements
-and interface wire formats see `SRS-MC-001.md` and `ICD-MC-001.md` .
+deployment rationale) see `SDD-MC-001.md` at the repo root. For requirements
+and interface wire formats see `SRS-MC-001.md` and `ICD-MC-001.md`.
 
 ## What this software does
 
