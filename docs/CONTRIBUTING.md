@@ -8,17 +8,13 @@ style guide. For test-writing conventions specifically, see
 
 ## Repo shape today
 
-Development happens on short-lived feature branches merged into `main` via
-GitHub PRs — 10 have landed so far (#1-#10). Branch names follow
-`feature/near-<NEAR-ID>-mc-<prefix>-<NNN>-<slug>`, e.g.
-`feature/near-433-mc-exec-004-watchdog-heartbeat-mission-upload-disk`: the
-`near-<NEAR-ID>` segment is the ticket's ID in the team's external tracker
-(Linear); `mc-<prefix>-<NNN>` is this repo's own subsystem-ticket ID (see
-[Ticket IDs](#ticket-ids)) for the same piece of work. One branch/PR per
-ticket. PRs are merged either as a single squash commit (subject ends
-`(#N)`) or as a regular merge preserving the branch's individual commits —
-both show up in `git log`; match whichever your reviewer/merge button
-produces, don't force one over the other.
+There is one branch, `main` — no long-lived feature branches, no merged PR
+history yet. Development so far is a sequence of self-contained commits
+directly to `main`, each implementing one backlog ticket (see
+`PROJECT-PLAN-5-MONTH.md`) end to end: code + tests + doc updates in the
+same commit. If you open a PR against this repo, match that same
+granularity and the commit-message conventions below in the PR title/body
+— see [Commit messages](#commit-messages) and [Opening a PR](#opening-a-pr).
 
 ## C++ style
 
@@ -32,9 +28,8 @@ tailored to the file's subject:
 // Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §3, ICD-MC-001 §3).
 ```
 
-Cite whichever `docs/design/SDD-MC-001.md`/`docs/design/ICD-MC-001.md`
-sections that file actually implements — not a generic boilerplate
-reference.
+Cite whichever `SDD-MC-001.md`/`ICD-MC-001.md` sections that file actually
+implements — not a generic boilerplate reference.
 
 ### Headers and includes
 
@@ -150,24 +145,9 @@ default `ament_uncrustify` style already present throughout `ws/src/`.
 
 ## Ticket IDs
 
-Two ID systems coexist and both matter — don't conflate them:
-
-- **`NEAR-<N>`** — the ticket's ID in the team's external tracker (Linear).
-  Shows up in branch names and, inconsistently, in commit subjects/PR
-  titles. This repo carries no backlog doc anymore (the root-level
-  `PROJECT-PLAN-5-MONTH.md` and subsystem backlog docs were deleted in
-  `e8c60b8`) — Linear is now the only source of truth for what's planned,
-  in progress, or done. Don't expect to find a ticket list in this repo.
-- **`<PREFIX>-<NNN>`** (e.g. `FCC-006`, `GCS-003`, `EXEC-004`) — this
-  repo's own subsystem-scoped ID, cited in code comments (see
-  [Comment culture](#comment-culture-cite-the-ticket-state-the-boundary-flag-the-gap))
-  and embedded in branch names alongside the `NEAR-<N>` for the same piece
-  of work, e.g. `near-433-mc-exec-004-...` ties `NEAR-433` to `EXEC-004`.
-  There's no numeric relationship between the two — always read the
-  mapping off the branch name, never assume `NEAR-<N>` and `<PREFIX>-<NNN>`
-  correlate by number.
-
-Prefix maps roughly to subsystem:
+Work is tracked as tickets in `PROJECT-PLAN-5-MONTH.md` (and the follow-up
+backlog docs — `FCC-MISSION-CHANNEL-BACKLOG.md`,
+`OFFBOARD-MODE-SWITCHING-BACKLOG.md`). Prefix maps roughly to subsystem:
 
 | Prefix | Subsystem |
 |---|---|
@@ -183,73 +163,68 @@ Prefix maps roughly to subsystem:
 | `INFRA`, `DEP` | cross-cutting infra / deployment |
 | `TEST` | test tooling |
 
-Code comments cite the `<PREFIX>-<NNN>` ID (see
-[Comment culture](#comment-culture-cite-the-ticket-state-the-boundary-flag-the-gap));
-commit subjects and PR titles, when they cite a ticket at all, tend to use
-the `NEAR-<N>` ID instead. Ticket status (planned/in-progress/done) lives
-in Linear now, not in this repo.
+Every commit implementing a ticket cites its ID in the subject line (see
+below); every ticket landed gets marked done in `PROJECT-PLAN-5-MONTH.md`
+in the same or an immediately following commit. Note: an *external* tracker
+(if your organization has one) may number `FCC-NNN` etc. differently from
+this repo's own backlog doc — don't assume the numbers line up across
+systems.
 
 ## Commit messages
 
-Two eras are visible in `git log`, and the current one is what to match
-going forward:
+Observed shape, consistently, across `git log`:
 
-- **Pre-PR era** (everything up to `1efbe26`, before feature
-  branches/PRs started): strict and consistent —
-  `<Verb> <TICKET-ID>: <short imperative summary>` subject, a
-  multi-paragraph body with design rationale (spec sections, real
-  identifiers, deferred scope), a
-  `colcon test --packages-select <pkg>: N tests, 0 failures` evidence
-  line, and a `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`
-  trailer on every Claude-Code-authored commit.
-- **Current, PR-era practice** (`NEAR-425` onward): looser. Typical
-  subject is `<NEAR-ID> - <short summary>` (dash, not colon) or just a
-  plain descriptive summary with no ticket ID at all (e.g. `a575bab`,
-  `e8c60b8`). Most of these commits carry no body, and neither the
-  test-evidence line nor the `Co-Authored-By` trailer reliably appears
-  anymore (compare `3142bae`, `811d396`, `96463d1` to the pre-PR examples
-  above).
+```
+<Verb> <TICKET-ID>[/<TICKET-ID-2>]: <short imperative summary>
 
-For new work, match current practice, with two things worth still doing
-even though recent history is inconsistent about them:
+<Multi-paragraph prose: what changed, in which files/functions, and why —
+design rationale, not a diff restatement. Cite SDD/ICD/SRS section numbers
+and specific identifiers (class/function/topic names) where relevant. Call
+out what's deliberately deferred/out of scope, same as the code comments
+do.>
 
-- Subject: `<NEAR-ID> - <short imperative summary>` when the commit maps
-  cleanly to one ticket.
-- **Test evidence is worth keeping** when the commit touches tested code
-  — a bare `colcon test --packages-select <pkg>: N tests, 0 failures`
-  line costs little and is proof the change is green, not just a claim.
+<Test evidence, if applicable — e.g.:>
+colcon test --packages-select mission_exec: 128 tests, 0 failures.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+```
+
+- **Subject verb** is one of: `Implement`, `Add`, `Fix`, `Update`,
+  `Enhance`, `Document`, `Flag`, `Rename`, `Mark ... done in
+  PROJECT-PLAN-5-MONTH.md`, `Revert`. Pick the one that actually describes
+  the change — don't default to `Update` for everything.
+- **Body explains why**, referencing spec sections and real identifiers,
+  the same way the in-code comments do — a reviewer (or future you) should
+  be able to read the commit message alone and understand the design
+  decision, not just that "code changed."
+- **Test evidence line** when the commit touches tested code — a bare
+  `colcon test --packages-select <pkg>: N tests, 0 failures` line is
+  enough; it's there so the message itself is proof of green tests, not
+  just a claim.
 - **Docs move with the code that motivates them.** When a change affects
-  requirements/interfaces/design/test plan, the same PR (or a fast
-  follow-up PR) updates the relevant `SRS-MC-001.md`/`ICD-MC-001.md`/
-  `SDD-MC-001.md`/`TP-MC-001.md` section under `docs/design/` and, if the
-  architecture picture changed, the corresponding `docs/diagrams/*.puml`
-  (+ re-rendered `.png`). Don't let docs drift from what the code
-  actually does — this repo already has real examples of design docs
-  going stale (see `docs/API-REFERENCE.md`'s and `docs/DEPLOYMENT.md`'s
-  "implemented vs. designed" callouts) and it costs a full audit to
-  notice.
+  requirements/interfaces/design/test plan, the same commit (or the very
+  next one) updates the relevant `SRS-MC-001.md`/`ICD-MC-001.md`/
+  `SDD-MC-001.md`/`TP-MC-001.md` section and, if the architecture picture
+  changed, the corresponding `docs/diagrams/*.puml` (+ re-rendered `.png`).
+  Don't let root-level docs drift from what the code actually does — this
+  repo already has real examples of design docs going stale (see
+  `docs/API-REFERENCE.md`'s and `docs/DEPLOYMENT.md`'s "implemented vs.
+  designed" callouts) and it costs a full audit to notice.
 - Keep the `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`
-  trailer if Claude Code produced the commit — it's dropped out of most
-  recent commits, but it's still the right thing to include.
+  trailer if Claude Code produced the commit, matching every prior commit
+  in this repo's history that it authored.
 
 ## Opening a PR
 
-10 PRs have landed so far (#1-#10), one per `feature/near-<ID>-mc-<prefix>-<NNN>-<slug>`
-branch (see [Repo shape today](#repo-shape-today)). In practice, PR titles
-are a short descriptive summary (the ticket ID isn't consistently
-included) and bodies are one or two prose paragraphs — no
-"Summary"/"Test plan" headers have actually been used, so don't feel
-obliged to impose that structure. Keep a PR scoped to one ticket, matching
-how branches map 1:1 to tickets today — resist bundling unrelated tickets
-into one PR just because they touched nearby files. If you have test
-evidence worth recording, put it in the PR body — past PRs mostly haven't,
-but it's cheap and useful for a reviewer.
+No PR has landed here yet, but if you open one: give it the same
+subject/body shape as a commit message above (ticket ID, what changed and
+why, test evidence), and use a "Summary" + "Test plan" body structure if
+your PR spans multiple commits. Keep a PR scoped to one ticket, matching
+how commits are scoped today — resist bundling unrelated tickets into one
+PR just because they touched nearby files.
 
 ## Where to go next
 
 - Writing or running tests for your change: `docs/TESTING.md`.
 - Which topics/messages your change needs to wire up or update: `docs/API-REFERENCE.md`.
-- Design specs a change may need to update: `docs/design/SRS-MC-001.md`,
-  `docs/design/ICD-MC-001.md`, `docs/design/SDD-MC-001.md`.
-- Ticket backlog and current delivery status: tracked in Linear
-  (`NEAR-<N>` IDs) — not in this repo.
+- Ticket backlog and current delivery status: `PROJECT-PLAN-5-MONTH.md`.

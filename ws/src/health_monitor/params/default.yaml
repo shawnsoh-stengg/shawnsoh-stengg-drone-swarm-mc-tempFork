@@ -1,4 +1,10 @@
-# Placeholder — real tunables land with the health_monitor_node
-# implementation (SDD-MC-001 §2.4).
+# HEALTH-001: resource-sampling tunables (SDD-MC-001 §10.1). Liveness/
+# failsafe tunables land with HEALTH-002/003.
 health_monitor_node:
-  ros__parameters: {}
+  ros__parameters:
+    sample_period_s: 1.0
+    proc_stat_path: "/proc/stat"
+    meminfo_path: "/proc/meminfo"
+    disk_path: "/var/drone-mc"
+    cpu_thermal_zone_paths: ["/sys/class/thermal/thermal_zone0/temp"]
+    gpu_temp_command: "timeout 1 tegrastats --interval 500"
