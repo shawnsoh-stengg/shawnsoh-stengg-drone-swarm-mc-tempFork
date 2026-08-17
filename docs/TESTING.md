@@ -1,0 +1,272 @@
+# Testing
+
+How to run the existing test suite and how to write new tests that fit the
+conventions already established in `ws/src/`. For the full test-case
+catalog (every `TP-UT-*`/`TP-NI-*`/`TP-ST-*`/`TP-HW-*` ID, inputs, and pass
+criteria) see `TP-MC-001.md` — this document is about mechanics and
+conventions, not a restatement of that catalog.
+
+## The 5-level strategy, and what actually exists today
+
+`TP-MC-001.md` §2.1 defines five test levels:
+
+```
+TP-UT  Unit Tests          gtest                      Algorithms, guards, state logic in isolation
+TP-NI  Node Integration    launch_testing + rclpy     ROS 2 node pub/sub/service behaviour
+TP-ST  SITL System Tests   pytest + rclpy + PX4 SITL  Full mission phases, failsafe scenarios
+TP-HW  Hardware-in-the-Loop                            Jetson + Pixhawk    Performance, latency, resource bounds
+TP-SM  Smoke Tests         Bash scripts               Deployment validation after installation
+```
+
+**What's implemented right now:**
+
+- ✅ **TP-UT** — real, via `gtest` + `colcon test`, one `test_*.cpp` per
+  package (see the table below).
+- ✅ **TP-SM** — real, via the `scripts/<n>b-smoke-test-*.sh` /
+  `<n>c-smoke-test-*.sh` companions described in `CLAUDE.md`'s Build System
+  section and `docs/GETTING-STARTED.md`.
+- 🧭 **TP-NI** — designed only. `TP-MC-001.md` specifies `launch_testing` +
+  `rclpy`, but no `launch_testing` files exist in the workspace yet
+  (`CLAUDE.md`'s `ros2 launch fcc_bridge fcc_bridge_test.launch.py` example
+  is aspirational). What exists *today* in its place is a **gtest-based
+  approximation**: node-level gtest suites that stand up the real node
+  under test plus a plain `rclcpp::Node` harness that plays the peer nodes'
+  part over real topics — see [Node-level tests](#node-level-tests) below.
+  These give the same coverage TP-NI describes, just not in the
+  `launch_testing`/`pytest` form the test plan names.
+- 🧭 **TP-ST** and **TP-HW** — designed only. No PX4 SITL harness, no
+  `bags/`/`test_data/` fixtures (`TP-MC-001.md` §3.4), and no CI pipeline
+  wiring the `TP-SM → TP-UT → TP-NI → TP-ST` sequence (§2.1) exist in this
+  repo yet. `ros2 launch mission_exec sitl_mission_test.launch.py` in
+  `CLAUDE.md` is the intended entry point once TP-ST lands.
+
+## Running tests
+
+### Unit tests (what exists today)
+
+```bash
+source /opt/ros/humble/install/setup.bash
+
+# One package
+colcon build --merge-install --packages-select fcc_bridge
+colcon test --packages-select fcc_bridge
+colcon test-result --verbose
+
+# Whole workspace
+colcon build --merge-install
+colcon test
+colcon test-result --all --verbose
+```
+
+`colcon test-result --verbose` is what actually shows failing assertions —
+`colcon test`'s own output just reports pass/fail per package, so always
+follow it with `test-result` when a test fails.
+
+To run a single gtest binary directly (faster iteration than a full
+`colcon test` pass) or filter to one test case:
+
+```bash
+./build/mission_exec/test_mission_manager_node
+./build/mission_exec/test_mission_manager_node --gtest_filter='MissionManagerNodeTest.PreArmFailsOnLowBattery'
+```
+
+`ROS_LOCALHOST_ONLY=1` is worth setting if DDS discovery stalls or picks up
+unrelated nodes on a shared network while running node-level tests locally.
+
+### Smoke tests (TP-SM)
+
+Each numbered build/install script (`scripts/01-*.sh`, `04-*.sh`, ...) has a
+`<n>b-` or `<n>c-` smoke-test companion that verifies it — see
+`docs/GETTING-STARTED.md`'s build walkthrough for the full ordered list.
+Some accept `LIVE_CHECK=1` to additionally exercise a real running
+container/service rather than just checking config and image state; that
+mode needs the CycloneDDS sysctl floor from `scripts/01-install-os.sh`
+(INFRA-004) already applied on the host, since a too-low `net.core.rmem_max`
+will make DDS discovery fail under a live check.
+
+## Where tests live and how they're wired into the build
+
+Every package follows the same `CMakeLists.txt` shape:
+
+```cmake
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  set(ament_cmake_copyright_FOUND TRUE)   # see note below
+  ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_<thing> test/test_<thing>.cpp)
+  target_link_libraries(test_<thing> <node>_lib)   # link the lib target, not the executable
+endif()
+```
+
+- `set(ament_cmake_copyright_FOUND TRUE)` skips `ament_copyright`: it only
+  recognizes OSI license templates (Apache-2, BSD, MIT, GPL, ...), and every
+  `package.xml` here declares `license="Proprietary"`, which has no matching
+  template — the check would fail regardless of header content, so it's
+  disabled rather than attaching a misleading OSS notice. Carry this line
+  into any new package's `CMakeLists.txt`.
+- Node logic is built as a `<node>_lib` target separate from the
+  `_node_main.cpp` executable specifically so tests can link the lib
+  without pulling in `main()`. When adding a new node, split it the same
+  way (see any existing package for the pattern) rather than testing
+  through the executable.
+- Test file naming is `test_<thing>.cpp`, one gtest binary per
+  logical unit (a class, a node, or a focused behavior like
+  `test_mission_persistence.cpp`) — not one binary per package.
+
+### Current test inventory
+
+| Package | Test binaries |
+|---|---|
+| `fcc_bridge` | `test_fcc_backend_contract`, `test_factory`, `test_mission_protocol_client`, `test_xrce_dds_backend`, `test_mavlink_udp_backend`, `test_fcc_bridge_node` |
+| `gcs_comms` | `test_gcs_mavlink_node`, `test_mission_orchestrator_node` |
+| `mission_exec` | `test_mission_manager_node`, `test_pre_arm_checks`, `test_command_arbiter`, `test_mission_persistence`, `test_mission_manager_node_persistence`, `test_search_planner_node` |
+| `health_monitor` | `test_health_monitor_node` (placeholder — node is a stub, see below) |
+| `swarm_coord` | `test_swarm_coordinator_node`, `test_formation_controller_node` (placeholders — stubs) |
+| `vision` | `test_visual_localisation_node`, `test_perception_down_node` (placeholders — stubs) |
+| `video_downlink` | `test_perception_front_node`, `test_video_mux_node` (placeholders — stubs) |
+
+## Writing a unit test
+
+Every test file opens with a comment citing what it verifies and why,
+tying back to a ticket ID and/or `SRS`/`SDD`/`TP` section — follow this,
+it's how traceability is kept without a separate requirements-tracing tool:
+
+```cpp
+// FCC-001: FccBackend is a pure abstract interface — this test exercises it
+// through a minimal fake implementation to confirm the contract (every
+// method reachable via a base-class pointer, defaults are sane) without
+// depending on any concrete transport.
+```
+
+### Testing an interface in isolation: the fake pattern
+
+For pure-interface classes like `FccBackend`, write a minimal fake
+implementation local to the test file (`test_fcc_backend_contract.cpp`)
+rather than a mocking framework — the fake records what it was called with
+in plain member fields, and the test asserts against those fields:
+
+```cpp
+class FakeBackend : public fcc_bridge::FccBackend
+{
+public:
+  bool upload_mission(const std::vector<fcc_bridge::MissionItem> & items) override
+  {
+    last_uploaded_mission_ = items;
+    return upload_result_;
+  }
+  // ... one field per method's "what was I called with" / "what should I return"
+};
+```
+
+This keeps the test dependency-free (no PX4, no real transport) while still
+exercising the real interface contract.
+
+### Node-level tests
+
+This is the pattern used for `fcc_bridge_node`, `gcs_mavlink_node`,
+`mission_orchestrator_node`, and `mission_manager_node` today — it plays the
+role TP-NI's `launch_testing` is meant to play, using plain `gtest` and a
+harness node instead:
+
+1. **One global `rclcpp::init`/`shutdown`** per test binary via a
+   `::testing::Environment`, not per-test — registered once at file scope:
+
+   ```cpp
+   class RclcppEnvironment : public ::testing::Environment
+   {
+   public:
+     void SetUp() override {rclcpp::init(0, nullptr);}
+     void TearDown() override {rclcpp::shutdown();}
+   };
+   ::testing::Environment * const kRclcppEnv =
+     ::testing::AddGlobalTestEnvironment(new RclcppEnvironment);
+   ```
+
+2. **A `::testing::Test` fixture** whose `SetUp()` constructs the real node
+   under test plus a second plain `rclcpp::Node` (conventionally named
+   `harness_`) that publishes on the node's documented input topics and
+   subscribes to its documented output topics — standing in for whatever
+   peer nodes would normally be there, per `TP-MC-001.md` §2.4's mock
+   strategy. Every publish from the node under test that a test cares about
+   gets collected into a `std::vector` via the subscription callback, so
+   assertions can inspect message history after the fact.
+
+3. **`rclcpp::NodeOptions::parameter_overrides()`** to shrink timeouts,
+   periods, and quorum counts for fast, deterministic tests — e.g.
+   `control_loop_period_s: 0.02`, `mission_ack_timeout_s: 1.0`. Don't rely
+   on production defaults in a test; override anything time-based
+   explicitly.
+
+4. **A `spin_until` helper** instead of a fixed `sleep`, to avoid both
+   flakiness and slow tests:
+
+   ```cpp
+   template<typename Predicate>
+   bool spin_until(
+     std::initializer_list<rclcpp::Node::SharedPtr> nodes, Predicate predicate,
+     std::chrono::milliseconds timeout)
+   {
+     const auto deadline = std::chrono::steady_clock::now() + timeout;
+     while (std::chrono::steady_clock::now() < deadline) {
+       for (const auto & n : nodes) {rclcpp::spin_some(n);}
+       if (predicate()) {return true;}
+       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+     }
+     return false;
+   }
+   ```
+
+   Use it both to wait out discovery before a test body starts asserting
+   (`SetUp()` typically waits for `get_publisher_count() > 0` on a key
+   subscription) and to wait for an expected message/state change inside a
+   test case.
+
+5. **`TearDown()`** resets both node pointers explicitly rather than
+   relying on scope exit, to guarantee clean shutdown ordering between
+   tests in the same binary.
+
+### Placeholder tests for stub nodes
+
+`health_monitor_node`, `swarm_coordinator_node`,
+`formation_controller_node`, `perception_down_node`,
+`visual_localisation_node`, `perception_front_node`, `video_mux_node`, and
+`search_planner_node` are currently empty constructor stubs (see
+`docs/API-REFERENCE.md`'s implementation-status note). Their test files are
+placeholders that just confirm the node constructs under its expected name:
+
+```cpp
+TEST(HealthMonitorNode, ConstructsWithExpectedName)
+{
+  rclcpp::init(0, nullptr);
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  EXPECT_STREQ(node->get_name(), "health_monitor_node");
+  rclcpp::shutdown();
+}
+```
+
+When you implement one of these nodes for real, replace its placeholder
+test with a proper node-level test suite following the pattern above —
+the topics to wire up are already documented (as 🧭 designed) in
+`docs/API-REFERENCE.md`, and the corresponding `TP-UT-*`/`TP-NI-*` cases to
+satisfy are in `TP-MC-001.md`.
+
+## Adding a new test to an existing package
+
+1. Add `test/test_<thing>.cpp` following the fake-backend or node-harness
+   pattern above, whichever fits what you're testing.
+2. Add the `ament_add_gtest(...)` + `target_link_libraries(...)` pair to
+   the package's `CMakeLists.txt`, inside the existing `if(BUILD_TESTING)`
+   block.
+3. Open the file with a comment citing the ticket/requirement it verifies.
+4. `colcon test --packages-select <pkg> && colcon test-result --verbose`.
+
+## Where to go next
+
+- Full test-case catalog, pass/fail criteria, mock strategy table, and the
+  SITL/HIL environment specs: `TP-MC-001.md`.
+- Which topics a not-yet-implemented node needs to wire up when you give it
+  a real node-level test: `docs/API-REFERENCE.md`.
+- Build/install chain the smoke tests verify: `docs/GETTING-STARTED.md`.
