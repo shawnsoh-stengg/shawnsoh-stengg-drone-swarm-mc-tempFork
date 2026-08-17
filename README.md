@@ -74,11 +74,14 @@ per-package `colcon build`/`colcon test` usage.
 ## Repository layout
 
 ```
-docker/ros2-core/       ros2-core base Docker image
-docker/fcc-bridge/      fcc-bridge service Docker image (FROM ros2-core)
-docker/mavlink-router/  mavlink-router service Docker image (standalone, not FROM ros2-core)
-config/                 environment, per-node params, netplan, udev, systemd units
-ws/src/                 ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
-scripts/                numbered setup/build/install scripts + smoke tests
-docs/                   architecture design documents
+docker/ros2-core/      ros2-core base Docker image
+docker/fcc-bridge/     fcc-bridge service Docker image (FROM ros2-core)
+docker/gcs-comms/      gcs-comms service Docker image (FROM ros2-core; gcs_mavlink_node + MAVROS)
+docker/mission-exec/   mission-exec service Docker image (FROM ros2-core; mission_manager_node + search_planner_node)
+docker/mavlink-router/ mavlink-router service Docker image (standalone, not FROM ros2-core)
+docker/zenoh-bridge/   zenoh-bridge service Docker image (standalone, not FROM ros2-core)
+config/                environment, per-node params, netplan, udev, systemd units
+ws/src/                ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
+scripts/               numbered setup/build/install scripts + smoke tests
+docs/diagrams/         PlantUML architecture diagrams
 ```
