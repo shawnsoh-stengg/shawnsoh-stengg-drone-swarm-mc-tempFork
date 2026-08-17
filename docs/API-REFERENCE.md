@@ -12,17 +12,19 @@ No `.srv` or `.action` interfaces are defined anywhere in the workspace yet
 
 ## Implementation status
 
-Only four nodes currently wire up real publishers/subscribers:
-`fcc_bridge_node`, `gcs_mavlink_node`, `mission_orchestrator_node`, and
-`mission_manager_node`. Every other node in the tables below
-(`health_monitor_node`, `swarm_coordinator_node`,
-`formation_controller_node`, `perception_down_node`,
-`visual_localisation_node`, `perception_front_node`, `video_mux_node`,
-`search_planner_node`) exists only as an empty constructor stub — no
-publishers, subscribers, or timers are wired up in their `.cpp` files yet.
-Their rows below are the **designed** interface (sourced from the
-`mc_msgs/msg/*.msg` header comments and `ICD-MC-001.md` §9.2), not something
-you can observe on a running `ros2 topic list` today.
+Five nodes currently wire up real publishers/subscribers:
+`fcc_bridge_node`, `gcs_mavlink_node`, `mission_orchestrator_node`,
+`mission_manager_node`, and `health_monitor_node` (HEALTH-001: the
+`/mc/health` publisher and its 5 resource-sampling fields only —
+`fault_mask`/`node_alive_mask` land with HEALTH-002/003, see its own table
+row below). Every other node in the tables below
+(`swarm_coordinator_node`, `formation_controller_node`,
+`perception_down_node`, `visual_localisation_node`, `perception_front_node`,
+`video_mux_node`, `search_planner_node`) exists only as an empty
+constructor stub — no publishers, subscribers, or timers are wired up in
+their `.cpp` files yet. Their rows below are the **designed** interface
+(sourced from the `mc_msgs/msg/*.msg` header comments and `ICD-MC-001.md`
+§9.2), not something you can observe on a running `ros2 topic list` today.
 
 Each table row is marked:
 
@@ -129,11 +131,11 @@ a conflict.
 | `/mc/fault` | `mc_msgs/FaultEvent` | sub | `KeepLast(10)` | drives `FAULT → RTL` escape | ✅ |
 | `/mc/local_pose` | `geometry_msgs/PoseWithCovarianceStamped` | sub | `KeepLast(10)` | liveness-only (staleness check), pose itself unused here | ✅ |
 
-### `health_monitor_node` (package `health_monitor`) — 🧭 designed only
+### `health_monitor_node` (package `health_monitor`)
 
-| Topic | Type | Dir | Rate | Purpose |
-|---|---|---|---|---|
-| `/mc/health` | `mc_msgs/SystemHealth` | pub | ≥1 Hz | Aggregate CPU/mem/disk/GPU-temp + `fault_mask`/`node_alive_mask` |
+| Topic | Type | Dir | Rate | Purpose | Status |
+|---|---|---|---|---|---|
+| `/mc/health` | `mc_msgs/SystemHealth` | pub | 1 Hz (`sample_period_s` param) | Aggregate CPU/mem/disk/GPU-temp + `fault_mask`/`node_alive_mask` | ✅ the 5 resource fields (`cpu_pct`/`mem_pct`/`disk_pct`/`gpu_temp_c`/`cpu_temp_c`, HEALTH-001); 🧭 `fault_mask`/`node_alive_mask` (left at 0, HEALTH-002/003) |
 
 ### `swarm_coordinator_node` (package `swarm_coord`) — 🧭 designed only
 
