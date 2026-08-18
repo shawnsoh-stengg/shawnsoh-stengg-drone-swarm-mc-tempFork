@@ -8,8 +8,13 @@
 #include <thread>
 
 #include <mc_msgs/msg/fault_event.hpp>
+#include <mc_msgs/msg/fcc_command.hpp>
+#include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/link_status.hpp>
+#include <mc_msgs/msg/mission_phase.hpp>
+#include <mc_msgs/msg/status_text.hpp>
 #include <mc_msgs/msg/system_health.hpp>
+#include <mc_msgs/msg/vehicle_state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
 
@@ -44,6 +49,59 @@ bool spin_until(
   }
   return false;
 }
+
+// HEALTH-003: shared harness for the failsafe-decision-tree tests --
+// bundles every failsafe-tree input publisher and output subscriber a
+// branch test might need. Heap-allocated (rather than returned by value)
+// so its own subscription callbacks can safely capture `this`.
+class FailsafeHarness
+{
+public:
+  explicit FailsafeHarness(const std::string & name)
+  : node(std::make_shared<rclcpp::Node>(name))
+  {
+    vehicle_state_pub = node->create_publisher<mc_msgs::msg::VehicleState>(
+      "/mc/fcc/vehicle_state", rclcpp::QoS(10));
+    link_status_pub = node->create_publisher<mc_msgs::msg::LinkStatus>(
+      "/mc/gcs/link_status", rclcpp::QoS(10));
+    mission_phase_pub = node->create_publisher<mc_msgs::msg::MissionPhase>(
+      "/mc/mission_phase", rclcpp::QoS(10));
+    gcs_command_pub = node->create_publisher<mc_msgs::msg::GcsCommand>(
+      "/mc/gcs/command", rclcpp::QoS(10));
+
+    fault_sub = node->create_subscription<mc_msgs::msg::FaultEvent>(
+      "/mc/fault", rclcpp::QoS(10),
+      [this](mc_msgs::msg::FaultEvent::SharedPtr msg) {faults.push_back(msg);});
+    command_sub = node->create_subscription<mc_msgs::msg::FccCommand>(
+      "/mc/fcc/send_command", rclcpp::QoS(10),
+      [this](mc_msgs::msg::FccCommand::SharedPtr msg) {commands.push_back(msg);});
+    status_text_sub = node->create_subscription<mc_msgs::msg::StatusText>(
+      "/mc/status_text", rclcpp::QoS(10),
+      [this](mc_msgs::msg::StatusText::SharedPtr msg) {status_texts.push_back(msg);});
+  }
+
+  // True once this harness's /mc/fault subscription has discovered
+  // health_monitor_node's publisher -- the common "safe to publish an
+  // input and expect the resulting fault to actually arrive" gate.
+  bool ready() const {return fault_sub->get_publisher_count() > 0;}
+
+  rclcpp::Node::SharedPtr node;
+  rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr vehicle_state_pub;
+  rclcpp::Publisher<mc_msgs::msg::LinkStatus>::SharedPtr link_status_pub;
+  rclcpp::Publisher<mc_msgs::msg::MissionPhase>::SharedPtr mission_phase_pub;
+  rclcpp::Publisher<mc_msgs::msg::GcsCommand>::SharedPtr gcs_command_pub;
+  std::vector<mc_msgs::msg::FaultEvent::SharedPtr> faults;
+  std::vector<mc_msgs::msg::FccCommand::SharedPtr> commands;
+  std::vector<mc_msgs::msg::StatusText::SharedPtr> status_texts;
+
+private:
+  rclcpp::Subscription<mc_msgs::msg::FaultEvent>::SharedPtr fault_sub;
+  rclcpp::Subscription<mc_msgs::msg::FccCommand>::SharedPtr command_sub;
+  rclcpp::Subscription<mc_msgs::msg::StatusText>::SharedPtr status_text_sub;
+};
+
+constexpr uint32_t kMcCmdGcsOverride = 50004;
+constexpr uint32_t kMavCmdNavReturnToLaunch = 20;
 }  // namespace
 
 TEST(HealthMonitorNode, ConstructsWithExpectedName)
@@ -218,4 +276,343 @@ TEST(HealthMonitorNode, ManagerHeartbeatWatchdogTriggersRestartAndFault)
   ASSERT_TRUE(
     spin_until({node, harness}, [&] {return latest_fault != nullptr;}, std::chrono::seconds(2)));
   EXPECT_EQ(latest_fault->fault_id, mc_msgs::msg::FaultEvent::MANAGER_DEAD);
+}
+
+// HEALTH-003/FR-026: FCC_LINK_LOST publishes an annotated /mc/fault
+// (ACTION_RTL, documenting what mission_manager_node's own pre-existing
+// fault-handling will do) but never calls send_command() itself -- FR-026
+// makes mission_manager_node the sole node authorised to command a
+// flight-mode change. Edge-triggered: does not re-fire on persistence.
+TEST(HealthMonitorNode, FccLinkLostPublishesFaultWithoutCommandingFcc)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_fcc_link");
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {
+        return harness->vehicle_state_pub->get_subscription_count() > 0 && harness->ready();
+      }, std::chrono::seconds(2)));
+
+  mc_msgs::msg::VehicleState ok_state;
+  ok_state.fcc_link_ok = true;
+  ok_state.battery_pct = 1.0F;  // keep LOW_BATTERY out of this test's way
+  harness->vehicle_state_pub->publish(ok_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  mc_msgs::msg::VehicleState lost_state;
+  lost_state.fcc_link_ok = false;
+  lost_state.battery_pct = 1.0F;
+  harness->vehicle_state_pub->publish(lost_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::FCC_LINK_LOST);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_RTL);
+
+  // Persistence -- no new message, just re-sample -- must not re-fire, and
+  // FR-026 means no FccCommand is ever published for this branch.
+  node->sample_and_publish();
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(100));
+  EXPECT_EQ(harness->faults.size(), 1u);
+  EXPECT_TRUE(harness->commands.empty());
+}
+
+// HEALTH-003/FR-074/FR-075: MANAGER_DEAD restart-then-RTL escalation across
+// ONE continuous outage that never recovers on its own -- the scenario
+// FR-075 actually targets. Retries happen on a manager_restart_retry_s_
+// cooldown (not a fresh alive->dead edge each time, since a truly hung
+// node only ever produces one such edge): attempts 1-3 request a systemd
+// restart (ACTION_NONE), attempt 4 exhausts the budget and commands RTL
+// directly (ACTION_RTL, FR-075's sole exception to FR-026) exactly once,
+// then further persistence must not re-fire either action.
+TEST(HealthMonitorNode, ManagerDeadRetriesThreeTimesThenCommandsRtlOnce)
+{
+  constexpr double kTimeoutS = 0.1;
+  constexpr double kRetryS = 0.2;
+  rclcpp::NodeOptions opts;
+  opts.parameter_overrides(
+  {
+    rclcpp::Parameter("manager_heartbeat_timeout_s", kTimeoutS),
+    rclcpp::Parameter("manager_restart_retry_s", kRetryS),
+  });
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>(opts);
+
+  std::vector<std::string> restart_calls;
+  node->set_restart_trigger(
+    [&](const std::string & service) {restart_calls.push_back(service);});
+
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_manager");
+  auto heartbeat_pub = harness->node->create_publisher<std_msgs::msg::Header>(
+    "/mc/manager/heartbeat", rclcpp::QoS(10));
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return heartbeat_pub->get_subscription_count() > 0;},
+      std::chrono::seconds(2)));
+
+  // One heartbeat, then silence forever -- a genuinely hung node, never
+  // republished, unlike HEALTH-002's own single-shot watchdog test.
+  std_msgs::msg::Header hb;
+  hb.stamp = harness->node->now();
+  heartbeat_pub->publish(hb);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(30));
+  node->sample_and_publish();  // registers alive
+
+  // Attempt 1: the initial alive -> dead edge.
+  std::this_thread::sleep_for(std::chrono::duration<double>(kTimeoutS * 3));
+  node->sample_and_publish();
+  // Attempts 2-4: each one retry-cooldown period later, still no heartbeat.
+  for (int i = 0; i < 3; ++i) {
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRetryS * 1.5));
+    node->sample_and_publish();
+  }
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return harness->faults.size() >= 4;}, std::chrono::seconds(2)));
+  ASSERT_EQ(restart_calls.size(), 3u);
+  for (const auto & service : restart_calls) {
+    EXPECT_EQ(service, "mission-exec.service");
+  }
+  ASSERT_EQ(harness->faults.size(), 4u);
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_EQ(harness->faults[i]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
+  }
+  EXPECT_EQ(harness->faults[3]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_RTL);
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->commands.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->commands.size(), 1u);  // only the escalation sends an FCC command
+  EXPECT_EQ(harness->commands[0]->cmd, kMavCmdNavReturnToLaunch);
+
+  // Further persistence past the escalation -- no re-fire of either action.
+  std::this_thread::sleep_for(std::chrono::duration<double>(kRetryS * 1.5));
+  node->sample_and_publish();
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  EXPECT_EQ(restart_calls.size(), 3u);
+  EXPECT_EQ(harness->faults.size(), 4u);
+  EXPECT_EQ(harness->commands.size(), 1u);
+}
+
+// HEALTH-003/FR-026/FR-072: LOW_BATTERY publishes an annotated /mc/fault
+// (ACTION_RTL, CRITICAL severity -- enough for mission_manager_node's own
+// pre-existing is_critical_fault()/on_fault() to auto-RTL) without this
+// node ever calling send_command() itself, using the 0.20 default
+// threshold since no MissionUpload has been published.
+TEST(HealthMonitorNode, LowBatteryPublishesFaultWithoutCommandingFcc)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_battery");
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {
+        return harness->vehicle_state_pub->get_subscription_count() > 0 && harness->ready();
+      }, std::chrono::seconds(2)));
+
+  mc_msgs::msg::VehicleState ok_state;
+  ok_state.fcc_link_ok = true;
+  ok_state.battery_pct = 0.5F;
+  harness->vehicle_state_pub->publish(ok_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  mc_msgs::msg::VehicleState low_state;
+  low_state.fcc_link_ok = true;
+  low_state.battery_pct = 0.1F;  // below the 0.20 default low_battery_threshold
+  harness->vehicle_state_pub->publish(low_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::LOW_BATTERY);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_RTL);
+
+  node->sample_and_publish();
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(100));
+  EXPECT_EQ(harness->faults.size(), 1u);
+  EXPECT_TRUE(harness->commands.empty());
+}
+
+// HEALTH-003: MC_CMD_GCS_OVERRIDE (ICD §4.5/§10.5, cmd=50004) with
+// OVERRIDE_LOW_BATTERY_RTL active suppresses the RTL -- a FaultEvent still
+// notifies the GCS (ACTION_NONE), but no FccCommand is sent.
+TEST(HealthMonitorNode, LowBatterySuppressedByGcsOverride)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  auto harness =
+    std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_battery_override");
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {
+        return harness->vehicle_state_pub->get_subscription_count() > 0 &&
+               harness->gcs_command_pub->get_subscription_count() > 0 && harness->ready();
+      }, std::chrono::seconds(2)));
+
+  mc_msgs::msg::GcsCommand override_cmd;
+  override_cmd.command = kMcCmdGcsOverride;
+  override_cmd.params[0] = 1.0F;  // enable
+  override_cmd.params[1] = 1.0F;  // OVERRIDE_LOW_BATTERY_RTL (ICD §10.7)
+  harness->gcs_command_pub->publish(override_cmd);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+
+  mc_msgs::msg::VehicleState ok_state;
+  ok_state.fcc_link_ok = true;
+  ok_state.battery_pct = 0.5F;
+  harness->vehicle_state_pub->publish(ok_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  mc_msgs::msg::VehicleState low_state;
+  low_state.fcc_link_ok = true;
+  low_state.battery_pct = 0.1F;
+  harness->vehicle_state_pub->publish(low_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::LOW_BATTERY);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
+
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(100));
+  EXPECT_TRUE(harness->commands.empty());
+}
+
+// HEALTH-003/FR-026: GCS_LINK_LOST during a GCS-supervised mission_phase
+// publishes a /mc/fault annotated ACTION_HOLD (the SDD §10.3-intended
+// action) at non-critical severity -- deliberately kept below
+// mission_manager_node's critical-fault->RTL threshold, since HOLD has no
+// existing fault-consumption path to actually enact it (a documented,
+// out-of-scope gap, not silently reinterpreted as RTL) -- and never calls
+// send_command() itself.
+TEST(HealthMonitorNode, GcsLinkLostPublishesHoldFaultWithoutCommandingFcc)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  auto harness =
+    std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_gcslink_hold");
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {
+        return harness->link_status_pub->get_subscription_count() > 0 &&
+               harness->mission_phase_pub->get_subscription_count() > 0 && harness->ready();
+      }, std::chrono::seconds(2)));
+
+  mc_msgs::msg::MissionPhase phase;
+  phase.phase = mc_msgs::msg::MissionPhase::SEARCH;
+  harness->mission_phase_pub->publish(phase);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+
+  mc_msgs::msg::LinkStatus ok_status;
+  ok_status.gcs_link_ok = true;
+  harness->link_status_pub->publish(ok_status);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  mc_msgs::msg::LinkStatus lost_status;
+  lost_status.gcs_link_ok = false;
+  harness->link_status_pub->publish(lost_status);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::GCS_LINK_LOST);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_HOLD);
+  EXPECT_EQ(harness->faults[0]->severity, 4);  // MAV_SEVERITY WARNING -- below mission_manager_
+                                               // node's severity<=CRITICAL(2) auto-RTL threshold
+
+  node->sample_and_publish();
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(100));
+  EXPECT_EQ(harness->faults.size(), 1u);
+  EXPECT_TRUE(harness->commands.empty());
+}
+
+// HEALTH-003: GCS_LINK_LOST outside the GCS-supervised phase set publishes
+// a fault notification only -- no HOLD is commanded (SDD §10.3).
+TEST(HealthMonitorNode, GcsLinkLostNoActionOutsideSupervisedPhase)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  auto harness =
+    std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_gcslink_noaction");
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {
+        return harness->link_status_pub->get_subscription_count() > 0 && harness->ready();
+      }, std::chrono::seconds(2)));
+  // No mission_phase publish -- phase stays unknown, so the gate is false.
+
+  mc_msgs::msg::LinkStatus ok_status;
+  ok_status.gcs_link_ok = true;
+  harness->link_status_pub->publish(ok_status);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  mc_msgs::msg::LinkStatus lost_status;
+  lost_status.gcs_link_ok = false;
+  harness->link_status_pub->publish(lost_status);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::GCS_LINK_LOST);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
+
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(100));
+  EXPECT_TRUE(harness->commands.empty());
+}
+
+// HEALTH-003: GPU_OVERTEMP -> inference throttled + WARNING statustext
+// (SDD §10.3), edge-triggered.
+TEST(HealthMonitorNode, GpuOvertempThrottlesInferenceAndDoesNotRefire)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  node->resource_sampler().set_gpu_temp_line_provider(
+    [] {return std::optional<std::string>("RAM ... GPU@90C ...");});
+
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_gpu");
+
+  ASSERT_TRUE(
+    spin_until({node, harness->node}, [&] {return harness->ready();}, std::chrono::seconds(2)));
+
+  node->sample_and_publish();  // gpu_temp_c=90 > 85 threshold -> overtemp edge
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::GPU_OVERTEMP);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->status_texts.empty();},
+      std::chrono::seconds(2)));
+  ASSERT_EQ(harness->status_texts.size(), 1u);
+  EXPECT_EQ(harness->status_texts[0]->severity, mc_msgs::msg::StatusText::SEVERITY_WARNING);
+
+  node->sample_and_publish();
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  EXPECT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->status_texts.size(), 1u);
 }

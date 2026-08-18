@@ -1,7 +1,8 @@
 # HEALTH-001: resource-sampling tunables (SDD-MC-001 §10.1).
 # HEALTH-002: node_alive_mask liveness timeouts (§10.2) and the
-# mission_manager_node heartbeat watchdog (FR-074). Failsafe decision-tree
-# tunables land with HEALTH-003.
+# mission_manager_node heartbeat watchdog (FR-074).
+# HEALTH-003: failsafe decision tree (§10.3) and systemd-restart transport
+# (§10.4) tunables.
 health_monitor_node:
   ros__parameters:
     sample_period_s: 1.0
@@ -22,3 +23,13 @@ health_monitor_node:
     visual_localisation_node_timeout_s: 5.0
     perception_front_node_timeout_s: 3.0
     video_mux_node_timeout_s: 2.0
+    # FR-075: cooldown between successive mission-exec.service restart
+    # attempts while mission_manager_node's heartbeat stays silent -- long
+    # enough for systemd's restart and the process's own re-init to have a
+    # real chance at a fresh heartbeat before the next attempt is judged.
+    manager_restart_retry_s: 10.0
+    # SDD §10.1: GPU_OVERTEMP threshold.
+    gpu_overtemp_threshold_c: 85
+    # SDD §10.4: drone-mc-watchdog privileged-helper Unix socket.
+    watchdog_socket_path: "/var/run/drone-mc/watchdog.sock"
+    watchdog_timeout_ms: 500
