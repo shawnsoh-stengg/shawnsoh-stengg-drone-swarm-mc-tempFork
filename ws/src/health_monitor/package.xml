@@ -16,6 +16,15 @@
   <depend>rclcpp</depend>
   <depend>mc_msgs</depend>
 
+  <!-- Not build dependencies: health_monitor_node's liveness watches
+       (HEALTH-002, SDD §10.2) use rclcpp::GenericSubscription, which
+       resolves each topic's typesupport by string at runtime rather than
+       linking against the message package. Declared here anyway so these
+       packages are guaranteed present at deploy time. -->
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>

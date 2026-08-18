@@ -15,9 +15,13 @@ No `.srv` or `.action` interfaces are defined anywhere in the workspace yet
 Five nodes currently wire up real publishers/subscribers:
 `fcc_bridge_node`, `gcs_mavlink_node`, `mission_orchestrator_node`,
 `mission_manager_node`, and `health_monitor_node` (HEALTH-001: the
-`/mc/health` publisher and its 5 resource-sampling fields only —
-`fault_mask`/`node_alive_mask` land with HEALTH-002/003, see its own table
-row below). Every other node in the tables below
+`/mc/health` publisher and its 5 resource-sampling fields; HEALTH-002: the
+`node_alive_mask` liveness watches and the `/mc/manager/heartbeat` FR-074
+watchdog, which also subscribes `health_monitor_node` to several topics
+whose own publishing node is still an empty stub below — the subscription
+itself is real even though nothing is on the other end of it yet.
+`fault_mask` still lands with HEALTH-003, see its own table row below).
+Every other node in the tables below
 (`swarm_coordinator_node`, `formation_controller_node`,
 `perception_down_node`, `visual_localisation_node`, `perception_front_node`,
 `video_mux_node`, `search_planner_node`) exists only as an empty
@@ -135,7 +139,15 @@ a conflict.
 
 | Topic | Type | Dir | Rate | Purpose | Status |
 |---|---|---|---|---|---|
-| `/mc/health` | `mc_msgs/SystemHealth` | pub | 1 Hz (`sample_period_s` param) | Aggregate CPU/mem/disk/GPU-temp + `fault_mask`/`node_alive_mask` | ✅ the 5 resource fields (`cpu_pct`/`mem_pct`/`disk_pct`/`gpu_temp_c`/`cpu_temp_c`, HEALTH-001); 🧭 `fault_mask`/`node_alive_mask` (left at 0, HEALTH-002/003) |
+| `/mc/health` | `mc_msgs/SystemHealth` | pub | 1 Hz (`sample_period_s` param) | Aggregate CPU/mem/disk/GPU-temp + `fault_mask`/`node_alive_mask` | ✅ the 5 resource fields (HEALTH-001) and `node_alive_mask` (HEALTH-002); 🧭 `fault_mask` (left at 0, HEALTH-003) |
+| `/mc/fault` | `mc_msgs/FaultEvent` | pub | event-driven | `MANAGER_DEAD` on `/mc/manager/heartbeat` silence > `manager_heartbeat_timeout_s` (FR-074) | ✅ |
+| `/mc/manager/heartbeat`, `/mc/fcc/vehicle_state`, `/mc/gcs/link_status`, `/mc/swarm/peer_states`, `/camera/image_raw`, `/mc/detections`, `/mc/local_pose`, `/mc/perception/front/tracks`, `/mc/video/downlink_status` | (each node's own, per its table above) | sub | — | Node-liveness watches feeding `node_alive_mask` (SDD §10.2) — payload is never inspected, only arrival timing, via `rclcpp::GenericSubscription` | ✅ |
+
+`health_monitor_node`'s liveness subscriptions don't require the publishing
+node to exist yet — several of the 9 topics above (e.g.
+`/mc/swarm/peer_states`, `/mc/local_pose`) are published by nodes that are
+still empty stubs (see "Implementation status" above); their `node_alive_
+mask` bit simply stays unset until a real publisher shows up.
 
 ### `swarm_coordinator_node` (package `swarm_coord`) — 🧭 designed only
 
