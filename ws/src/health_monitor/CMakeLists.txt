@@ -16,6 +16,7 @@ find_package(mc_msgs REQUIRED)
 add_library(health_monitor_node_lib
   src/health_monitor_node.cpp
   src/resource_sampler.cpp
+  src/systemd_restart_client.cpp
 )
 target_include_directories(health_monitor_node_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -63,6 +64,9 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_resource_sampler test/test_resource_sampler.cpp)
   target_link_libraries(test_resource_sampler health_monitor_node_lib)
+
+  ament_add_gtest(test_systemd_restart_client test/test_systemd_restart_client.cpp)
+  target_link_libraries(test_systemd_restart_client health_monitor_node_lib)
 endif()
 
 ament_package()

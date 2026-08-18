@@ -20,8 +20,15 @@ Five nodes currently wire up real publishers/subscribers:
 watchdog, which also subscribes `health_monitor_node` to several topics
 whose own publishing node is still an empty stub below — the subscription
 itself is real even though nothing is on the other end of it yet.
-`fault_mask` still lands with HEALTH-003, see its own table row below).
-Every other node in the tables below
+HEALTH-003: the `fault_mask` failsafe decision tree (§10.3) and the SDD
+§10.4 systemd-restart transport. Per FR-026, `health_monitor_node` never
+calls `send_command()` for a flight-mode change except FR-075's own
+explicit, narrow exception (RTL after 3 failed `mission-exec.service`
+restart attempts) — `FCC_LINK_LOST` and `LOW_BATTERY` instead rely on
+`mission_manager_node`'s own pre-existing, independent fault-consumption
+to actually RTL; `GCS_LINK_LOST`→HOLD is a documented gap since that
+mechanism only ever RTLs, same class as the `OFFBOARD_STREAM_STALE`/
+`GIMBAL_LINK_LOST` gaps below). Every other node in the tables below
 (`swarm_coordinator_node`, `formation_controller_node`,
 `perception_down_node`, `visual_localisation_node`, `perception_front_node`,
 `video_mux_node`, `search_planner_node`) exists only as an empty
@@ -139,15 +146,26 @@ a conflict.
 
 | Topic | Type | Dir | Rate | Purpose | Status |
 |---|---|---|---|---|---|
-| `/mc/health` | `mc_msgs/SystemHealth` | pub | 1 Hz (`sample_period_s` param) | Aggregate CPU/mem/disk/GPU-temp + `fault_mask`/`node_alive_mask` | ✅ the 5 resource fields (HEALTH-001) and `node_alive_mask` (HEALTH-002); 🧭 `fault_mask` (left at 0, HEALTH-003) |
-| `/mc/fault` | `mc_msgs/FaultEvent` | pub | event-driven | `MANAGER_DEAD` on `/mc/manager/heartbeat` silence > `manager_heartbeat_timeout_s` (FR-074) | ✅ |
-| `/mc/manager/heartbeat`, `/mc/fcc/vehicle_state`, `/mc/gcs/link_status`, `/mc/swarm/peer_states`, `/camera/image_raw`, `/mc/detections`, `/mc/local_pose`, `/mc/perception/front/tracks`, `/mc/video/downlink_status` | (each node's own, per its table above) | sub | — | Node-liveness watches feeding `node_alive_mask` (SDD §10.2) — payload is never inspected, only arrival timing, via `rclcpp::GenericSubscription` | ✅ |
+| `/mc/health` | `mc_msgs/SystemHealth` | pub | 1 Hz (`sample_period_s` param) | Aggregate CPU/mem/disk/GPU-temp + `fault_mask`/`node_alive_mask` | ✅ |
+| `/mc/fault` | `mc_msgs/FaultEvent` | pub | event-driven | `MANAGER_DEAD`/`FCC_LINK_LOST`/`LOW_BATTERY`/`GCS_LINK_LOST`/`GPU_OVERTEMP` (SDD §10.3), each edge-triggered with an annotated `failsafe_action` | ✅ |
+| `/mc/fcc/send_command` | `mc_msgs/FccCommand` | pub | event-driven | **FR-075's sole exception to FR-026**: RTL, only after 3 failed `mission-exec.service` restart attempts | ✅ |
+| `/mc/status_text` | `mc_msgs/StatusText` | pub | event-driven | `WARNING` text on `GPU_OVERTEMP` | ✅ |
+| `/mc/manager/heartbeat`, `/mc/swarm/peer_states`, `/camera/image_raw`, `/mc/detections`, `/mc/local_pose`, `/mc/perception/front/tracks`, `/mc/video/downlink_status` | (each node's own, per its table above) | sub | — | Node-liveness watches feeding `node_alive_mask` (SDD §10.2) — payload is never inspected, only arrival timing, via `rclcpp::GenericSubscription` | ✅ |
+| `/mc/fcc/vehicle_state` | `mc_msgs/VehicleState` | sub | — | Liveness watch (as above) **and** `fcc_link_ok`/`battery_pct` content for `FCC_LINK_LOST`/`LOW_BATTERY` | ✅ |
+| `/mc/gcs/link_status` | `mc_msgs/LinkStatus` | sub | — | Liveness watch (as above) **and** `gcs_link_ok` content for `GCS_LINK_LOST` | ✅ |
+| `/mc/mission_phase` | `mc_msgs/MissionPhase` | sub | — | Gates `GCS_LINK_LOST`→HOLD to the GCS-supervised phase set (SDD §10.3) | ✅ |
+| `/mc/gcs/mission_upload` | `mc_msgs/MissionUpload` | sub | — | `low_battery_threshold` override (falls back to the 0.20 SDD default) | ✅ |
+| `/mc/gcs/command` | `mc_msgs/GcsCommand` | sub | — | `MC_CMD_GCS_OVERRIDE` (ICD §10.5, cmd=50004) → `OVERRIDE_LOW_BATTERY_RTL`/`OVERRIDE_GCS_LINK_HOLD` state (ICD §10.7) | ✅ |
 
 `health_monitor_node`'s liveness subscriptions don't require the publishing
-node to exist yet — several of the 9 topics above (e.g.
-`/mc/swarm/peer_states`, `/mc/local_pose`) are published by nodes that are
-still empty stubs (see "Implementation status" above); their `node_alive_
-mask` bit simply stays unset until a real publisher shows up.
+node to exist yet — several of the topics above (e.g. `/mc/swarm/peer_
+states`, `/mc/local_pose`) are published by nodes that are still empty
+stubs (see "Implementation status" above); their `node_alive_mask` bit
+simply stays unset until a real publisher shows up. The systemd-restart
+transport (SDD §10.4) is a separate Unix domain socket to the privileged
+`drone-mc-watchdog` helper (`watchdog_socket_path` param), not a ROS 2
+topic — see `ws/src/health_monitor/include/health_monitor/
+systemd_restart_client.hpp`.
 
 ### `swarm_coordinator_node` (package `swarm_coord`) — 🧭 designed only
 
