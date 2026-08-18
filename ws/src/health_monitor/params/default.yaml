@@ -1,5 +1,7 @@
-# HEALTH-001: resource-sampling tunables (SDD-MC-001 §10.1). Liveness/
-# failsafe tunables land with HEALTH-002/003.
+# HEALTH-001: resource-sampling tunables (SDD-MC-001 §10.1).
+# HEALTH-002: node_alive_mask liveness timeouts (§10.2) and the
+# mission_manager_node heartbeat watchdog (FR-074). Failsafe decision-tree
+# tunables land with HEALTH-003.
 health_monitor_node:
   ros__parameters:
     sample_period_s: 1.0
@@ -8,3 +10,15 @@ health_monitor_node:
     disk_path: "/var/drone-mc"
     cpu_thermal_zone_paths: ["/sys/class/thermal/thermal_zone0/temp"]
     gpu_temp_command: "timeout 1 tegrastats --interval 500"
+    # FR-074: mission_manager_node heartbeat (/mc/manager/heartbeat)
+    # silence threshold. Also this node's node_alive_mask timeout for the
+    # MISSION_MANAGER_ALIVE bit -- one value serves both.
+    manager_heartbeat_timeout_s: 5.0
+    fcc_bridge_node_timeout_s: 2.0
+    gcs_mavlink_node_timeout_s: 2.0
+    swarm_coordinator_node_timeout_s: 3.0
+    camera_node_timeout_s: 3.0
+    perception_down_node_timeout_s: 10.0
+    visual_localisation_node_timeout_s: 5.0
+    perception_front_node_timeout_s: 3.0
+    video_mux_node_timeout_s: 2.0
