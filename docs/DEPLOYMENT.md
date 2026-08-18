@@ -37,7 +37,7 @@ try to run something:
 | `drone-mc-zenoh-bridge` | (external daemon) | ✅ |
 | `drone-mc-gcs-comms` | `gcs_comms` (`gcs_mavlink_node` + MAVROS) | ✅ |
 | `drone-mc-mission-exec` | `mission_exec` (`mission_manager_node` + `search_planner_node`) | ✅ |
-| `drone-mc-health-monitor` | `health_monitor` | 🧭 (unit references `ghcr.io/drone-mc/health-monitor`, no `docker/health-monitor/` yet) |
+| `drone-mc-health-monitor` | `health_monitor` | ✅ (HEALTH-004) |
 | `drone-mc-swarm-coord` | `swarm_coord` | 🧭 (`ghcr.io/drone-mc/swarm-coord`, no `docker/swarm-coord/` yet) |
 | `drone-mc-vision` | `vision` | 🧭 (`ghcr.io/drone-mc/vision`, no `docker/vision/` yet) |
 | `drone-mc-camera` | (gscam2 capture, no ROS 2 package of its own yet) | 🧭 (`ghcr.io/drone-mc/camera`, no `docker/camera/` yet) |
@@ -138,7 +138,28 @@ Points worth knowing when you add a new unit:
   access than its one job requires.
 - **`ProtectSystem=strict` + `PrivateTmp=yes`** on every unit as a systemd
   hardening baseline, independent of whatever hardening the container
-  image itself does.
+  image itself does. `health-monitor` goes further (HEALTH-004):
+  `NoNewPrivileges`, `Protect{Home,Hostname,Clock,KernelTunables,
+  KernelModules,KernelLogs,ControlGroups}=yes`, `RestrictNamespaces`,
+  `RestrictSUIDSGID`, `RestrictRealtime`, `LockPersonality`, `RemoveIPC`,
+  `MemoryDenyWriteExecute`, `PrivateNetwork=yes` (safe here specifically
+  because the `docker` CLI only ever talks to `dockerd` over its `AF_UNIX`
+  socket, empirically confirmed not to affect a `--network=host`
+  container's own networking), `RestrictAddressFamilies`,
+  `SystemCallFilter=@system-service`, `KeyringMode=private`, `UMask=0077`
+  — measured via `systemd-analyze security` (a real, installed systemd
+  user-unit test in this repo's own dev sandbox) at exposure 9.2 `UNSAFE`
+  before these additions, 4.1 `OK` after. `User=`/`DynamicUser=` and a
+  restricted `CapabilityBoundingSet=` were deliberately left alone —
+  dropping capabilities from an already-root process needs privilege an
+  unprivileged test session can't grant, so a wrong guess there couldn't
+  be verified without risking a hard failure (`status=218/CAPABILITIES`)
+  on real hardware; that's real follow-up hardening, not done here. It
+  also bind-mounts the host's real `/proc` and `/sys` read-only (AC1) —
+  directly, not shadowed at `/host/proc`/`/host/sys` — since
+  `health_monitor_node`'s own resource-sampling (SDD §10.1) only ever
+  reads `/proc/stat`, `/proc/meminfo`, and `/sys/class/thermal/*`, none of
+  which are per-PID paths.
 - **`MemoryMax`/`CPUQuota`** are per-service resource caps (systemd-level,
   layered on top of the slice's `MemoryHigh`), sized to what that one
   service actually needs — e.g. `vision` gets `MemoryMax=6G` for the
@@ -234,13 +255,24 @@ the per-drone values the script deliberately leaves alone:
   `mission_orchestrator_node` has no MAVLink path to a real GCS-side
   Orchestrator in a deployed system, even though the node itself is
   implemented (see `docs/API-REFERENCE.md`).
-- **Four service units reference images that don't build yet**
-  (`health-monitor`, `swarm-coord`, `vision`, `camera` — see the status
-  table above). `02b-smoke-test-units.sh` verifies the *unit files* are
-  valid and enabled; it does not verify the images they reference exist.
-  `START_NOW=1 ./scripts/02-install-systemd-units.sh` (or a manual
-  `systemctl start drone-mc.target`) will fail partway through until these
-  are built.
+- **Three service units reference images that don't build yet**
+  (`swarm-coord`, `vision`, `camera` — see the status table above;
+  `health-monitor` closed this gap in HEALTH-004). `02b-smoke-test-units.sh`
+  verifies the *unit files* are valid and enabled; it does not verify the
+  images they reference exist. `START_NOW=1 ./scripts/02-install-systemd-
+  units.sh` (or a manual `systemctl start drone-mc.target`) will fail
+  partway through until these are built.
+- **`14b-smoke-test-health.sh`'s "GCS receives health telemetry in QGC"
+  criterion (HEALTH-004) is not smoke-testable in any environment** — it
+  needs a real QGroundControl instance on the far end of a real MAVLink
+  link, the same class of gap `PROJECT-PLAN-5-MONTH.md` already accepts
+  for GCS-001's own "QGroundControl shows drone HEARTBEAT" criterion.
+  `/mc/health` already reaches the GCS side today as the custom
+  `MC_HEALTH` (50103) MAVLink message (`gcs_mavlink_node`'s existing
+  `mc_status_timer_` mirror, GCS-003) — rendering it inside stock
+  QGroundControl would need a QGC-side dialect plugin, out of scope for
+  this MC-side repo (same class of "another team's app" boundary as the
+  Mission Orchestrator App, GCS-004).
 - **`video_downlink` has no deployment story yet at all** — no unit file,
   no Dockerfile, no build script for `perception_front_node` or
   `video_mux_node`.

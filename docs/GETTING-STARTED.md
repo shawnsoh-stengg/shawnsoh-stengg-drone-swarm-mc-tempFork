@@ -59,8 +59,15 @@ sudo ./scripts/11b-smoke-test-gcs-comms.sh
 # 7. mission-exec service image (mission_manager_node + search_planner_node)
 sudo ./scripts/12-build-mission-exec-image.sh
 sudo ./scripts/12b-smoke-test-mission-exec.sh
+#    (13 is reserved for swarm-coord's own build script, not yet added —
+#    DEP-001's remaining un-built package)
 
-# 8. Install + start the systemd orchestration (all services under drone-mc.target)
+# 8. health-monitor service image (health_monitor_node, HEALTH-004: read-only
+#    /proc,/sys + extra systemd hardening beyond every other unit's baseline)
+sudo ./scripts/14-build-health-monitor-image.sh
+sudo ./scripts/14b-smoke-test-health.sh
+
+# 9. Install + start the systemd orchestration (all services under drone-mc.target)
 sudo ./scripts/02-install-systemd-units.sh
 sudo ./scripts/02b-smoke-test-units.sh
 sudo systemctl start drone-mc.target
