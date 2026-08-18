@@ -1,6 +1,25 @@
 # drone-mc-health-monitor.service — health_monitor_node (SDD §12.4: started
 # first, no peer dependencies, so it is up before every other service it
-# watches). Installed by scripts/02-install-systemd-units.sh.
+# watches — no `Requires=` on any other drone-mc-*.service, by design:
+# HEALTH-004 AC3 needs this container unaffected by any other MC service
+# restarting). Installed by scripts/02-install-systemd-units.sh.
+#
+# HEALTH-004: host /proc,/sys are bind-mounted read-only (not shadowed at
+# a different path like /host/proc — health_monitor_node's own
+# resource-sampling, SDD §10.1, only ever reads /proc/stat, /proc/meminfo,
+# and /sys/class/thermal/*, none of which are per-PID paths, so mounting
+# directly over this container's own /proc,/sys is safe: /proc/self and
+# friends still resolve correctly per the reading process's own pid
+# namespace regardless of which procfs instance backs the mount — the
+# same reasoning already applies to --network=host above without
+# --pid=host). Read-only because health_monitor_node has no legitimate
+# reason to ever write to either. This is on top of the
+# ProtectSystem=strict/PrivateTmp=yes baseline every drone-mc-*.service
+# unit already sets (CLAUDE.md/docs/DEPLOYMENT.md) — the additional
+# directives below are specific to this one unit, verified against
+# `systemd-analyze security` on real systemd (scripts/14b-smoke-test-
+# health.sh's own LIVE_CHECK=1 path), not extended to every other service
+# as part of this ticket.
 [Unit]
 Description=Drone MC — Health Monitor
 PartOf=drone-mc.target
@@ -16,6 +35,8 @@ ExecStart=/usr/bin/docker run --rm --name mc-health-monitor \
   --network=host \
   --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
   --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc,readonly \
+  --mount type=bind,src=/proc,dst=/proc,readonly \
+  --mount type=bind,src=/sys,dst=/sys,readonly \
   --env-file /etc/drone-mc/environment \
   ghcr.io/drone-mc/health-monitor:${MC_VERSION}
 ExecStop=/usr/bin/docker stop mc-health-monitor
@@ -25,6 +46,33 @@ MemoryMax=256M
 CPUQuota=20%
 PrivateTmp=yes
 ProtectSystem=strict
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+MemoryDenyWriteExecute=yes
+# The docker CLI only ever talks to dockerd over the AF_UNIX socket
+# (/var/run/docker.sock) — empirically confirmed a container still gets
+# full --network=host access even when this wrapping process itself has
+# no network namespace of its own (AF_UNIX is filesystem-path-based, not
+# network-namespace-scoped). Systemd degrades this gracefully (logs a
+# warning, proceeds unrestricted) if the kernel/privilege level can't
+# support it, rather than failing the unit.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+KeyringMode=private
+UMask=0077
 
 [Install]
 WantedBy=drone-mc.target
