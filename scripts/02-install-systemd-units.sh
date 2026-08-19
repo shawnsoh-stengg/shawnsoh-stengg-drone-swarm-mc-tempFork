@@ -96,6 +96,7 @@ PARAMS_SOURCES=(
     "gcs_comms/params/mavros.yaml:mavros.yaml"
     "mission_exec/params/default.yaml:mission_exec.yaml"
     "health_monitor/params/default.yaml:health_monitor.yaml"
+    "swarm_coord/params/default.yaml:swarm_coord.yaml"
 )
 for entry in "${PARAMS_SOURCES[@]}"; do
     src="${entry%%:*}"
