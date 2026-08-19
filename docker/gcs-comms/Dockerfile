@@ -44,14 +44,22 @@ COPY --from=builder /opt/drone-mc/install /opt/drone-mc/install
 # service needs it, and keeping it out of the base image matches this
 # project's existing minimal-toolchain-per-service pattern (mavlink-router
 # and zenoh-bridge are similarly standalone, not built FROM ros2-core at
-# all). install_geographiclib_datasets.sh (upstream MAVROS's usual
-# companion step, for plugins needing geoid/terrain height data) is
-# deliberately skipped — it requires network access to a third-party
-# mirror at build time for a capability nothing here uses yet; run it
-# manually if/when a plugin that needs it gets wired up.
+# all).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-mavros \
     && rm -rf /var/lib/apt/lists/*
+
+# install_geographiclib_datasets.sh is NOT optional, despite this file's
+# former comment claiming it only matters for plugins nothing here uses
+# yet — MAVROS's UAS node calls into GeographicLib unconditionally during
+# its own init and throws an uncaught std::invalid_argument
+# ("File not readable .../egm96-5.pgm") if the geoid dataset is missing,
+# aborting mavros_node before it ever reaches a ready state. Confirmed on
+# a real ros-humble-mavros install, not assumed. Needs real internet
+# access for its download, same INFRA-006 reasoning as the apt-get above
+# — scripts/11-build-gcs-comms-image.sh's `docker build --network=host`
+# already covers this RUN step too.
+RUN /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
 
 COPY ws/src/gcs_comms/params/default.yaml /etc/drone-mc/params/gcs_comms.yaml
 COPY ws/src/gcs_comms/params/mavros.yaml /etc/drone-mc/params/mavros.yaml
