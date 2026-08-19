@@ -23,7 +23,12 @@ if ! docker image inspect "${ROS2_CORE_IMAGE}" &>/dev/null; then
 fi
 
 echo "==> Building ${IMAGE}:${IMAGE_TAG} (base: ${ROS2_CORE_IMAGE})"
+# --network=host: see 08-build-fcc-bridge-image.sh's own comment on this —
+# BuildKit RUN steps otherwise use a different network path (Docker's
+# bridge + embedded DNS) than the daemon's own image pulls, which can
+# fail to resolve apt mirrors even when the host's DNS works fine.
 docker build \
+    --network=host \
     --tag "${IMAGE}:${IMAGE_TAG}" \
     --tag "${IMAGE}:latest" \
     --file "${REPO_ROOT}/docker/mission-exec/Dockerfile" \
