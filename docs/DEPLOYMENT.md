@@ -230,6 +230,23 @@ empty directory. `scripts/02-install-systemd-units.sh` provisions:
 | `/etc/drone-mc/zenoh-bridge-dds.json5` | `config/zenoh-bridge-dds.json5` | Same — installed only if absent |
 | `/etc/drone-mc/mavlink-router-channel-a.conf` | `config/mavlink-router-channel-a.conf` | Always overwritten (no per-drone values live in it) |
 | `/etc/drone-mc/mavlink-router-channel-b.conf` | `config/mavlink-router-channel-b.conf` | Always overwritten |
+| `/etc/drone-mc/params/fcc_bridge.yaml` | `ws/src/fcc_bridge/params/default.yaml` | Only installed if absent |
+| `/etc/drone-mc/params/gcs_comms.yaml` | `ws/src/gcs_comms/params/default.yaml` | Only installed if absent |
+| `/etc/drone-mc/params/mavros.yaml` | `ws/src/gcs_comms/params/mavros.yaml` | Only installed if absent |
+| `/etc/drone-mc/params/mission_exec.yaml` | `ws/src/mission_exec/params/default.yaml` | Only installed if absent |
+| `/etc/drone-mc/params/health_monitor.yaml` | `ws/src/health_monitor/params/default.yaml` | Only installed if absent |
+
+Every `docker/*/entrypoint.sh` passes `--params-file /etc/drone-mc/params/<name>.yaml`
+by that exact filename — each package only ever shipped its own
+`params/default.yaml` under `ws/src/`, and nothing copied it into
+`/etc/drone-mc/params` under the name the entrypoint looks for, until this
+provisioning block was added (2026-08-19). Before that fix, every affected
+node (`health_monitor_node`, `mission_manager_node`/`search_planner_node`,
+`fcc_bridge_node`, `gcs_mavlink_node`, `mavros_node`) aborted at startup
+with `rclcpp::exceptions::RCLInvalidROSArgsError` / "Error opening YAML
+file" — `rcl` treats a missing `--params-file` target as fatal, it does
+not fall back to each parameter's own `declare_parameter(name, default)`
+value.
 
 **Before first `systemctl start drone-mc.target` on a given vehicle**, edit
 the per-drone values the script deliberately leaves alone:

@@ -82,6 +82,33 @@ echo "==> Provisioning mavlink-router channel configs (GCS-001/MAVR-001)"
 install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-a.conf" /etc/drone-mc/mavlink-router-channel-a.conf
 install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-b.conf" /etc/drone-mc/mavlink-router-channel-b.conf
 
+# Every entrypoint.sh passes --params-file /etc/drone-mc/params/<name>.yaml,
+# but each package only ships its own params/default.yaml under ws/src/ —
+# nothing ever copied those into /etc/drone-mc/params under the filename
+# each entrypoint actually looks for, so `--params-file` pointed at a file
+# that never existed on the host (rcl aborts the whole node on a missing
+# params file, it doesn't fall back to declare_parameter()'s defaults).
+echo "==> Provisioning /etc/drone-mc/params/*.yaml"
+mkdir -p /etc/drone-mc/params
+PARAMS_SOURCES=(
+    "fcc_bridge/params/default.yaml:fcc_bridge.yaml"
+    "gcs_comms/params/default.yaml:gcs_comms.yaml"
+    "gcs_comms/params/mavros.yaml:mavros.yaml"
+    "mission_exec/params/default.yaml:mission_exec.yaml"
+    "health_monitor/params/default.yaml:health_monitor.yaml"
+)
+for entry in "${PARAMS_SOURCES[@]}"; do
+    src="${entry%%:*}"
+    dst_name="${entry##*:}"
+    dst="/etc/drone-mc/params/${dst_name}"
+    if [[ -f "${dst}" ]]; then
+        echo "    ${dst} already exists — leaving per-drone tuning untouched."
+    else
+        install -m 644 "${REPO_ROOT}/ws/src/${src}" "${dst}"
+        echo "    Installed ${dst} (from ws/src/${src})."
+    fi
+done
+
 echo "==> Reloading systemd and enabling units"
 systemctl daemon-reload
 systemctl enable drone-mc.target
