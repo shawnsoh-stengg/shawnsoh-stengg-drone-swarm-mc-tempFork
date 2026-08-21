@@ -1,0 +1,38 @@
+rosbag2_bagfile_information:
+  version: 5
+  storage_identifier: sqlite3
+  duration:
+    nanoseconds: 5990000000
+  starting_time:
+    nanoseconds_since_epoch: 0
+  message_count: 780
+  topics_with_message_count:
+    - topic_metadata:
+        name: /mc/fcc/imu
+        type: sensor_msgs/msg/Imu
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 600
+    - topic_metadata:
+        name: /mc/fcc/odometry
+        type: nav_msgs/msg/Odometry
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 120
+    - topic_metadata:
+        name: /mc/fcc/vehicle_state
+        type: mc_msgs/msg/VehicleState
+        serialization_format: cdr
+        offered_qos_profiles: ""
+      message_count: 60
+  compression_format: ""
+  compression_mode: ""
+  relative_file_paths:
+    - fcc_nominal_0.db3
+  files:
+    - path: fcc_nominal_0.db3
+      starting_time:
+        nanoseconds_since_epoch: 0
+      duration:
+        nanoseconds: 5990000000
+      message_count: 780
