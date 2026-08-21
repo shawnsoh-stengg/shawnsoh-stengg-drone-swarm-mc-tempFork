@@ -25,20 +25,26 @@ TP-SM  Smoke Tests         Bash scripts               Deployment validation afte
 - ✅ **TP-SM** — real, via the `scripts/<n>b-smoke-test-*.sh` /
   `<n>c-smoke-test-*.sh` companions described in `CLAUDE.md`'s Build System
   section and `docs/GETTING-STARTED.md`.
-- 🧭 **TP-NI** — designed only. `TP-MC-001.md` specifies `launch_testing` +
-  `rclpy`, but no `launch_testing` files exist in the workspace yet
-  (`CLAUDE.md`'s `ros2 launch fcc_bridge fcc_bridge_test.launch.py` example
-  is aspirational). What exists *today* in its place is a **gtest-based
-  approximation**: node-level gtest suites that stand up the real node
-  under test plus a plain `rclcpp::Node` harness that plays the peer nodes'
-  part over real topics — see [Node-level tests](#node-level-tests) below.
-  These give the same coverage TP-NI describes, just not in the
-  `launch_testing`/`pytest` form the test plan names.
-- 🧭 **TP-ST** and **TP-HW** — designed only. No PX4 SITL harness, no
-  `bags/`/`test_data/` fixtures (`TP-MC-001.md` §3.4), and no CI pipeline
-  wiring the `TP-SM → TP-UT → TP-NI → TP-ST` sequence (§2.1) exist in this
-  repo yet. `ros2 launch mission_exec sitl_mission_test.launch.py` in
-  `CLAUDE.md` is the intended entry point once TP-ST lands.
+- ✅ **TP-NI** — real, via `launch_testing`/`pytest` (TEST-001), in the new
+  `ws/src/mc_test_utils` package: the 4 mock nodes `TP-MC-001.md` §2.4
+  specifies (`mock_fcc_node`, `mock_camera_node`, `mock_peer_node`,
+  `mock_gcs_node`) plus one example `launch_testing` test per mock — see
+  [Node-integration tests](#node-integration-tests-tp-ni) below. The
+  gtest-based approximation described there previously (node-level gtest
+  suites with a harness `rclcpp::Node`) still exists for the packages that
+  already had it and is not being migrated retroactively — new TP-NI
+  coverage for a node under test should use `mc_test_utils`'s mocks and the
+  `launch_testing` pattern instead, per the example tests.
+- 🧭 **TP-ST** and **TP-HW** — designed only. No PX4 SITL harness and no CI
+  pipeline wiring the `TP-SM → TP-UT → TP-NI → TP-ST` sequence (§2.1) exist
+  in this repo yet. Two of `TP-MC-001.md` §3.4's seven named fixtures now
+  exist (`mc_test_utils/test_data/bags/fcc_nominal`, `camera_outdoor` —
+  synthetic, built for TP-NI, see below); the other five
+  (`gnss_lost.bag`, `search_polygon_500m.json`, `mission_upload_3drone.yaml`,
+  `detection_ground_truth.json`, `gimbal_outdoor.mp4`) are TP-ST/TP-HW-only
+  and still don't exist. `ros2 launch mission_exec
+  sitl_mission_test.launch.py` in `CLAUDE.md` is the intended entry point
+  once TP-ST lands.
 
 ## Running tests
 
@@ -84,6 +90,65 @@ mode needs the CycloneDDS sysctl floor from `scripts/01-install-os.sh`
 (INFRA-004) already applied on the host, since a too-low `net.core.rmem_max`
 will make DDS discovery fail under a live check.
 
+### Node-integration tests (TP-NI)
+
+```bash
+source /opt/ros/humble/install/setup.bash
+colcon build --merge-install --packages-select mc_msgs mc_test_utils
+source install/setup.bash   # or the merge-install's own setup.bash
+colcon test --packages-select mc_test_utils
+colcon test-result --verbose
+```
+
+`mc_test_utils` (`ws/src/mc_test_utils`) is an `ament_cmake` + Python
+package (`ament_cmake_python`'s `ament_python_install_package()`, plus
+`launch_testing_ament_cmake`'s `add_launch_test()` in its
+`CMakeLists.txt`) — this is what actually wires a `launch_testing`/`pytest`
+file into `colcon test`; a plain `ament_python` package's `test/` directory
+is *not* auto-discovered by `colcon test` the way an `ament_cmake` package's
+`ament_add_gtest`/`add_launch_test` targets are, which is easy to get wrong
+starting from scratch (see git history on this package for the false start).
+
+The 4 mocks, one per `TP-MC-001.md` §2.4 row:
+
+| Mock | Stands in for | Interface |
+|---|---|---|
+| `mock_fcc_node` | `fcc_bridge_node` itself (not just the PX4 hardware beneath it — TP-MC-001 §2.4 replaces the *node*) | `/mc/fcc/vehicle_state`, `/mc/fcc/odometry`, `/mc/fcc/imu` (published from a looped bag); subscribes `/mc/fcc/offboard_setpoint`, echoes to `/mock/fcc/setpoint_echo` |
+| `mock_camera_node` | the not-yet-implemented `camera_node` | `/camera/image_raw`, `/camera/camera_info` (published from a looped bag, >= 15 FPS) |
+| `mock_peer_node` | a swarm UDP peer (ICD-MC-001 §5, IFD-003) | raw UDP on 14900 (heartbeat)/14901 (coordination) — not a ROS topic |
+| `mock_gcs_node` | the GCS side of Channel B (ICD-MC-001 §4, IFD-002) | raw MAVLink 2/UDP loopback — not a ROS topic; `/mock/gcs/last_rx_msgid` is a test-only introspection extra |
+
+`mock_fcc_node`/`mock_camera_node` play back a rosbag2 bag via
+`mc_test_utils/bag_playback.py`'s `BagPlayback` (loads the whole bag into
+memory, replays it looped, preserving original inter-message timing — not
+`ros2 bag play`, which is a one-shot CLI process, not an in-process,
+loopable source a mock node's own timer can drive). The bags themselves
+(`test_data/bags/fcc_nominal`, `test_data/bags/camera_outdoor`) are
+synthetic — no hardware capture exists yet — generated by
+`test_data/generate_bags.py`; re-run that script manually (inside a sourced
+workspace with `mc_msgs` built) if the fixtures need to change, the
+committed bags don't regenerate themselves.
+
+`mock_peer_node`/`mock_gcs_node` speak raw UDP wire protocols instead of
+ROS topics (`mc_test_utils/swarm_protocol.py`, `mc_test_utils/mavlink_lite.py`
+respectively) — hand-packed, not via a generator dependency, following the
+same toolchain decision `gcs_mavlink_node`/`mc_mavlink_defs.xml` already
+made for MAVLink (see `mavlink_lite.py`'s module docstring for how its
+`CRC_EXTRA`/wire-order constants were derived and verified). A TP-NI test
+against either one talks to the mock with a plain `socket`, not `rclpy`.
+
+Each mock has one example `test/test_mock_<name>.py` demonstrating the
+pattern to follow for a real node under test: for a ROS-topic interface
+(`mock_fcc_node`/`mock_camera_node`), launch the mock via
+`generate_test_description()` and drive/observe it with a plain `rclpy`
+client node in the test process; for a raw-UDP interface
+(`mock_peer_node`/`mock_gcs_node`), do the same but talk to the mock with a
+plain `socket` instead. Retry rather than send-once when a test's first
+action is sending something to the mock — right after launch there's no
+guarantee the mock's socket is bound yet (see
+`test_mock_peer_node.py::test_answers_peer_state_request`'s retry loop and
+comment for a case that actually hit this).
+
 ## Where tests live and how they're wired into the build
 
 Every package follows the same `CMakeLists.txt` shape:
@@ -127,6 +192,10 @@ endif()
 | `swarm_coord` | `test_swarm_coordinator_node`, `test_formation_controller_node` (placeholders — stubs) |
 | `vision` | `test_visual_localisation_node`, `test_perception_down_node` (placeholders — stubs) |
 | `video_downlink` | `test_perception_front_node`, `test_video_mux_node` (placeholders — stubs) |
+
+This table is TP-UT (`gtest`) only. `mc_test_utils`'s TP-NI (`launch_testing`)
+tests are a different level and live in `ws/src/mc_test_utils/test/` — see
+[Node-integration tests](#node-integration-tests-tp-ni) above.
 
 ## Writing a unit test
 
