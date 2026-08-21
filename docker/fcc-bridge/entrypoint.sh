@@ -29,8 +29,15 @@ case "${FCC_TRANSPORT}" in
 esac
 agent_pid=$!
 
+# colcon-generated setup.bash scripts read $COLCON_TRACE without a default
+# (`_colcon_prefix_chain_bash_source_script()`'s `[ -n "$COLCON_TRACE" ]`),
+# so sourcing them under `set -u` aborts immediately with "COLCON_TRACE:
+# unbound variable" — nounset is relaxed for just these two lines, same as
+# docker/mission-exec/entrypoint.sh and docker/health-monitor/entrypoint.sh.
+set +u
 source /opt/ros/humble/install/setup.bash
 source /opt/drone-mc/install/setup.bash
+set -u
 ros2 run fcc_bridge fcc_bridge_node --ros-args --params-file /etc/drone-mc/params/fcc_bridge.yaml &
 node_pid=$!
 

@@ -17,7 +17,15 @@
 # (docker/gcs-comms/entrypoint.sh, DRONE_ID env var) — the default below
 # only applies to a standalone `ros2 run mavros mavros_node` invocation
 # without that override.
-mavros:
+#
+# Top-level key must be `mavros_node`, not `mavros` — that's the node's
+# actual ROS name (`ros2 run mavros mavros_node` doesn't rename it, and
+# its own startup log identifies itself as `[mavros_node]`). A `mavros:`
+# key silently never matches, so every value below is ignored rather than
+# erroring — confirmed against a real ros-humble-mavros install: fcu_url
+# under `mavros:` left "FCU URL:" blank in the node's own startup log,
+# while the same value under `mavros_node:` (or via -p) applied correctly.
+mavros_node:
   ros__parameters:
     fcu_url: "udp://:14553@"
     fcu_protocol: "v2.0"

@@ -1,12 +1,25 @@
 # drone-mc-mission-exec.service — mission_manager_node + search_planner_node
-# (mission state machine, SDD §7/§12.4). Depends on swarm-coord (ISR/Voronoi
-# roles), fcc-bridge (vehicle_state) and gcs-comms (GCS override authority,
-# FR-003). Installed by scripts/02-install-systemd-units.sh.
+# (mission state machine, SDD §7/§12.4). Hard-depends on fcc-bridge
+# (vehicle_state) and gcs-comms (GCS override authority, FR-003) via
+# Requires=. swarm-coord (ISR/Voronoi roles) is ordered After= but
+# deliberately NOT in Requires=: mission_manager_node only consumes
+# swarm-coord's topics (/mc/swarm/peer_states, /mc/swarm/isr_role,
+# /mc/swarm/voronoi_cell) as plain subscriptions with no message ever
+# required to boot or run the early mission phases —
+# muster_quorum_count defaults to 1 (solo drone, no peers required,
+# ws/src/mission_exec/params/default.yaml) — only the later
+# ISR_SELECTION->VORONOI_PARTITION transition actually needs isr_role
+# data. Requiring swarm-coord here made mission-exec's own systemd
+# start/restart fail outright whenever swarm-coord's unit was
+# unavailable (e.g. before its image existed, DEP-001), which is a
+# stricter coupling than mission_manager_node's own code actually needs
+# for solo-drone operation.
+# Installed by scripts/02-install-systemd-units.sh.
 [Unit]
 Description=Drone MC — Mission Manager
 PartOf=drone-mc.target
 After=docker.service drone-mc-health-monitor.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service drone-mc-swarm-coord.service
-Requires=docker.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service drone-mc-swarm-coord.service
+Requires=docker.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

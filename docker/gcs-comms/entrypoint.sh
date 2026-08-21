@@ -13,6 +13,12 @@
 # brings both back together (GCS-005 AC3).
 set -euo pipefail
 
+# colcon-generated setup.bash scripts read $COLCON_TRACE without a default
+# (`_colcon_prefix_chain_bash_source_script()`'s `[ -n "$COLCON_TRACE" ]`),
+# so sourcing them under `set -u` aborts immediately with "COLCON_TRACE:
+# unbound variable" — nounset is relaxed for just these lines, same as
+# docker/mission-exec/entrypoint.sh and docker/health-monitor/entrypoint.sh.
+set +u
 source /opt/ros/humble/install/setup.bash
 # ros-humble-mavros (apt package) lands under the dpkg prefix
 # /opt/ros/humble, a different subtree than this base image's own
@@ -24,6 +30,7 @@ source /opt/ros/humble/install/setup.bash
 # ros2-core/Dockerfile's own .bashrc lines use.
 [[ -f /opt/ros/humble/setup.bash ]] && source /opt/ros/humble/setup.bash
 source /opt/drone-mc/install/setup.bash
+set -u
 
 DRONE_ID="${DRONE_ID:-1}"
 
