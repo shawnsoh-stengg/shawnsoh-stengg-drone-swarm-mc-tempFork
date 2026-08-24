@@ -96,6 +96,61 @@ uses for Channels A/B — rewrite `Address = 192.168.10.10` to `127.0.0.1`,
 ports unchanged), then point this tool at `--mc-host 127.0.0.1`. See that
 script for the exact rewrite pattern.
 
+### Testing against a real two-host deployment
+
+`config/mavlink-router-channel-c.conf` is already written for the repo's
+standard addresses (GCS laptop `192.168.10.10`, Jetson MC `192.168.10.11` —
+see `CLAUDE.md`'s Network/IP Reference) — **no rewrite is needed** for this
+case, unlike the loopback setup above.
+
+On the Jetson MC (`192.168.10.11`):
+
+```bash
+sudo mkdir -p /var/drone-mc/mission_plans   # plans_dir default, ICD §12.4 — must exist/be writable
+
+# Terminal 1 — the node itself (listens on loopback :14580)
+source /opt/ros/humble/install/setup.bash
+ros2 run gcs_comms mission_orchestrator_node
+
+# Terminal 2 — mavlink-router, unmodified real config
+mavlink-routerd -c config/mavlink-router-channel-c.conf
+```
+
+Confirm the node's `DRONE_ID` env var matches whatever `--drone-id` you pass
+below (both default to `1` if you set neither).
+
+On the GCS laptop (`192.168.10.10`):
+
+```bash
+cd tools/mission-orchestrator-sim
+pip install -r requirements.txt
+
+./mission-orchestrator-sim --mc-host 192.168.10.11 create recon_alpha plans/recon_alpha.json
+./mission-orchestrator-sim --mc-host 192.168.10.11 list
+./mission-orchestrator-sim --mc-host 192.168.10.11 activate recon_alpha
+./mission-orchestrator-sim --mc-host 192.168.10.11 delete recon_alpha   # expect Nak(FileProtected)
+```
+
+`--mc-host` is the only flag that needs to change from the loopback case —
+`--recv-port`/`--send-port` already default to 14571/14572 to match the
+conf file.
+
+Things worth checking before the first run:
+
+- UDP 14571/14572 must be open between the two hosts — same subnet per the
+  IP reference above, so usually fine, but worth a quick `nc -u` sanity
+  check if the first command times out.
+- `docker/mavlink-router`'s current image `entrypoint.sh` only launches
+  Channels A/B — for Channel C, run `mavlink-routerd` directly against
+  `mavlink-router-channel-c.conf` as shown above rather than through that
+  container; wiring a Channel C container entrypoint is separate, still-open
+  deployment work, not something this tool depends on.
+- Cold start: `transport.py`'s `ChannelCClient` docstring covers why
+  requests address `target_system=0` (broadcast) rather than the drone's
+  real sysid — mavlink-router hasn't "learned" `mission_orchestrator_node`'s
+  identity until it sends its first reply. This is handled automatically;
+  if the very first `create` still times out, retry it once.
+
 ### Plan JSON format
 
 One JSON file per plan — see the interface spec §6.1 for the full field
