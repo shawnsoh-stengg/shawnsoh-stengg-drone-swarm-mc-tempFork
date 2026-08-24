@@ -482,6 +482,52 @@ TEST_F(MissionOrchestratorNodeTest, ListDirectoryReturnsStoredPlan)
   EXPECT_NE(entries.find("Frecon_alpha.json\t"), std::string::npos);
 }
 
+// TEST-004 regression: ftp_list_directory()'s skip-phase used to advance
+// readdir() by `entry_offset` raw entries instead of `entry_offset`
+// DT_REG-filtered ones, so it undercounted "."/".." against the pagination
+// continuation call's own count of already-returned real entries. A real
+// MAVFTP client (pymavlink's mavftp.py included) always re-issues
+// ListDirectory with offset = however many entries it has consumed so
+// far, expecting Nak(EOF) once there's nothing left — found by exercising
+// mission-orchestrator-sim (tools/mission-orchestrator-sim) against a real
+// build of this node.
+TEST_F(MissionOrchestratorNodeTest, ListDirectoryPaginationDoesNotRepeatEntries)
+{
+  std::filesystem::create_directories(plans_dir_);
+  {
+    std::ofstream f(plans_dir_ + "/recon_alpha.json");
+    f << R"({"name":"recon_alpha"})";
+  }
+  {
+    std::ofstream f(plans_dir_ + "/muster_bravo.json");
+    f << R"({"name":"muster_bravo"})";
+  }
+
+  peer_->send_list_directory(0);
+  MockOrchestratorPeer::FtpReply first_reply;
+  ASSERT_TRUE(spin_until_reply(first_reply));
+  ASSERT_EQ(first_reply.opcode, kOpAck);
+  const std::string first_entries(
+    reinterpret_cast<const char *>(first_reply.data.data()), first_reply.size);
+  uint32_t returned_count = 0;
+  for (size_t pos = 0; pos < first_entries.size();
+    pos += std::strlen(first_entries.c_str() + pos) + 1)
+  {
+    ++returned_count;
+  }
+  ASSERT_EQ(returned_count, 2U) << "both plan files should fit in one Ack for this test's sizes";
+
+  // The continuation call a real client makes next: offset = every entry
+  // already consumed. Must be EOF, not a re-delivery of an entry already
+  // returned above.
+  peer_->send_list_directory(returned_count);
+  MockOrchestratorPeer::FtpReply second_reply;
+  ASSERT_TRUE(spin_until_reply(second_reply));
+  EXPECT_EQ(second_reply.opcode, kOpNak);
+  ASSERT_EQ(second_reply.size, 1);
+  EXPECT_EQ(second_reply.data[0], kErrEOF);
+}
+
 TEST_F(MissionOrchestratorNodeTest, ReadFileReturnsWrittenContent)
 {
   const std::string content = R"({"name":"recon_alpha"})";

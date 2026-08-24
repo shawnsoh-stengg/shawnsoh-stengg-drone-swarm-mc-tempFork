@@ -470,8 +470,23 @@ MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_list_directory(
   // (pymavlink's mavftp.py, same as PX4's own real clients) re-issues
   // ListDirectory with `offset` set to however many entries it has already
   // consumed, so this "offset" skips that many directory entries first.
+  //
+  // Must apply the exact same DT_REG filter as the listing loop below —
+  // TEST-004 found (via a real ListDirectory round-trip against a
+  // single-plan directory, not just by inspection) that skipping raw
+  // readdir() entries here undercounts "." and ".." against the client's
+  // own already-consumed-real-entries count, so page 2 of a listing
+  // re-returns entries page 1 already returned instead of advancing.
   uint32_t skip = entry_offset;
-  while (skip-- > 0 && ::readdir(dp) != nullptr) {
+  while (skip > 0) {
+    struct dirent * entry = ::readdir(dp);
+    if (entry == nullptr) {
+      break;
+    }
+    if (entry->d_type != DT_REG) {
+      continue;
+    }
+    --skip;
   }
 
   uint8_t offset = 0;
