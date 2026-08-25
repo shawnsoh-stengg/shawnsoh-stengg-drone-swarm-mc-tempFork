@@ -95,7 +95,13 @@ last_heartbeat_epoch_s() {
     # §4.4), not wall-clock-of-receipt — so a publisher that's alive but
     # stuck (not re-stamping) is still caught even if the DDS transport
     # itself looks healthy.
-    timeout 2 ros2 topic echo --once --field stamp.sec /mc/manager/heartbeat 2>/dev/null
+    # `--field` still doesn't suppress the trailing "---" YAML document
+    # separator `ros2 topic echo` emits after every message, so without
+    # `head -n1` this returns two lines ("1787641779\n---") and the
+    # arithmetic below chokes on the second — verified against a real
+    # container run: entrypoint.sh crashed with "syntax error: operand
+    # expected (error token is \"-\")" ~1-2s into every watchdog loop.
+    timeout 2 ros2 topic echo --once --field stamp.sec /mc/manager/heartbeat 2>/dev/null | head -n1
 }
 
 echo "==> watchdog supervisor active (heartbeat staleness budget: ${EXECUTOR_WD_TIMEOUT_S}s)"

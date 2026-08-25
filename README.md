@@ -84,4 +84,5 @@ config/                environment, per-node params, netplan, udev, systemd unit
 ws/src/                ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
 scripts/               numbered setup/build/install scripts + smoke tests
 docs/diagrams/         PlantUML architecture diagrams
+docs/design/           ARCHITECTURE.md, API-REFERENCE.md, TESTING.md, DEPLOYMENT.md, CONTRIBUTING.md
 ```
