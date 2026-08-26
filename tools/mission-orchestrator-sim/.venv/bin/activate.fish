@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV /home/jh/projects/swarm-drones/tools/mission-orchestrator-sim/.venv
+set -gx VIRTUAL_ENV /home/jh/projects/drone-swarm-mc/tools/mission-orchestrator-sim/.venv
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH
