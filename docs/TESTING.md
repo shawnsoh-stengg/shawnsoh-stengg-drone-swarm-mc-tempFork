@@ -90,6 +90,15 @@ mode needs the CycloneDDS sysctl floor from `scripts/01-install-os.sh`
 (INFRA-004) already applied on the host, since a too-low `net.core.rmem_max`
 will make DDS discovery fail under a live check.
 
+One documented exception to the "every numbered pair has a plain `NN-*.sh`"
+rule: `06b-smoke-test-fcc-links.sh`/`06c-smoke-test-xrce-agent.sh` have no
+`06-*.sh` counterpart. Both verify config/behavior that other scripts
+already installed or built — HIF-001 (ttyTHS1) wiring from
+`01-install-os.sh`, and the MicroXRCEAgent-bearing image from
+`08-build-fcc-bridge-image.sh` — rather than installing or building
+anything of their own, so there was never a `06` step for them to pair
+with.
+
 ### Node-integration tests (TP-NI)
 
 ```bash
