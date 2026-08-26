@@ -1,0 +1,45 @@
+# drone-mc-mission-orchestrator.service — mission_orchestrator_node
+# (MAVLink Channel C mission-plan library, GCS-004/SDD §11.4). Deliberately
+# its own unit/container, not folded into drone-mc-gcs-comms.service —
+# GCS-005 (2026-08-06) scoped that container to gcs_mavlink_node + MAVROS
+# only (that unit's own header comment says so too). This unit is GCS-006,
+# built to close the resulting "unattempted, unresolved deployment scope"
+# gap SDD-MC-001.md §12.4 documented: without it, mission_orchestrator_node
+# never runs anywhere and Channel C has no MC-side endpoint to route to.
+# Installed by scripts/02-install-systemd-units.sh.
+#
+# Requires= mavlink-router (Channel C's mavlink-routerd process lives in
+# that container, per docker/mavlink-router/entrypoint.sh) and fcc-bridge
+# (matching drone-mc-gcs-comms.service's own Requires= shape) — this unit
+# has no direct dependency on fcc-bridge's own traffic, but activate's
+# eventual /mc/gcs/mission_upload publish only matters once fcc-bridge is
+# up to forward it, same reasoning gcs-comms's unit already documents for
+# its own Requires=.
+[Unit]
+Description=Drone MC — Mission Orchestrator (Channel C)
+PartOf=drone-mc.target
+After=docker.service drone-mc-health-monitor.service drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
+Requires=docker.service drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-mission-orchestrator \
+  --network=host \
+  --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc,readonly \
+  --mount type=bind,src=/var/drone-mc/mission_plans,dst=/var/drone-mc/mission_plans \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/mission-orchestrator:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-mission-orchestrator
+Restart=on-failure
+RestartSec=5s
+MemoryMax=256M
+CPUQuota=20%
+PrivateTmp=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=drone-mc.target
