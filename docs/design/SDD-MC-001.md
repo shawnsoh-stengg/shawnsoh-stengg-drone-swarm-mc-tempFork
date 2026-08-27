@@ -1178,7 +1178,7 @@ drone-mc.target
   └── video-downlink.service     (no dependencies — independent of video-ingest, FR-086)
 ```
 
-`mission_orchestrator_node` (§11.4, GCS-004) has no systemd unit or container of its own yet — same "design only, not yet installed" gap `02-install-systemd-units.sh`'s own header comment already flags for `video-ingest`/`video-downlink`. Nor does its `mavlink-router-channel-c.conf` (§12.5) have a corresponding running `mavlink-routerd` process; today's `mavlink-router.service` template covers Channel A/B's two conf files (each its own process per their own header comments), not yet a third for Channel C. **Resolved by GCS-005 (2026-08-06):** it does *not* fold into `gcs-comms.service`'s container — that container is scoped to `gcs_mavlink_node` + MAVROS only (§11.1, §12.1). A unit/container of its own remains unattempted, unresolved deployment scope.
+`mission_orchestrator_node` (§11.4, GCS-004) has its own systemd unit and container as of `GCS-006` (2026-08-26, `PROJECT-PLAN-5-MONTH.md` Phase 3) — `config/systemd/drone-mc-mission-orchestrator.service` runs `ghcr.io/drone-mc/mission-orchestrator`, separate from `gcs-comms.service` per GCS-005's (2026-08-06) explicit exclusion (§11.1, §12.1). `mavlink-router-channel-c.conf` (§12.5) now has a corresponding running `mavlink-routerd` process too — `docker/mavlink-router/entrypoint.sh` launches it as a third independent process alongside Channel A/B's own two, same isolation pattern. The plan library at `/var/drone-mc/mission_plans/` is bind-mounted read-write from the host for persistence across container restarts. See `GCS-006`'s own ticket entry for the full deliverable list.
 
 ### 12.5 Configuration Files
 

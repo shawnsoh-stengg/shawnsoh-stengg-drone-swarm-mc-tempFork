@@ -27,6 +27,7 @@ Jetson Orin NX 16GB (JetPack 6.2.2, Ubuntu 22.04 aarch64) + Pixhawk 6X
 
 ```bash
 # 0. One-time Jetson host setup (runs directly on the Jetson, not in Docker)
+# 0. One-time Jetson host setup (runs directly on the Jetson, not in Docker)
 # Prerequisite: Jetson already flashed with JetPack 6.2.2 via NVIDIA SDK Manager
 sudo ./scripts/01-install-os.sh
 sudo ./scripts/01b-smoke-test-os.sh
@@ -61,7 +62,20 @@ sudo ./scripts/11b-smoke-test-gcs-comms.sh
 sudo ./scripts/12-build-mission-exec-image.sh
 sudo ./scripts/12b-smoke-test-mission-exec.sh
 
-# 8. Install the drone-mc.target systemd orchestration
+# 8. Build the swarm-coord service image (ghcr.io/drone-mc/swarm-coord)
+sudo ./scripts/13-build-swarm-coord-image.sh
+sudo ./scripts/13b-smoke-test-swarm-coord.sh
+
+# 9. Build the health-monitor service image (ghcr.io/drone-mc/health-monitor)
+sudo ./scripts/14-build-health-monitor-image.sh
+sudo ./scripts/14b-smoke-test-health.sh
+
+# 10. Build the mission-orchestrator service image (ghcr.io/drone-mc/mission-orchestrator)
+# Same gcs_comms package as step 6, separate container (mission_orchestrator_node, GCS-006)
+sudo ./scripts/15-build-mission-orchestrator-image.sh
+sudo ./scripts/15b-smoke-test-mission-orchestrator.sh
+
+# 11. Install the drone-mc.target systemd orchestration
 sudo ./scripts/02-install-systemd-units.sh
 sudo ./scripts/02b-smoke-test-units.sh
 sudo systemctl start drone-mc.target
@@ -84,4 +98,5 @@ config/                environment, per-node params, netplan, udev, systemd unit
 ws/src/                ROS 2 colcon workspace (8 first-party packages + vendored px4_msgs)
 scripts/               numbered setup/build/install scripts + smoke tests
 docs/diagrams/         PlantUML architecture diagrams
+docs/design/           ARCHITECTURE.md, API-REFERENCE.md, TESTING.md, DEPLOYMENT.md, CONTRIBUTING.md
 ```
