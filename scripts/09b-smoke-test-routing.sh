@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # 09b-smoke-test-routing.sh — Verify mavlink-router channel isolation
-# (GCS-001/MAVR-001): GCS<->FCC (Channel A) and GCS<->MC (Channel B) never
-# cross-forward. Ref: SDD §13.2 smoke test pattern.
+# (GCS-001/MAVR-001): GCS<->FCC (Channel A), GCS<->MC (Channel B), and
+# Orchestrator<->MC (Channel C, GCS-006) never cross-forward. Ref: SDD
+# §13.2 smoke test pattern. Channel C's own deployment (its container/unit
+# wiring, plan-persistence, end-to-end MAVFTP check) is
+# 15b-smoke-test-mission-orchestrator.sh's job — this file only asserts
+# the isolation property, matching its existing scope for A/B.
 #
 # Static checks (always run): each channel's .conf declares only its own
-# endpoints/ports, with no address or port belonging to the other channel ·
-# entrypoint.sh runs the two channels as independent mavlink-routerd
-# processes, not one shared config · the systemd unit bind-mounts
+# endpoints/ports, with no address or port belonging to another channel ·
+# entrypoint.sh runs each channel as its own independent mavlink-routerd
+# process, not one shared config · the systemd unit bind-mounts
 # /etc/drone-mc read-only · scripts/02-install-systemd-units.sh provisions
-# both conf files onto the host. Also verifies Channel A's one deliberate
-# exception (GCS-005's MAVROS_CHANNEL_A endpoint, channel-a.conf's own
-# header comment) is exactly what's documented — present, loopback-only,
+# all three conf files onto the host. Also verifies Channel A's one
+# deliberate exception (GCS-005's MAVROS_CHANNEL_A endpoint, channel-a.conf's
+# own header comment) is exactly what's documented — present, loopback-only,
 # and not colliding with any Channel B/C port — rather than an accidental
 # widening of what was previously a strict two-party channel.
 #
@@ -25,6 +29,7 @@ PASS=0; FAIL=0
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF_A="${REPO_ROOT}/config/mavlink-router-channel-a.conf"
 CONF_B="${REPO_ROOT}/config/mavlink-router-channel-b.conf"
+CONF_C="${REPO_ROOT}/config/mavlink-router-channel-c.conf"
 ENTRYPOINT="${REPO_ROOT}/docker/mavlink-router/entrypoint.sh"
 UNIT="${REPO_ROOT}/config/systemd/drone-mc-mavlink-router.service"
 INSTALL_SCRIPT="${REPO_ROOT}/scripts/02-install-systemd-units.sh"
@@ -77,16 +82,38 @@ check "channel-b: port 14552 declared" grep -qE 'Port = 14552' "${CONF_B}"
 check "channel-b: port 14560 declared" grep -qE 'Port = 14560' "${CONF_B}"
 check "channel-b: no Channel A port 14550" bash -c "! grep -qE 'Port = 14550' '${CONF_B}'"
 check "channel-b: no FCC address 192.168.10.31" bash -c "! grep -qE '192\.168\.10\.31' '${CONF_B}'"
+check "channel-b: no Channel C ports (14571/14572/14580)" \
+    bash -c "! grep -qE 'Port = 1457[12]$|Port = 14580' '${CONF_B}'"
 
-# Isolation is by construction (two processes, no shared config) — verify
-# the entrypoint actually launches two independent mavlink-routerd
-# processes rather than one process reading both conf files.
+# Channel C (GCS-006): Orchestrator<->MC only, ports 14571/14572/14580.
+# mission_orchestrator_node's own deployment (container/unit/persistence/
+# end-to-end MAVFTP) is verified by
+# 15b-smoke-test-mission-orchestrator.sh — this is only the isolation
+# property, matching this file's existing scope for A/B.
+check "channel-c.conf present" test -f "${CONF_C}"
+check "channel-c: Orchestrator endpoint at 192.168.10.10:14571" \
+    grep -qE 'Address = 192\.168\.10\.10' "${CONF_C}"
+check "channel-c: mission_orchestrator_node loopback at 127.0.0.1:14580" \
+    grep -qE 'Address = 127\.0\.0\.1' "${CONF_C}"
+check "channel-c: port 14571 declared" grep -qE 'Port = 14571' "${CONF_C}"
+check "channel-c: port 14572 declared" grep -qE 'Port = 14572' "${CONF_C}"
+check "channel-c: port 14580 declared" grep -qE 'Port = 14580' "${CONF_C}"
+check "channel-c: no Channel A port 14550" bash -c "! grep -qE 'Port = 14550' '${CONF_C}'"
+check "channel-c: no Channel B ports (14551/14552/14560)" \
+    bash -c "! grep -qE 'Port = 1455[12]$|Port = 14560' '${CONF_C}'"
+check "channel-c: no FCC address 192.168.10.31" bash -c "! grep -qE '192\.168\.10\.31' '${CONF_C}'"
+
+# Isolation is by construction (independent processes, no shared config) —
+# verify the entrypoint actually launches three independent mavlink-routerd
+# processes rather than one process reading multiple conf files.
 check "entrypoint launches channel-a as its own process" \
     grep -qE 'mavlink-routerd -c.*mavlink-router-channel-a\.conf' "${ENTRYPOINT}"
 check "entrypoint launches channel-b as its own process" \
     grep -qE 'mavlink-routerd -c.*mavlink-router-channel-b\.conf' "${ENTRYPOINT}"
-check "entrypoint does not pass both conf files to one process" \
-    bash -c "! grep -qE 'mavlink-router-channel-a\.conf.*mavlink-router-channel-b\.conf' '${ENTRYPOINT}'"
+check "entrypoint launches channel-c as its own process" \
+    grep -qE 'mavlink-routerd -c.*mavlink-router-channel-c\.conf' "${ENTRYPOINT}"
+check "entrypoint does not pass multiple conf files to one process" \
+    bash -c "! grep -qE 'mavlink-router-channel-a\.conf.*mavlink-router-channel-b\.conf|mavlink-router-channel-a\.conf.*mavlink-router-channel-c\.conf|mavlink-router-channel-b\.conf.*mavlink-router-channel-c\.conf' '${ENTRYPOINT}'"
 
 check "drone-mc-mavlink-router.service bind-mounts /etc/drone-mc read-only" \
     grep -qE -- '--mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc,readonly' "${UNIT}"
@@ -94,6 +121,8 @@ check "install script provisions channel-a.conf" \
     grep -q 'mavlink-router-channel-a.conf' "${INSTALL_SCRIPT}"
 check "install script provisions channel-b.conf" \
     grep -q 'mavlink-router-channel-b.conf' "${INSTALL_SCRIPT}"
+check "install script provisions channel-c.conf" \
+    grep -q 'mavlink-router-channel-c.conf' "${INSTALL_SCRIPT}"
 
 if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     echo "==> LIVE_CHECK=1: verifying zero cross-channel leakage via tcpdump"

@@ -36,6 +36,7 @@ try to run something:
 | `drone-mc-mavlink-router` | (external daemon) | ✅ |
 | `drone-mc-zenoh-bridge` | (external daemon) | ✅ |
 | `drone-mc-gcs-comms` | `gcs_comms` (`gcs_mavlink_node` + MAVROS) | ✅ |
+| `drone-mc-mission-orchestrator` | `gcs_comms` (`mission_orchestrator_node`, Channel C) | ✅ (GCS-006) |
 | `drone-mc-mission-exec` | `mission_exec` (`mission_manager_node` + `search_planner_node`) | ✅ |
 | `drone-mc-health-monitor` | `health_monitor` | ✅ (HEALTH-004) |
 | `drone-mc-swarm-coord` | `swarm_coord` | 🧭 (`ghcr.io/drone-mc/swarm-coord`, no `docker/swarm-coord/` yet) |
@@ -44,9 +45,10 @@ try to run something:
 | — | `video_downlink` (`perception_front_node`, `video_mux_node`) | ⛔ — no `drone-mc-video-ingest`/`drone-mc-video-downlink` unit exists; `CLAUDE.md`'s repo-layout note flags this as SDD §12.4 design only |
 
 Also note: `mission_orchestrator_node` (Channel C, package `gcs_comms`) is
-deliberately **not** its own container — it's out of scope for
-`drone-mc-gcs-comms.service` per that unit's own header comment, and has no
-separate unit either. See the Channel C gap below.
+deliberately **not** part of `drone-mc-gcs-comms.service` — it's out of
+scope for that container per its own header comment. As of `GCS-006`
+(2026-08-26) it has its own unit/container instead, `drone-mc-mission-
+orchestrator`, listed in the table above.
 
 ## Topology and startup order
 
@@ -69,6 +71,8 @@ drone-mc-health-monitor          (no peer deps — up before everything it watch
                 |       +-- drone-mc-swarm-coord  <-- requires gcs-comms
                 |       |       |
                 |       |       +-- drone-mc-mission-exec  <-- requires fcc-bridge + gcs-comms + swarm-coord
+                |
+                +-- drone-mc-mission-orchestrator  <-- requires fcc-bridge + mavlink-router (GCS-006)
                 |
                 +-- drone-mc-vision  <-- requires camera + fcc-bridge
 ```
@@ -262,16 +266,14 @@ the per-drone values the script deliberately leaves alone:
 
 ## Known deployment gaps
 
-- **Channel C (mission plan library) has no routed transport in
-  production.** `config/mavlink-router-channel-c.conf` exists and is fully
-  written (mirrors the isolation pattern of `-a`/`-b`), but neither
-  `docker/mavlink-router/entrypoint.sh` (which only launches processes for
-  `-channel-a.conf`/`-channel-b.conf`) nor
-  `scripts/02-install-systemd-units.sh` (which only provisions `-a`/`-b`
-  into `/etc/drone-mc`) reference it. Until both are updated,
-  `mission_orchestrator_node` has no MAVLink path to a real GCS-side
-  Orchestrator in a deployed system, even though the node itself is
-  implemented (see `docs/API-REFERENCE.md`).
+- ~~Channel C (mission plan library) has no routed transport in
+  production.~~ **Closed by `GCS-006` (2026-08-26).**
+  `docker/mavlink-router/entrypoint.sh` now launches a third
+  `mavlink-routerd` process against `mavlink-router-channel-c.conf`
+  alongside `-a`/`-b`, `scripts/02-install-systemd-units.sh` provisions
+  that conf file and `/var/drone-mc/mission_plans` onto the host, and
+  `drone-mc-mission-orchestrator.service` runs `mission_orchestrator_node`
+  in its own container. See `PROJECT-PLAN-5-MONTH.md`'s `GCS-006` entry.
 - **Three service units reference images that don't build yet**
   (`swarm-coord`, `vision`, `camera` — see the status table above;
   `health-monitor` closed this gap in HEALTH-004). `02b-smoke-test-units.sh`

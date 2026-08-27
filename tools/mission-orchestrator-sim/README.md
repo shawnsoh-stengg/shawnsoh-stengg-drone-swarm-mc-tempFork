@@ -103,21 +103,27 @@ standard addresses (GCS laptop `192.168.10.10`, Jetson MC `192.168.10.11` —
 see `CLAUDE.md`'s Network/IP Reference) — **no rewrite is needed** for this
 case, unlike the loopback setup above.
 
-On the Jetson MC (`192.168.10.11`):
+As of `GCS-006`, both `mission_orchestrator_node` and Channel C's
+`mavlink-routerd` process are started by `drone-mc.target` like every other
+MC service — no manual `ros2 run`/`mavlink-routerd` step on the Jetson. On
+the Jetson MC (`192.168.10.11`), once `scripts/02-install-systemd-units.sh`
+has been run (it provisions `/etc/drone-mc/mavlink-router-channel-c.conf`
+and `/var/drone-mc/mission_plans` for you) and `drone-mc-mission-
+orchestrator`/`drone-mc-mavlink-router` images are built
+(`scripts/15-build-mission-orchestrator-image.sh`,
+`scripts/09-build-mavlink-router-image.sh`):
 
 ```bash
-sudo mkdir -p /var/drone-mc/mission_plans   # plans_dir default, ICD §12.4 — must exist/be writable
+sudo systemctl start drone-mc.target
+# or, to bring up just these two services if the rest of the target isn't ready yet:
+sudo systemctl start drone-mc-mavlink-router.service drone-mc-mission-orchestrator.service
 
-# Terminal 1 — the node itself (listens on loopback :14580)
-source /opt/ros/humble/install/setup.bash
-ros2 run gcs_comms mission_orchestrator_node
-
-# Terminal 2 — mavlink-router, unmodified real config
-mavlink-routerd -c config/mavlink-router-channel-c.conf
+systemctl status drone-mc-mission-orchestrator.service   # confirm it's running
 ```
 
-Confirm the node's `DRONE_ID` env var matches whatever `--drone-id` you pass
-below (both default to `1` if you set neither).
+Confirm the node's `DRONE_ID` env var (`/etc/drone-mc/environment` on the
+Jetson) matches whatever `--drone-id` you pass below (both default to `1`
+if you set neither).
 
 On the GCS laptop (`192.168.10.10`):
 
@@ -140,11 +146,11 @@ Things worth checking before the first run:
 - UDP 14571/14572 must be open between the two hosts — same subnet per the
   IP reference above, so usually fine, but worth a quick `nc -u` sanity
   check if the first command times out.
-- `docker/mavlink-router`'s current image `entrypoint.sh` only launches
-  Channels A/B — for Channel C, run `mavlink-routerd` directly against
-  `mavlink-router-channel-c.conf` as shown above rather than through that
-  container; wiring a Channel C container entrypoint is separate, still-open
-  deployment work, not something this tool depends on.
+- `docker/mavlink-router/entrypoint.sh` launches Channel C alongside
+  Channels A/B as a third independent `mavlink-routerd` process — if
+  `drone-mc-mavlink-router.service` predates `GCS-006` on this Jetson,
+  rebuild the image (`scripts/09-build-mavlink-router-image.sh`) and
+  restart the service to pick up the change.
 - Cold start: `transport.py`'s `ChannelCClient` docstring covers why
   requests address `target_system=0` (broadcast) rather than the drone's
   real sysid — mavlink-router hasn't "learned" `mission_orchestrator_node`'s

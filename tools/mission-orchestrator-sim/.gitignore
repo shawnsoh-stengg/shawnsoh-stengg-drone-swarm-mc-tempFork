@@ -1,3 +1,5 @@
 _generated/
+.venv/
+plans/
 __pycache__/
 *.pyc

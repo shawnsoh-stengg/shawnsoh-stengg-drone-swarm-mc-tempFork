@@ -78,9 +78,18 @@ else
     echo "    Installed default config. Edit the connect endpoints for this vehicle's swarm before starting drone-mc.target."
 fi
 
-echo "==> Provisioning mavlink-router channel configs (GCS-001/MAVR-001)"
+echo "==> Provisioning mavlink-router channel configs (GCS-001/MAVR-001/GCS-006)"
 install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-a.conf" /etc/drone-mc/mavlink-router-channel-a.conf
 install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-b.conf" /etc/drone-mc/mavlink-router-channel-b.conf
+install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-c.conf" /etc/drone-mc/mavlink-router-channel-c.conf
+
+# drone-mc-mission-orchestrator.service bind-mounts this read-write for
+# plan-library persistence across container restarts (GCS-006 AC4) —
+# mission_orchestrator_node itself only mkdir()s it from inside the
+# container, which does nothing for the host-side bind-mount source Docker
+# expects to already exist.
+echo "==> Provisioning /var/drone-mc/mission_plans (GCS-006)"
+mkdir -p /var/drone-mc/mission_plans
 
 # Every entrypoint.sh passes --params-file /etc/drone-mc/params/<name>.yaml,
 # but each package only ships its own params/default.yaml under ws/src/ —
