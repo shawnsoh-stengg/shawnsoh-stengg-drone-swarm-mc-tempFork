@@ -1,1 +1,8 @@
 .vscode/
+mission_orchestrator_sim/__pycache__/
+_generated/
+.venv/
+plans/
+__pycache__/
+*.pyc
+
