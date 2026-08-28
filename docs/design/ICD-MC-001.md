@@ -1563,8 +1563,8 @@ All deployment parameters are set via environment variables in the Docker Compos
 | Port | Protocol | Interface | Direction |
 |---|---|---|---|
 | `14550` | UDP | MAVLink — GCS ↔ FCC (Channel A) | Bidirectional (MC's only use is via MAVROS_CHANNEL_A below, GCS-005) |
-| `14551` | UDP | MAVLink — GCS → MC (Channel B) | GCS → mavlink-router on MC |
-| `14552` | UDP | MAVLink — MC → GCS (Channel B) | MC → GCS |
+| `14551` | UDP | MAVLink — MC → GCS (Channel B) | `GCS_CHANNEL_B` endpoint (Normal mode, fixed remote `192.168.10.10:14551`) — mavlink-router sends MC→GCS traffic here; this is the GCS's own receive port |
+| `14552` | UDP | MAVLink — GCS → MC (Channel B) | `GCS_MC_RECV` endpoint (Server mode, bound `0.0.0.0:14552` on the MC) — GCS sends here; this is the MC's own receive port |
 | `14553` | UDP | MAVLink — mavlink-router (Channel A) → MAVROS | Internal (loopback), GCS-005 |
 | `14560` | UDP | MAVLink — mavlink-router → gcs_mavlink_node | Internal (loopback) |
 | `8888` | UDP | uXRCE-DDS Agent | FCC → MC (ethernet fallback) |
@@ -1574,8 +1574,8 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `8554` | TCP/UDP | RTSP — Gimbal camera source stream | Gimbal camera → `perception_front_node`, on `192.168.10.200` (HIF-007, shared switch) |
 | `8555` | TCP/UDP | RTSP — MC video downlink, Stream A (gimbal) | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007 §8.1) |
 | `8556` | TCP/UDP | RTSP — MC video downlink, Stream B (downward) | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007 §8.1a) |
-| `14571` | UDP | MAVLink — Orchestrator → MC (Channel C) | Orchestrator → mavlink-router on MC (IFD-008 §12.1) |
-| `14572` | UDP | MAVLink — MC → Orchestrator (Channel C) | MC → Orchestrator (IFD-008 §12.1) |
+| `14571` | UDP | MAVLink — MC → Orchestrator (Channel C) | `ORCHESTRATOR_CHANNEL_C` endpoint (Normal mode, fixed remote `192.168.10.10:14571`) — the Orchestrator's own receive port (IFD-008 §12.1) |
+| `14572` | UDP | MAVLink — Orchestrator → MC (Channel C) | `ORCHESTRATOR_MC_RECV` endpoint (Server mode, bound `0.0.0.0:14572` on the MC) — the MC's own receive port (IFD-008 §12.1) |
 | `14580` | UDP | MAVLink — mavlink-router → mission_orchestrator_node | Internal (loopback) (IFD-008 §12.1) |
 
 ### 11.3 Serial Configuration
@@ -1601,8 +1601,8 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `FCC_MISSION_PORT` | `14555` | MAVLink mission-protocol UDP port (always active on `192.168.12.x`, independent of `FCC_TRANSPORT`) |
 | `DRONE_ID` | `1` | This drone's ID (1-based) |
 | `GCS_IP` | `192.168.10.10` | GCS IP address |
-| `GCS_MAV_PORT_RECV` | `14551` | MC receive port for GCS MAVLink |
-| `GCS_MAV_PORT_SEND` | `14552` | MC send port to GCS MAVLink |
+| `GCS_MAV_PORT_RECV` | `14551` | Confusingly named — this is actually the GCS's own receive port (MC→GCS), matching `GCS_CHANNEL_B`'s fixed remote address:port in §4.2; unused by any script/code today (`config/environment` sets it, nothing reads it) |
+| `GCS_MAV_PORT_SEND` | `14552` | Confusingly named — this is actually the MC's own bound receive port (GCS→MC, `GCS_MC_RECV` in §4.2); unused by any script/code today |
 | `GCS_MAVLINK_LOOPBACK_PORT` | `14560` | `gcs_mavlink_node`'s Channel B loopback port (`GCS_MAVLINK_NODE` endpoint, §4.2) |
 | `SWARM_HB_PORT` | `14900` | Swarm heartbeat port |
 | `SWARM_COORD_PORT` | `14901` | Swarm coordination port |
@@ -1619,8 +1619,8 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `CAMERA_HEIGHT` | `720` | Camera capture height (px) |
 | `CAMERA_FPS` | `30` | Camera capture frame rate |
 | `ORCHESTRATOR_IP` | `192.168.10.10` | Mission Orchestrator IP (assumes co-located with GCS laptop, §12.1) — hardcoded in `mavlink-router-channel-c.conf`, same as `GCS_IP`/`GCS_MAV_PORT_RECV`/`GCS_MAV_PORT_SEND` above; listed here for reference symmetry, not read from the environment at runtime |
-| `ORCHESTRATOR_MAV_PORT_RECV` | `14571` | MC receive port for Orchestrator MAVLink (Channel C) — see `ORCHESTRATOR_IP` note |
-| `ORCHESTRATOR_MAV_PORT_SEND` | `14572` | MC send port to Orchestrator MAVLink (Channel C) — see `ORCHESTRATOR_IP` note |
+| `ORCHESTRATOR_MAV_PORT_RECV` | `14571` | Confusingly named — this is actually the Orchestrator's own receive port (MC→Orchestrator), matching `ORCHESTRATOR_CHANNEL_C`'s fixed remote address:port in §12.1; see `ORCHESTRATOR_IP` note |
+| `ORCHESTRATOR_MAV_PORT_SEND` | `14572` | Confusingly named — this is actually the MC's own bound receive port (Orchestrator→MC, `ORCHESTRATOR_MC_RECV` in §12.1); see `ORCHESTRATOR_IP` note |
 | `ORCHESTRATOR_MAVLINK_LOOPBACK_PORT` | `14580` | `mission_orchestrator_node`'s Channel C loopback port (`ORCHESTRATOR_MAVLINK_NODE` endpoint, §12.1) |
 
 ### 11.4a Cross-Host DDS Bridge Configuration
@@ -1643,8 +1643,8 @@ A third MAVLink channel, fully isolated from Channels A and B (own `mavlink-rout
 
 | Port | Protocol | Interface | Direction |
 |---|---|---|---|
-| `14571` | UDP | MAVLink — Orchestrator ↔ MC (Channel C) | Orchestrator → mavlink-router on MC |
-| `14572` | UDP | MAVLink — MC → Orchestrator (Channel C) | MC → Orchestrator |
+| `14571` | UDP | MAVLink — MC → Orchestrator (Channel C) | `ORCHESTRATOR_CHANNEL_C` endpoint (Normal mode, fixed remote `192.168.10.10:14571`) — the Orchestrator's own receive port |
+| `14572` | UDP | MAVLink — Orchestrator → MC (Channel C) | `ORCHESTRATOR_MC_RECV` endpoint (Server mode, bound `0.0.0.0:14572` on the MC) — the MC's own receive port |
 | `14580` | UDP | MAVLink — mavlink-router → mission_orchestrator_node | Internal (loopback) |
 
 | Field | Value |
@@ -1696,7 +1696,7 @@ One JSON file per plan, mirroring `mc_msgs/MissionUpload`'s fields directly (`na
 
 ### 12.5 Activate
 
-`MC_MISSION_PLAN_ACTIVATE` → MC loads and validates the named plan's JSON → on success, converts to `mc_msgs/MissionUpload` and publishes `/mc/gcs/mission_upload` — **the same topic and message type `gcs_mavlink_node` already produces today; `mission_manager_node` needs zero changes** — → `MC_MISSION_PLAN_ACK` back to the Orchestrator. `activate`'s phase-gating rules (e.g. restricting to PREFLIGHT/HOLD) are an open item (spec §9.2).
+`MC_MISSION_PLAN_ACTIVATE` → MC loads and validates the named plan's JSON → on success, converts to `mc_msgs/MissionUpload` and publishes `/mc/gcs/mission_upload` — **the same topic and message type `gcs_mavlink_node` already produces today; `mission_manager_node` needs zero changes** — → `MC_MISSION_PLAN_ACK` back to the Orchestrator. `activate` is phase-gated to `PREFLIGHT` only — resolved 2026-08-06 (spec §9.2); no `HOLD` phase exists in the implemented state machine, so `PREFLIGHT` is the only pre-arm window. A request outside `PREFLIGHT` is rejected with `MC_MISSION_PLAN_ACK.result = REJECTED_PHASE`.
 
 ### 12.6 Timing and Error Handling
 

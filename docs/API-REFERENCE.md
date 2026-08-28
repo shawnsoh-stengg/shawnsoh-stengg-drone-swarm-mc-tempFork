@@ -1,48 +1,23 @@
 # ROS 2 API Reference
 
-Internal ROS 2 topic and message reference for the `ws/src/` colcon
-workspace, grounded in the current code (not just the design docs). For the
-external wire formats (MAVLink Channels A/B/C, uXRCE-DDS to the FCC) see
-`ICD-MC-001.md` — this document covers only the ROS 2 graph *between* MC
-nodes (plus the `fcc_bridge` backend's own DDS topics to PX4, since those
-are still ROS 2 topics on the wire).
+Internal ROS 2 topic and message reference for the `ws/src/` colcon workspace, grounded in the current code (not just the design docs). For the external wire formats (MAVLink Channels A/B/C, uXRCE-DDS to the FCC) see `ICD-MC-001.md` — this document covers only the ROS 2 graph *between* MC nodes (plus the `fcc_bridge` backend's own DDS topics to PX4, since those are still ROS 2 topics on the wire).
 
-No `.srv` or `.action` interfaces are defined anywhere in the workspace yet
-— all inter-node communication today is topic-based.
+No `.srv` or `.action` interfaces are defined anywhere in the workspace yet — all inter-node communication today is topic-based.
 
 ## Implementation status
 
 Five nodes currently wire up real publishers/subscribers:
-`fcc_bridge_node`, `gcs_mavlink_node`, `mission_orchestrator_node`,
-`mission_manager_node`, and `health_monitor_node` (HEALTH-001: the
-`/mc/health` publisher and its 5 resource-sampling fields; HEALTH-002: the
-`node_alive_mask` liveness watches and the `/mc/manager/heartbeat` FR-074
-watchdog, which also subscribes `health_monitor_node` to several topics
-whose own publishing node is still an empty stub below — the subscription
-itself is real even though nothing is on the other end of it yet.
-HEALTH-003: the `fault_mask` failsafe decision tree (§10.3) and the SDD
-§10.4 systemd-restart transport. Per FR-026, `health_monitor_node` never
-calls `send_command()` for a flight-mode change except FR-075's own
-explicit, narrow exception (RTL after 3 failed `mission-exec.service`
-restart attempts) — `FCC_LINK_LOST` and `LOW_BATTERY` instead rely on
-`mission_manager_node`'s own pre-existing, independent fault-consumption
-to actually RTL; `GCS_LINK_LOST`→HOLD is a documented gap since that
-mechanism only ever RTLs, same class as the `OFFBOARD_STREAM_STALE`/
-`GIMBAL_LINK_LOST` gaps below). Every other node in the tables below
-(`swarm_coordinator_node`, `formation_controller_node`,
-`perception_down_node`, `visual_localisation_node`, `perception_front_node`,
-`video_mux_node`, `search_planner_node`) exists only as an empty
-constructor stub — no publishers, subscribers, or timers are wired up in
-their `.cpp` files yet. Their rows below are the **designed** interface
-(sourced from the `mc_msgs/msg/*.msg` header comments and `ICD-MC-001.md`
-§9.2), not something you can observe on a running `ros2 topic list` today.
+`fcc_bridge_node`, `gcs_mavlink_node`, `mission_orchestrator_node`, `mission_manager_node`, and `health_monitor_node` (HEALTH-001: the `/mc/health` publisher and its 5 resource-sampling fields; HEALTH-002: the `node_alive_mask` liveness watches and the `/mc/manager/heartbeat` FR-074
+watchdog, which also subscribes `health_monitor_node` to several topics whose own publishing node is still an empty stub below — the subscription itself is real even though nothing is on the other end of it yet. HEALTH-003: the `fault_mask` failsafe decision tree (§10.3) and the SDD
+§10.4 systemd-restart transport. Per FR-026, `health_monitor_node` never calls `send_command()` for a flight-mode change except FR-075's own explicit, narrow exception (RTL after 3 failed `mission-exec.service` restart attempts) — `FCC_LINK_LOST` and `LOW_BATTERY` instead rely on
+`mission_manager_node`'s own pre-existing, independent fault-consumption to actually RTL; `GCS_LINK_LOST`→HOLD is a documented gap since that mechanism only ever RTLs, same class as the `OFFBOARD_STREAM_STALE`/`GIMBAL_LINK_LOST` gaps below). Every other node in the tables below
+(`swarm_coordinator_node`, `formation_controller_node`, `perception_down_node`, `visual_localisation_node`, `perception_front_node`, `video_mux_node`, `search_planner_node`) exists only as an empty constructor stub — no publishers, subscribers, or timers are wired up in
+their `.cpp` files yet. Their rows below are the **designed** interface (sourced from the `mc_msgs/msg/*.msg` header comments and `ICD-MC-001.md` §9.2), not something you can observe on a running `ros2 topic list` today.
 
 Each table row is marked:
 
-- ✅ **implemented** — the publisher/subscriber exists in the node's `.cpp`
-  today.
-- 🧭 **designed** — documented in `mc_msgs` / the ICD as this node's
-  eventual interface, not yet wired up in code.
+- ✅ **implemented** — the publisher/subscriber exists in the node's `.cpp` today.
+- 🧭 **designed** — documented in `mc_msgs` / the ICD as this node's eventual interface, not yet wired up in code.
 
 ## `/mc/` topic map by node
 
@@ -59,10 +34,7 @@ Each table row is marked:
 | `/mc/fcc/offboard_setpoint` | `mc_msgs/FccOffboardSetpoint` | sub | `KeepLast(10)` | continuous, while an OFFBOARD-flagged leg is active | ✅ |
 | `/mc/fcc/visual_odometry` | `mc_msgs/VisualOdometry` | sub | — | ≥10 Hz while `/mc/localisation_mode == VISUAL_ODOMETRY` | 🧭 (backend method `FccBackend::publish_visual_odometry()` exists; no ROS subscription wired to call it yet) |
 
-`fcc_bridge_node` also talks to PX4 directly over DDS via its `FccBackend`
-(`XrceDdsBackend` in production, `MavlinkUdpBackend` for SITL). The
-`XrceDdsBackend` topics are real ROS 2 topics but are private to the
-backend — no other MC node subscribes to them:
+`fcc_bridge_node` also talks to PX4 directly over DDS via its `FccBackend` (`XrceDdsBackend` in production, `MavlinkUdpBackend` for SITL). The `XrceDdsBackend` topics are real ROS 2 topics but are private to the backend — no other MC node subscribes to them:
 
 | Topic | Type | Dir | QoS |
 |---|---|---|---|
@@ -78,11 +50,7 @@ backend — no other MC node subscribes to them:
 | `/fmu/in/offboard_control_mode` | `px4_msgs/OffboardControlMode` | pub | best-effort, `KeepLast(5)`, volatile |
 | `/fmu/in/trajectory_setpoint` | `px4_msgs/TrajectorySetpoint` | pub | best-effort, `KeepLast(5)`, volatile |
 
-QoS matches PX4's uXRCE-DDS client defaults on `/fmu/*` topics — best-effort
-reliability and volatile durability are required for the DDS↔uORB bridge to
-see the node at all. The MC↔FCC mission protocol (Channel C,
-`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) rides a separate raw UDP
-socket, not a ROS 2 topic — see `ICD-MC-001.md` §3.3.
+QoS matches PX4's uXRCE-DDS client defaults on `/fmu/*` topics — best-effort reliability and volatile durability are required for the DDS↔uORB bridge to see the node at all. The MC↔FCC mission protocol (Channel C, `MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) rides a separate raw UDP socket, not a ROS 2 topic — see `ICD-MC-001.md` §3.3.
 
 ### `gcs_mavlink_node` (package `gcs_comms`)
 
@@ -157,15 +125,7 @@ a conflict.
 | `/mc/gcs/mission_upload` | `mc_msgs/MissionUpload` | sub | — | `low_battery_threshold` override (falls back to the 0.20 SDD default) | ✅ |
 | `/mc/gcs/command` | `mc_msgs/GcsCommand` | sub | — | `MC_CMD_GCS_OVERRIDE` (ICD §10.5, cmd=50004) → `OVERRIDE_LOW_BATTERY_RTL`/`OVERRIDE_GCS_LINK_HOLD` state (ICD §10.7) | ✅ |
 
-`health_monitor_node`'s liveness subscriptions don't require the publishing
-node to exist yet — several of the topics above (e.g. `/mc/swarm/peer_
-states`, `/mc/local_pose`) are published by nodes that are still empty
-stubs (see "Implementation status" above); their `node_alive_mask` bit
-simply stays unset until a real publisher shows up. The systemd-restart
-transport (SDD §10.4) is a separate Unix domain socket to the privileged
-`drone-mc-watchdog` helper (`watchdog_socket_path` param), not a ROS 2
-topic — see `ws/src/health_monitor/include/health_monitor/
-systemd_restart_client.hpp`.
+`health_monitor_node`'s liveness subscriptions don't require the publishing node to exist yet — several of the topics above (e.g. `/mc/swarm/peer_states`, `/mc/local_pose`) are published by nodes that are still empty stubs (see "Implementation status" above); their `node_alive_mask` bit simply stays unset until a real publisher shows up. The systemd-restart transport (SDD §10.4) is a separate Unix domain socket to the privileged `drone-mc-watchdog` helper (`watchdog_socket_path` param), not a ROS 2 topic — see `ws/src/health_monitor/include/health_monitor/systemd_restart_client.hpp`.
 
 ### `swarm_coordinator_node` (package `swarm_coord`) — 🧭 designed only
 
@@ -177,9 +137,7 @@ systemd_restart_client.hpp`.
 
 ### `formation_controller_node` (package `swarm_coord`) — 🧭 designed only
 
-Consumes `mc_msgs/FormationOffset` entries (nested in
-`mc_msgs/MissionUpload.formation_offsets`) to drive per-drone formation
-offsets during `INGRESS`; no standalone topic of its own is documented yet.
+Consumes `mc_msgs/FormationOffset` entries (nested in `mc_msgs/MissionUpload.formation_offsets`) to drive per-drone formation offsets during `INGRESS`; no standalone topic of its own is documented yet.
 
 ### `perception_down_node` (package `vision`) — 🧭 designed only
 
@@ -217,9 +175,7 @@ offsets during `INGRESS`; no standalone topic of its own is documented yet.
 
 ## `mc_msgs` message reference
 
-All custom messages live in `ws/src/mc_msgs/msg/`. Field-level detail below
-is a summary — the `.msg` files themselves carry the authoritative,
-section-cited comments (ICD-MC-001 §9.2 unless noted).
+All custom messages live in `ws/src/mc_msgs/msg/`. Field-level detail below is a summary — the `.msg` files themselves carry the authoritative, section-cited comments (ICD-MC-001 §9.2 unless noted).
 
 | Message | Key fields | Notes |
 |---|---|---|
@@ -250,11 +206,7 @@ section-cited comments (ICD-MC-001 §9.2 unless noted).
 | `TrackArray` | `tracks[]` (`Track`) | Track batch |
 | `VideoDownlinkStatus` | `streaming`, `bitrate_kbps`, `client_connected` | Per-stream downlink health |
 
-Two messages (`IsrRole`, `VisualOdometry`) are marked in their own source
-comments as **gap-fills**: the ICD's topic table cited them before a
-message body existed anywhere in `ICD-MC-001.md`, so they were authored
-directly in `mc_msgs` (2026-07-26) and still need ICD-owner
-review/ratification.
+Two messages (`IsrRole`, `VisualOdometry`) are marked in their own source comments as **gap-fills**: the ICD's topic table cited them before a message body existed anywhere in `ICD-MC-001.md`, so they were authored directly in `mc_msgs` (2026-07-26) and still need ICD-owner review/ratification.
 
 ## External message types in use
 

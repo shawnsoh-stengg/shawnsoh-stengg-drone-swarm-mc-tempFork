@@ -1,19 +1,11 @@
 # Architecture Overview
 
-This is a synthesized, developer-facing entry point into the system design.
-For the authoritative, exhaustive design (node internals, algorithm proofs,
-deployment rationale) see `SDD-MC-001.md` at the repo root. For requirements
-and interface wire formats see `SRS-MC-001.md` and `ICD-MC-001.md`.
+This is a synthesized, developer-facing entry point into the system design. For the authoritative, exhaustive design (node internals, algorithm proofs, deployment rationale) see `SDD-MC-001.md` at the repo root. For requirements and interface wire formats see `SRS-MC-001.md` and `ICD-MC-001.md`.
 
 ## What this software does
 
-Each drone in the swarm runs an identical **mission computer (MC)** stack on
-a Jetson Orin NX, paired with a Pixhawk 6X flight controller (FCC). MCs
-coordinate over a MANET radio to run GCS-supervised, autonomous ISR search
-missions: elect a search-and-rescue (ISR) role among peers, partition the
-search area into Voronoi cells, fly boustrophedon coverage per cell, and
-detect + geolocate targets — all while the ground control station (GCS)
-retains override authority at all times.
+Each drone in the swarm runs an identical **mission computer (MC)** stack on a Jetson Orin NX, paired with a Pixhawk 6X flight controller (FCC). MCs coordinate over a MANET radio to run GCS-supervised, autonomous ISR search missions: elect a search-and-rescue (ISR) role among peers, partition the search area into Voronoi cells, fly boustrophedon coverage per cell, and
+detect + geolocate targets — all while the ground control station (GCS) retains override authority at all times.
 
 ## The 4-layer design
 
@@ -32,10 +24,7 @@ Layer 1 — Hardware & Transport
   ttyTHS1 serial (uXRCE-DDS), 192.168.12.x ethernet, CSI camera, MANET radio
 ```
 
-Layers communicate strictly downward-to-upward through ROS 2 topics under
-the `/mc/` namespace (see below) — a Layer 4 node never talks to Layer 1
-hardware directly, it goes through `fcc_bridge_node`. See diagram `02`
-(`docs/diagrams/02-software-architecture.puml`) for the full node topology.
+Layers communicate strictly downward-to-upward through ROS 2 topics under the `/mc/` namespace (see below) — a Layer 4 node never talks to Layer 1 hardware directly, it goes through `fcc_bridge_node`. See diagram `02` (`docs/diagrams/02-software-architecture.puml`) for the full node topology.
 
 ## Packages
 
@@ -57,27 +46,13 @@ MANET link).
 
 ## Key design patterns
 
-- **FccBackend abstraction** (`fcc_bridge`) — the seam between
-  hardware-in-the-loop (uXRCE-DDS to a real Pixhawk) and SITL (MAVLink UDP
-  to a simulator). Nothing above Layer 2 changes when the backend swaps.
+- **FccBackend abstraction** (`fcc_bridge`) — the seam between hardware-in-the-loop (uXRCE-DDS to a real Pixhawk) and SITL (MAVLink UDP to a simulator). Nothing above Layer 2 changes when the backend swaps.
 - **MAVLink channel separation** — three distinct channels share the wire:
-  - **Channel A**: GCS→FCC, standard PX4 autopilot traffic, routed by
-    `mavlink-router`.
-  - **Channel B**: GCS→MC, raw MAVLink v2 over a loopback socket in
-    `gcs_mavlink_node` (MAVROS is *not* this channel's transport — see
-    `SDD-MC-001.md` §11.1).
-  - **Channel C / MC↔FCC mission protocol**: standard MAVLink mission
-    protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) on a
-    dedicated UDP port (`192.168.12.31:14555`), since stock PX4 has no
-    DDS-writable mission topic. Not routed by `mavlink-router`.
-- **Threading model** — every node runs a `MultiThreadedExecutor` with a
-  reentrant callback group for subscriptions and a mutually-exclusive group
-  for timers; control loops use a 10 ms `WallTimer` plus atomic state.
-- **Mission state machine** — 11 states in `mission_manager_node`:
-  `PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION →
-  VORONOI_PARTITION → SEARCH → RETURN → LAND`, with a `FAULT → RTL` escape
-  path from any state. GCS override must be honored within 500 ms (FR-003).
-  See diagram `04`.
+  - **Channel A**: GCS→FCC, standard PX4 autopilot traffic, routed by `mavlink-router`.
+  - **Channel B**: GCS→MC, raw MAVLink v2 over a loopback socket in `gcs_mavlink_node` (MAVROS is *not* this channel's transport — see `SDD-MC-001.md` §11.1).
+  - **Channel C / MC↔FCC mission protocol**: standard MAVLink mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) on a dedicated UDP port (`192.168.12.31:14555`), since stock PX4 has no DDS-writable mission topic. Not routed by `mavlink-router`.
+- **Threading model** — every node runs a `MultiThreadedExecutor` with a reentrant callback group for subscriptions and a mutually-exclusive group for timers; control loops use a 10 ms `WallTimer` plus atomic state.
+- **Mission state machine** — 11 states in `mission_manager_node`: `PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND`, with a `FAULT → RTL` escape path from any state. GCS override must be honored within 500 ms (FR-003). See diagram `04`.
 
 ## Key algorithms (SDD §3.x)
 
@@ -106,12 +81,7 @@ All internal topics are namespaced under `/mc/`:
 
 ## Deployment
 
-Each Docker container is a `systemd` unit under `drone-mc.target` — not
-Docker Compose. `fcc_bridge` and `swarm_coord` run in `rt.slice`
-(real-time); everything else (including `zenoh-bridge`) runs in `be.slice`
-(best-effort). The shared colcon workspace is bind-mounted into every
-container except `mavlink-router` and `zenoh-bridge`, which are standalone
-daemons with no ROS 2/colcon dependency. See diagram `03`.
+Each Docker container is a `systemd` unit under `drone-mc.target` — not Docker Compose. `fcc_bridge` and `swarm_coord` run in `rt.slice` (real-time); everything else (including `zenoh-bridge`) runs in `be.slice` (best-effort). The shared colcon workspace is bind-mounted into every container except `mavlink-router` and `zenoh-bridge`, which are standalone daemons with no ROS 2/colcon dependency. See diagram `03`.
 
 ## Where to go next
 
