@@ -27,6 +27,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ubuntu-latest ships with ~14GB free after its preinstalled
+      # toolchains — not enough headroom for the dustynv L4T base image
+      # (several GB on its own) plus QEMU-emulated colcon build output plus
+      # buildx's cache export. Reclaim space from toolchains this job never
+      # uses rather than relying on default headroom.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL "${AGENT_TOOLSDIRECTORY}" || true
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile || true
+          docker image prune -af || true
+          df -h /
+
       # ros2-core (docker/ros2-core/Dockerfile) is FROM dustynv/ros:humble-
       # ros-base-l4t-r36.3.0 — a Jetson L4T (aarch64-only) base image, same
       # as every service image built FROM it. scripts/04-install-ros2-core.sh
@@ -50,6 +64,9 @@ jobs:
       # buildx layers keyed on their own content, so an unchanged
       # docker/ros2-core/Dockerfile / cyclonedds.xml reuses every layer
       # instead of re-running the apt-get chain under emulation.
+      # mode=min (the default, not mode=max) — this is a single-stage
+      # image so there's no discarded builder-stage layer worth the extra
+      # local disk mode=max would stage before upload.
       - name: Build ros2-core (cached)
         uses: docker/build-push-action@v6
         with:
@@ -59,7 +76,13 @@ jobs:
           tags: ros2-core:ci
           load: true
           cache-from: type=gha,scope=ros2-core
-          cache-to: type=gha,scope=ros2-core,mode=max
+          cache-to: type=gha,scope=ros2-core
+
+      # Free the buildx cache-export staging + apt layers now that
+      # ros2-core is loaded — same disk-pressure reasoning as the "Free
+      # disk space" step above, just after the biggest single consumer.
+      - name: Prune docker build cache
+        run: docker builder prune -af || true
 
       # fcc_bridge depends on px4_msgs (SDD-MC-001 §3), which is one of the
       # 7 first-party packages' dependencies but is fetched via
