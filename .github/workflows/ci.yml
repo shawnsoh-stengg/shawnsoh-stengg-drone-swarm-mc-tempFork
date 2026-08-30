@@ -56,33 +56,36 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       # AC: "build ... (or cache/reuse it — full rebuild on every PR is
-      # wasteful)". GitHub Actions cache backend (type=gha) caches
-      # buildx layers keyed on their own content, so an unchanged
-      # docker/ros2-core/Dockerfile / cyclonedds.xml reuses every layer
-      # instead of re-running the apt-get chain under emulation.
-      # mode=min (the default, not mode=max) — this is a single-stage
-      # image so there's no discarded builder-stage layer worth the extra
-      # local disk mode=max would stage before upload.
-      - name: Build ros2-core (cached)
-        uses: docker/build-push-action@v6
-        with:
-          context: docker/ros2-core
-          file: docker/ros2-core/Dockerfile
-          platforms: linux/arm64
-          tags: ros2-core:ci
-          load: true
-          cache-from: type=gha,scope=ros2-core
-          cache-to: type=gha,scope=ros2-core
-
-      # Free the buildx cache-export staging + apt layers now that
-      # ros2-core is loaded — same disk-pressure reasoning as the "Free
-      # disk space" step above, just after the biggest single consumer.
-      - name: Prune docker build cache
-        run: docker builder prune -af || true
+      # wasteful)". This was originally a docker/build-push-action step
+      # using the docker-container buildx driver with `load: true` +
+      # `cache-to: type=gha` — that driver builds the image, exports it
+      # to an OCI tarball, then re-imports it into the daemon, so at peak
+      # it holds ~3 copies of this image (build cache + tarball +
+      # imported layers) at once. dustynv/ros:humble-ros-base-l4t-r36.3.0
+      # is a full Jetson L4T/CUDA/TensorRT userland image (single layers
+      # up to 3.48GB), not a small ROS image, and that tripled peak
+      # blew straight through the runner's disk mid-import ("no space
+      # left on device" writing libnvinfer_static.a). Plain `docker build`
+      # uses the default (non-container) buildx driver, which builds
+      # directly into the daemon's own image store — one copy, no
+      # export/import round trip. The trade-off: the default driver
+      # doesn't support the `type=gha` cache exporter, so this no longer
+      # caches our own apt-get layer across runs — acceptable here since
+      # every run is a fresh ephemeral VM anyway, so the dominant cost
+      # (pulling/extracting the ~6.5GB compressed base image itself) is
+      # re-paid every run regardless of whether our thin layer on top was
+      # cached. "Reuse" is still satisfied within a run: this same
+      # ros2-core:ci is what both the colcon build/test step and the
+      # summary step below run against, nothing rebuilds it twice.
+      - name: Build ros2-core
+        run: |
+          docker build \
+            --platform linux/arm64 \
+            --tag ros2-core:ci \
+            --file docker/ros2-core/Dockerfile \
+            docker/ros2-core
+          docker builder prune -af || true
 
       # fcc_bridge depends on px4_msgs (SDD-MC-001 §3), which is one of the
       # 7 first-party packages' dependencies but is fetched via

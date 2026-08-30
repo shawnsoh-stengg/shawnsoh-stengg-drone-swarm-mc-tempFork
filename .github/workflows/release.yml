@@ -49,9 +49,6 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -77,21 +74,29 @@ jobs:
       # role scripts/04-install-ros2-core.sh plays in the manual chain
       # this ticket replaces. It is not itself one of the "service"
       # images config/systemd/*.service reference, so it's built here
-      # (cached, load: true so later steps in this job can use it as a
-      # build-arg) but not pushed to ghcr.io.
+      # but not pushed to ghcr.io.
+      #
+      # Plain `docker build`, not `docker/build-push-action`/buildx's
+      # docker-container driver: that driver's BuildKit runs in its own
+      # isolated container with no automatic access to the main daemon's
+      # local image store, which is exactly what the per-service loop
+      # below needs (`FROM ros2-core:release` resolving as a plain local
+      # tag). `docker build` uses the default driver, building straight
+      # into the daemon's own store — the same store `docker build` has
+      # always resolved local FROM references against, no buildx-specific
+      # cross-build sharing to reason about. It also avoids the
+      # `load: true` export/re-import round trip that duplicates this
+      # multi-GB Jetson L4T image on disk (see ci.yml's own comment on
+      # this — that's what caused a prior "no space left on device"
+      # failure here).
       - name: Build ros2-core (shared base)
-        uses: docker/build-push-action@v6
-        with:
-          context: docker/ros2-core
-          file: docker/ros2-core/Dockerfile
-          platforms: linux/arm64
-          tags: ros2-core:release
-          load: true
-          cache-from: type=gha,scope=ros2-core
-          cache-to: type=gha,scope=ros2-core
-
-      - name: Prune docker build cache
-        run: docker builder prune -af || true
+        run: |
+          docker build \
+            --platform linux/arm64 \
+            --tag ros2-core:release \
+            --file docker/ros2-core/Dockerfile \
+            docker/ros2-core
+          docker builder prune -af || true
 
       # Every docker/*/Dockerfile that exists at merge time except
       # ros2-core itself (built above, not a deployable service) is a
@@ -103,6 +108,11 @@ jobs:
       # to every build is harmless for the images that don't declare
       # that ARG (docker/mavlink-router, docker/zenoh-bridge — see
       # scripts/13-build-swarm-coord-image.sh's own comment on this).
+      # Plain `docker build` + explicit `docker push` for the same
+      # local-image-store reason as the ros2-core build above; the
+      # tagged image + builder cache are both removed right after each
+      # push so 9 sequential multi-stage arm64-emulated builds on one
+      # runner don't accumulate faster than free disk holds.
       - name: Build and push service images
         run: |
           set -euo pipefail
@@ -114,19 +124,15 @@ jobs:
               continue
             fi
             image="ghcr.io/drone-mc/${service}"
-            echo "==> Building and pushing ${image}:${MC_VERSION}"
-            docker buildx build \
+            echo "==> Building ${image}:${MC_VERSION}"
+            docker build \
               --platform linux/arm64 \
               --file "${dockerfile}" \
               --build-arg "ROS2_CORE_IMAGE=ros2-core:release" \
               --tag "${image}:${MC_VERSION}" \
-              --cache-from "type=gha,scope=${service}" \
-              --cache-to "type=gha,scope=${service}" \
-              --push \
               .
-            # Reclaim disk before the next image — 9 sequential
-            # multi-stage arm64-emulated builds on one runner otherwise
-            # accumulate builder-stage layers/cache faster than the
-            # ~14GB default headroom holds (see "Free disk space" above).
+            echo "==> Pushing ${image}:${MC_VERSION}"
+            docker push "${image}:${MC_VERSION}"
+            docker rmi "${image}:${MC_VERSION}" || true
             docker builder prune -af || true
           done
