@@ -1,0 +1,110 @@
+name: Release
+
+# TEST-005: tag-triggered release automation, replacing the manual
+# scripts/NN-build-*-image.sh chain + hand-pushed tags with "push a
+# `v*` tag". Builds every service Docker image that exists at merge
+# time and pushes each to ghcr.io/drone-mc/<service>:<tag> — the same
+# naming config/systemd/*.service units already reference via
+# ${MC_VERSION} (docs/DEPLOYMENT.md).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # config/systemd/*.service units and docs/DEPLOYMENT.md's
+      # MC_VERSION=1.0.0 examples use the bare semver, no leading "v" —
+      # strip it from the git tag so the pushed image tag matches what
+      # `${MC_VERSION}` actually resolves to at runtime.
+      - name: Derive MC_VERSION from tag
+        id: version
+        run: echo "mc_version=${GITHUB_REF_NAME#v}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU (aarch64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # fcc_bridge's builder stage COPYs ws/src/px4_msgs — fetched via
+      # ws/px4_msgs.repos, not vendored (see ws/.gitignore), same as
+      # scripts/05-build-workspace.sh / scripts/08-build-fcc-bridge-image.sh.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Fetch px4_msgs (ws/px4_msgs.repos)
+        run: |
+          pip install --user vcstool
+          ~/.local/bin/vcs import --skip-existing ws/src < ws/px4_msgs.repos
+
+      # ros2-core is the shared FROM base every service image below
+      # builds on (docker/*/Dockerfile's ARG ROS2_CORE_IMAGE) — same
+      # role scripts/04-install-ros2-core.sh plays in the manual chain
+      # this ticket replaces. It is not itself one of the "service"
+      # images config/systemd/*.service reference, so it's built here
+      # (cached, load: true so later steps in this job can use it as a
+      # build-arg) but not pushed to ghcr.io.
+      - name: Build ros2-core (shared base)
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros2-core
+          file: docker/ros2-core/Dockerfile
+          platforms: linux/arm64
+          tags: ros2-core:release
+          load: true
+          cache-from: type=gha,scope=ros2-core
+          cache-to: type=gha,scope=ros2-core,mode=max
+
+      # Every docker/*/Dockerfile that exists at merge time except
+      # ros2-core itself (built above, not a deployable service) is a
+      # service image (fcc-bridge, mavlink-router, zenoh-bridge,
+      # gcs-comms, mission-exec, mission-orchestrator, swarm-coord,
+      # health-monitor, ... — whatever exists when this runs; nothing
+      # here is a fixed list so a new docker/<name>/ picked up later
+      # needs no workflow change). Passing --build-arg ROS2_CORE_IMAGE
+      # to every build is harmless for the images that don't declare
+      # that ARG (docker/mavlink-router, docker/zenoh-bridge — see
+      # scripts/13-build-swarm-coord-image.sh's own comment on this).
+      - name: Build and push service images
+        run: |
+          set -euo pipefail
+          MC_VERSION="${{ steps.version.outputs.mc_version }}"
+          for dockerfile in docker/*/Dockerfile; do
+            service_dir="$(dirname "${dockerfile}")"
+            service="$(basename "${service_dir}")"
+            if [[ "${service}" == "ros2-core" ]]; then
+              continue
+            fi
+            image="ghcr.io/drone-mc/${service}"
+            echo "==> Building and pushing ${image}:${MC_VERSION}"
+            docker buildx build \
+              --platform linux/arm64 \
+              --file "${dockerfile}" \
+              --build-arg "ROS2_CORE_IMAGE=ros2-core:release" \
+              --tag "${image}:${MC_VERSION}" \
+              --cache-from "type=gha,scope=${service}" \
+              --cache-to "type=gha,scope=${service},mode=max" \
+              --push \
+              .
+          done

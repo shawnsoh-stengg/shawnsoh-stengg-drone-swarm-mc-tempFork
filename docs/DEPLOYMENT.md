@@ -315,6 +315,15 @@ journalctl -u drone-mc-fcc-bridge -f
 MC_VERSION=1.0.0   # then restart the target
 ```
 
+Producing the `ghcr.io/drone-mc/<service>:${MC_VERSION}` images themselves
+is no longer a manual `scripts/NN-build-*-image.sh` chain + hand-pushed
+tags — pushing a `v1.0.0` git tag runs `.github/workflows/release.yml`
+(TEST-005), which builds every `docker/*/Dockerfile` that exists at that
+point and pushes each to `ghcr.io/drone-mc/<service>:1.0.0`. The
+`MC_VERSION=1.0.0` step above (setting which already-published tag a given
+drone runs) is unchanged — that's a per-drone deploy choice, not part of
+building the images.
+
 `scripts/02b-smoke-test-units.sh` verifies units/target/slices are
 installed, valid, and enabled without starting anything real;
 `LIVE_CHECK=1 ./scripts/02b-smoke-test-units.sh` additionally does a real
