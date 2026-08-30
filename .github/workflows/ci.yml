@@ -1,0 +1,135 @@
+name: CI
+
+# TEST-005: build/test gate (SDD-MC-001.md §13.4 "Continuous Validation";
+# follow-up flagged by TEST-002's own AC for "CI wiring, if CI exists").
+#
+# Every PR and every push to main: build ros2-core (cached, not rebuilt
+# from scratch each run), fetch px4_msgs, colcon-build the whole workspace,
+# and colcon-test it. ament_lint_auto (cpplint/cppcheck/uncrustify/xmllint)
+# is NOT a separate step here — docs/TESTING.md and docs/CONTRIBUTING.md
+# are explicit that every package already wires it into its own
+# `if(BUILD_TESTING)` block, so `colcon test` already runs it alongside the
+# gtest suites; a clean `colcon test-result` means lint passed too. Adding
+# a second lint job would just run the same checks twice.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ros2-core (docker/ros2-core/Dockerfile) is FROM dustynv/ros:humble-
+      # ros-base-l4t-r36.3.0 — a Jetson L4T (aarch64-only) base image, same
+      # as every service image built FROM it. scripts/04-install-ros2-core.sh
+      # already documents the fix for this on an x86 CI host: install QEMU
+      # so the aarch64 layers execute. This is real cross-arch emulation
+      # (not a native build), so C++ compilation inside it is meaningfully
+      # slower than a native amd64 build would be — that's an accepted
+      # cost of testing against the actual production base image rather
+      # than a stand-in x86 ROS image; a self-hosted arm64 runner would
+      # remove it but is out of scope for this ticket.
+      - name: Set up QEMU (aarch64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # AC: "build ... (or cache/reuse it — full rebuild on every PR is
+      # wasteful)". GitHub Actions cache backend (type=gha) caches
+      # buildx layers keyed on their own content, so an unchanged
+      # docker/ros2-core/Dockerfile / cyclonedds.xml reuses every layer
+      # instead of re-running the apt-get chain under emulation.
+      - name: Build ros2-core (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/ros2-core
+          file: docker/ros2-core/Dockerfile
+          platforms: linux/arm64
+          tags: ros2-core:ci
+          load: true
+          cache-from: type=gha,scope=ros2-core
+          cache-to: type=gha,scope=ros2-core,mode=max
+
+      # fcc_bridge depends on px4_msgs (SDD-MC-001 §3), which is one of the
+      # 7 first-party packages' dependencies but is fetched via
+      # ws/px4_msgs.repos rather than vendored (see ws/.gitignore) —
+      # same step scripts/05-build-workspace.sh runs before every build.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Fetch px4_msgs (ws/px4_msgs.repos)
+        run: |
+          pip install --user vcstool
+          ~/.local/bin/vcs import --skip-existing ws/src < ws/px4_msgs.repos
+
+      # Whole-workspace build + test inside ros2-core, matching
+      # docs/TESTING.md's "Native package development" recipe (colcon
+      # build/test "in the ros2-core container"), not the production
+      # runtime pattern (docs/DEPLOYMENT.md's read-only install bind-mount)
+      # — CI needs build/, install/, and log/ all writable so test results
+      # can be copied back out afterward.
+      - name: colcon build + colcon test
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/ws/build" "${GITHUB_WORKSPACE}/ws/install" "${GITHUB_WORKSPACE}/ws/log"
+          docker run --rm \
+            --platform linux/arm64 \
+            --volume "${GITHUB_WORKSPACE}/ws:/ws" \
+            --workdir /ws \
+            ros2-core:ci \
+            bash -c "
+              set -eo pipefail
+              source /opt/ros/humble/install/setup.bash
+              set -u
+              colcon build \
+                --merge-install \
+                --cmake-args -DCMAKE_BUILD_TYPE=Release \
+                --event-handlers console_cohesion+
+              source install/setup.bash
+              colcon test --merge-install --event-handlers console_cohesion+
+              colcon test-result --all --verbose
+            "
+
+      # AC: "Build/test status and result artifacts ... visible on the PR,
+      # not just in a log someone has to go find." GITHUB_STEP_SUMMARY
+      # renders directly on the job summary/PR checks tab with no extra
+      # marketplace action; the raw per-package XML (gtest + ament_lint's
+      # own xunit output) goes up as an artifact for anyone who wants the
+      # detail colcon test-result's console output doesn't show.
+      - name: Publish test summary
+        if: always()
+        run: |
+          {
+            echo "## colcon test-result"
+            echo '```'
+            docker run --rm \
+              --platform linux/arm64 \
+              --volume "${GITHUB_WORKSPACE}/ws:/ws" \
+              --workdir /ws \
+              ros2-core:ci \
+              bash -c "source /opt/ros/humble/install/setup.bash && colcon test-result --all --verbose" || true
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload test result artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: colcon-test-results
+          path: |
+            ws/build/*/test_results/**
+            ws/log/latest_test/**
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,63 @@
+name: Nightly SITL regression
+
+# TEST-005: wires the schedule/trigger and result reporting for the
+# TP-ST (SITL system test) nightly regression run TP-MC-001.md §2.3's
+# policy calls for. This ticket does NOT implement the SITL harness
+# itself — that is TEST-002's own scope (see docs/TESTING.md's "What's
+# implemented right now": TP-ST is "designed only" as of this writing).
+#
+# Until TEST-002 lands, this workflow is a documented no-op/placeholder,
+# not a stub that fakes a passing test — see the "no harness yet" step
+# below. It's kept green on purpose (there's nothing to fail yet), but
+# the "harness landed?" guard step is designed to start FAILING the day
+# someone adds ws/src/mission_exec/launch/sitl_mission_test.launch.py
+# without also replacing the placeholder step, so this can't silently
+# stay a no-op forever once TEST-002 ships.
+on:
+  schedule:
+    # 03:00 UTC nightly, per TP-MC-001.md §2.3's regression policy.
+    - cron: '0 3 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  sitl-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # TP-ST's intended entry point, per docs/TESTING.md / CLAUDE.md:
+      # `ros2 launch mission_exec sitl_mission_test.launch.py`. Its
+      # absence is exactly what makes this job a placeholder right now.
+      - name: Check whether the TEST-002 SITL harness has landed
+        id: harness
+        run: |
+          if [[ -f "ws/src/mission_exec/launch/sitl_mission_test.launch.py" ]]; then
+            echo "found=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "found=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: No SITL harness yet (documented placeholder)
+        if: steps.harness.outputs.found == 'false'
+        run: |
+          echo "## Nightly SITL regression: placeholder" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "TEST-002's PX4 SITL harness does not exist in this repo yet" >> "${GITHUB_STEP_SUMMARY}"
+          echo "(docs/TESTING.md: TP-ST is 'designed only'). This job only" >> "${GITHUB_STEP_SUMMARY}"
+          echo "wires the nightly schedule/trigger (TEST-005); it does not" >> "${GITHUB_STEP_SUMMARY}"
+          echo "fake a pass. Nothing to run — see TP-MC-001.md §2.3 and" >> "${GITHUB_STEP_SUMMARY}"
+          echo "TEST-002 for the harness itself." >> "${GITHUB_STEP_SUMMARY}"
+          echo "==> No SITL harness yet — placeholder, not a faked pass. See TEST-002."
+
+      # This is intentionally a hard failure, not a TODO comment: it's the
+      # guard that stops this workflow from staying a silent, meaningless
+      # green run forever after TEST-002 actually lands. Replace this
+      # whole step (and the placeholder one above) with the real
+      # `ros2 launch mission_exec sitl_mission_test.launch.py` invocation
+      # plus its result reporting/artifact upload once the harness exists.
+      - name: Harness landed but this workflow was not updated
+        if: steps.harness.outputs.found == 'true'
+        run: |
+          echo "::error::ws/src/mission_exec/launch/sitl_mission_test.launch.py now exists (TEST-002 landed) but .github/workflows/nightly-sitl.yml still has the TEST-005 placeholder wired in instead of actually running it. Replace the placeholder step with a real SITL run + result reporting."
+          exit 1

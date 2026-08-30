@@ -223,6 +223,37 @@ your PR spans multiple commits. Keep a PR scoped to one ticket, matching
 how commits are scoped today — resist bundling unrelated tickets into one
 PR just because they touched nearby files.
 
+Every PR and every push to `main` runs `.github/workflows/ci.yml`
+(TEST-005): build `ros2-core`, `colcon build`/`colcon test` the whole
+workspace, `ament_lint_auto`'s checks (already wired into that same
+`colcon test` run — see `docs/TESTING.md`). Check the PR's own checks tab
+and job summary for results rather than re-running things by hand.
+
+### One-time manual setup: branch protection on `main`
+
+GitHub doesn't expose branch-protection rules as a committed YAML file —
+this is a one-time step a repo admin does in the GitHub UI (or via `gh api`/
+Terraform, if this repo ever grows infra-as-code for its own settings), not
+something `.github/workflows/*.yml` can configure for itself:
+
+1. Repo **Settings → Branches → Add branch protection rule**, pattern `main`.
+2. Enable **Require status checks to pass before merging**, then add the
+   `build-test` check (the job name in `.github/workflows/ci.yml`) as a
+   required check. Also enable **Require branches to be up to date before
+   merging** so a stale PR can't merge on a check result from before a
+   since-landed regression on `main`.
+3. Enable **Require a pull request before merging** (so the check above
+   actually has something to gate — a direct push bypasses required
+   checks entirely).
+4. Leave the nightly SITL workflow (`.github/workflows/nightly-sitl.yml`)
+   and the release workflow (`.github/workflows/release.yml`) out of the
+   required-checks list — they're not part of the per-PR gate: nightly
+   runs on a schedule, and release only runs on a `v*` tag.
+
+Without this step, `ci.yml` still runs and reports a status on every PR,
+but GitHub will let a PR merge with a red check — the workflow file alone
+is the mechanism, this setting is what actually makes it a gate.
+
 ## Where to go next
 
 - Writing or running tests for your change: `docs/TESTING.md`.
