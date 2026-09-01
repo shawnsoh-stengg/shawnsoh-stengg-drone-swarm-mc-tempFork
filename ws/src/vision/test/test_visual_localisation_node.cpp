@@ -1,3 +1,5 @@
+// Copyright 2026 Jun Hong Lee. All rights reserved.
+// Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §8, ICD-MC-001 §3).
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
 
