@@ -118,12 +118,12 @@ jobs:
             bash -c "
               set -eo pipefail
               source /opt/ros/humble/install/setup.bash
-              set -u
               colcon build \
                 --merge-install \
                 --cmake-args -DCMAKE_BUILD_TYPE=Release \
                 --event-handlers console_cohesion+
               source install/setup.bash
+              set -u
               colcon test --merge-install --event-handlers console_cohesion+
               colcon test-result --all --verbose
             "
