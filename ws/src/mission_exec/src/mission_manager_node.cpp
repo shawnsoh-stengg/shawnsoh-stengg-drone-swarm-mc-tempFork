@@ -79,8 +79,9 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
 
   pub_mission_phase_ =
     create_publisher<mc_msgs::msg::MissionPhase>("/mc/mission_phase", rclcpp::QoS(10));
-  pub_heartbeat_ = create_publisher<std_msgs::msg::Header>("/mc/manager/heartbeat",
-      rclcpp::QoS(10));
+  pub_heartbeat_ = create_publisher<std_msgs::msg::Header>(
+    "/mc/manager/heartbeat",
+    rclcpp::QoS(10));
   pub_send_command_ =
     create_publisher<mc_msgs::msg::FccCommand>("/mc/fcc/send_command", rclcpp::QoS(10));
   pub_mission_item_update_ = create_publisher<mc_msgs::msg::FccMissionItem>(
@@ -608,7 +609,7 @@ void MissionManagerNode::commit_transition(Phase target, uint8_t source)
     static_cast<unsigned>(current_phase_), static_cast<unsigned>(target), source);
   current_phase_ = target;
   phase_entered_at_ = now();
-  publish_phase(/*force=*/true);
+  publish_phase(/*force=*/ true);
 }
 
 namespace
@@ -829,7 +830,7 @@ void MissionManagerNode::handle_gcs_command(const GcsCommandEnvelope & cmd)
     case kMcCmdPhaseTransition: {
         const auto target = static_cast<Phase>(
           static_cast<uint8_t>(std::lround(cmd.params[0])));
-        const auto result = try_transition(target, /*from_gcs_command=*/true);
+        const auto result = try_transition(target, /*from_gcs_command=*/ true);
         publish_command_ack(cmd.command, result);
         break;
       }
@@ -894,7 +895,7 @@ void MissionManagerNode::on_control_timer()
     }
   }
 
-  publish_phase(/*force=*/false);
+  publish_phase(/*force=*/ false);
 
   // Heartbeat is the last thing published each cycle (SDD §4.4): if it
   // publishes, everything above it this cycle completed successfully.

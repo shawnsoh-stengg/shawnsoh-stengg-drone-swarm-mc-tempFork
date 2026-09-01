@@ -497,8 +497,9 @@ void HealthMonitorNode::check_gpu_overtemp(uint8_t gpu_temp_c)
     publish_status_text(
       mc_msgs::msg::StatusText::SEVERITY_WARNING,
       "GPU temperature " + std::to_string(gpu_temp_c) + "C exceeds threshold -- "
-      "inference_rate_limit_fps reduced to " + std::to_string(static_cast<int>(
-        kThrottledInferenceFps)) + " FPS");
+      "inference_rate_limit_fps reduced to " + std::to_string(
+        static_cast<int>(
+          kThrottledInferenceFps)) + " FPS");
     publish_fault(
       mc_msgs::msg::FaultEvent::GPU_OVERTEMP, kSeverityWarning,
       "GPU temperature exceeds threshold -- inference rate throttled",

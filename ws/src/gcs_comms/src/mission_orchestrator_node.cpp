@@ -12,14 +12,16 @@
 
 #include <cctype>
 #include <cerrno>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <nlohmann/json.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+
+#include <nlohmann/json.hpp>
 
 #include "geographic_msgs/msg/geo_point.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -394,7 +396,7 @@ void MissionOrchestratorNode::handle_burst_read(
   // real behaviour for files under its own 35000-byte chunk-transmitted cap
   // (which every plan file here is always under).
   uint16_t reply_seq = static_cast<uint16_t>(seq + 1);
-  for (;;) {
+  for (;; ) {
     uint8_t chunk[kFtpMaxData];
     uint8_t chunk_size = 0;
     const FtpError err = ftp_read(offset, kFtpMaxData, chunk_size, chunk);
@@ -490,7 +492,7 @@ MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_list_directory(
   }
 
   uint8_t offset = 0;
-  for (;;) {
+  for (;; ) {
     errno = 0;
     struct dirent * entry = ::readdir(dp);
     if (entry == nullptr) {
@@ -501,14 +503,14 @@ MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_list_directory(
     }
 
     const std::string full = plans_dir_ + "/" + entry->d_name;
-    struct stat st{};
+    struct stat st {};
     if (::stat(full.c_str(), &st) != 0) {
       continue;
     }
 
     char line[288];
     const int written = std::snprintf(
-      line, sizeof(line), "F%s\t%lld", entry->d_name, static_cast<long long>(st.st_size));
+      line, sizeof(line), "F%s\t%" PRId64, entry->d_name, static_cast<int64_t>(st.st_size));
     if (written <= 0) {
       continue;
     }
@@ -576,7 +578,7 @@ MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_open(
     return kFtpErrFileProtected;
   }
 
-  struct stat st{};
+  struct stat st {};
   const bool exists = ::stat(full_path.c_str(), &st) == 0;
   if (!for_write && !exists) {
     return kFtpErrFileNotFound;
@@ -621,7 +623,7 @@ MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_read(
     return kFtpErrInvalidSession;
   }
 
-  struct stat st{};
+  struct stat st {};
   if (::fstat(session_fd_, &st) != 0) {
     return kFtpErrFailErrno;
   }
@@ -661,7 +663,8 @@ MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_write(
   return kFtpErrNone;
 }
 
-MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_remove(const std::string & virtual_path)
+MissionOrchestratorNode::FtpError MissionOrchestratorNode::ftp_remove(
+  const std::string & virtual_path)
 {
   std::string filename, full_path;
   if (!resolve_plan_path(virtual_path, full_path, filename)) {
@@ -736,7 +739,9 @@ void MissionOrchestratorNode::close_session_state()
 
 // --- MC_MISSION_PLAN_ACTIVATE/ACK + plan library (ICD §12.2/§12.4/§12.5) ---
 
-void MissionOrchestratorNode::handle_activate_request(const RawFrame & frame, const sockaddr_in & from)
+void MissionOrchestratorNode::handle_activate_request(
+  const RawFrame & frame,
+  const sockaddr_in & from)
 {
   uint32_t client_request_id = 0;
   std::memcpy(
@@ -794,7 +799,7 @@ MissionOrchestratorNode::ActivateResult MissionOrchestratorNode::load_and_activa
   }
 
   const std::string full_path = plans_dir_ + "/" + filename;
-  struct stat st{};
+  struct stat st {};
   if (::stat(full_path.c_str(), &st) != 0) {
     return kActivateRejectedNotFound;
   }

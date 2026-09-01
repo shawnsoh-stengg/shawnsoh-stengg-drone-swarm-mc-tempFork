@@ -617,7 +617,10 @@ TEST_F(MissionOrchestratorNodeTest, ActivateAcceptsValidPlanAndPublishesMissionU
   EXPECT_EQ(ack.filename, "recon_alpha.json");
   EXPECT_EQ(ack.result, 0);  // ACCEPTED (ICD §12.2)
 
-  ASSERT_TRUE(spin_until(node_, [this] {return !mission_upload_msgs_.empty();}, std::chrono::seconds(1)));
+  ASSERT_TRUE(
+    spin_until(
+      node_,
+      [this] {return !mission_upload_msgs_.empty();}, std::chrono::seconds(1)));
   const auto & upload = *mission_upload_msgs_.back();
   EXPECT_TRUE(upload.arm_authorised);
   EXPECT_FLOAT_EQ(upload.low_battery_threshold, 0.25F);
