@@ -68,7 +68,7 @@ package "Holybro Pixhawk Jetson Baseboard  (120 × 40 mm)" as BB #E4EEF8 {
 
   rectangle "Power Regulator\nVBAT → 5V_SYS (5A)\nVBAT → 5V_FC (2A)\n3.3V_PERIPH · 1.8V_PERIPH\nINA226 power monitor" as PWR #F4C88A
 
-  rectangle "Ethernet Switch\n100BASE-T\nJetson eth0 ↔ Pixhawk\n↔ External RJ45 ↔ Gimbal cam (J15)\n(single switch, no 2nd PHY)" as SW #C0D8C0
+  rectangle "Ethernet Switch\n10/100/1000\nJetson eth0 ↔ Pixhawk (100BASE-T)\n↔ External RJ45 (1000BASE-T) ↔ Gimbal cam (1000BASE-TX, J15)\n(single switch, no 2nd PHY)" as SW #C0D8C0
 
   rectangle "UART Bridge\nOn-board PCB trace\nJetson ttyTHS1\n↔ Pixhawk UART B\n(no cable required)" as UART_BRIDGE #C0D0E8
 
@@ -93,7 +93,7 @@ package "Holybro Pixhawk Jetson Baseboard  (120 × 40 mm)" as BB #E4EEF8 {
 BAT   -[#E07000,thickness=3]-> J1 : VBAT\n14.8–25.2 V
 CAM   -[#7030A0,thickness=2]-> J2 : MIPI CSI-2\n22-pin FPC
 AU    -[#208040,thickness=2]-> J3 : 1000BASE-T\nCat 5e STP
-GIMCAM -[#208040,thickness=2]-> J15 : 100BASE-TX\nJST-GH→RJ45 pigtail ≤2m
+GIMCAM -[#208040,thickness=2]-> J15 : 1000BASE-TX\nJST-GH→RJ45 pigtail ≤2m
 USB   -[#3050C0,thickness=1]-> J4 : USB-C
 CONS  -[#3050C0,thickness=1]-> J5 : 3.3 V UART\n115200 bps
 

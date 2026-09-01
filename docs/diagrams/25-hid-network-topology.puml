@@ -93,7 +93,7 @@ package "MANET Subnet  192.168.10.0/24\n(L2 bridge via MANET Air Units — all p
 ' ── Wired connections on drone assembly ──────────
 JET_EXT <-[#208040,thickness=2]-> AU_DUT  : 1000BASE-T · Cat 5e · ≤ 3 m\nJ3 RJ45 (HIF-004)
 PX4_EXT <-[#208040,dashed]-> AU_DUT       : (optional: FCC Ethernet\nvia baseboard switch)
-JET_EXT <-[#20A070,thickness=2]-> GIMCAM  : 100BASE-TX · JST-GH→RJ45 ≤2m\nJ15 (HIF-007, shared switch)
+JET_EXT <-[#20A070,thickness=2]-> GIMCAM  : 1000BASE-TX · JST-GH→RJ45 ≤2m\nJ15 (HIF-007, shared switch)
 
 ' ── MANET wireless links ─────────────────────────
 AU_DUT  <-[#408040,thickness=2,dashed]-> AU_GCS  : MANET mesh\n(wireless)
@@ -159,10 +159,13 @@ end note
 
 legend right
   | Line | Description |
-  | <#208040><b>───</b> | Wired Ethernet (100/1000BASE-T) |
+  | <#208040><b>───</b> | Wired Ethernet (1000BASE-T) |
   | <#20A070><b>───</b> | Gimbal camera (shared switch, HIF-007) |
   | <#408040><b>- - -</b> | MANET wireless (L2 bridge) |
   | <#3D5A80><b>- - -</b> | Optional / fallback link |
 endlegend
+
+INT_NET -down[hidden]-> EXT_NET
+EXT_NET -down[hidden]-> PORTS
 
 @enduml

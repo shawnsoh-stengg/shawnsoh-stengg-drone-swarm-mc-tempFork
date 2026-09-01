@@ -82,8 +82,8 @@ External peripherals              Baseboard                 Internal modules
 LiPo battery (4S–6S) ─────────► Power regulation ────────► Jetson (5 V, 3 A)
                                                    ────────► Pixhawk (5 V, 2 A)
 
-MANET radio ──────── RJ45/SFP ──► Ethernet switch ─────────► Jetson eth0 (192.168.10.11)
-                                                  ─────────► Pixhawk Ethernet port (192.168.10.31)
+MANET radio ──────── RJ45/SFP ──► Ethernet switch (10/100/1000, ─► Jetson eth0 (192.168.10.11)
+                                    single switch, no 2nd PHY) ──► Pixhawk Ethernet port (192.168.10.31, 100BASE-T)
 
                                  UART bridge ──────────────► Jetson ttyTHS1 (uXRCE-DDS primary)
                                  (on-board trace)          ► Pixhawk TELEM2 / UART B
@@ -651,7 +651,7 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 
 | Parameter | Value |
 |---|---|
-| Interface type | 100BASE-TX Ethernet |
+| Interface type | 1000BASE-TX Ethernet |
 | On-board path | JST-GH port on the Holybro baseboard's **internal Ethernet switch** — the same switch fabric used by HIF-002 (Jetson↔Pixhawk) and HIF-004 (MANET radio AU), §2.2 |
 | Connector type | JST-GH 6-pin, 1.25 mm pitch — labelled **ETH port 1** on baseboard silkscreen |
 | Jetson device node | `eth0` — the Jetson has a single Ethernet NIC; the camera is simply another switched host reachable over the existing HIF-002/HIF-004 interface, not a dedicated Jetson port |

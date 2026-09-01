@@ -106,13 +106,64 @@ Don't narrate *what* the code does when the identifier already says it —
 these three patterns are about *why* and *whose responsibility*, which
 nothing else in the repo captures.
 
+## Python style
+
+Two different flavors of Python live in this repo, and they follow
+different conventions because only one of them goes through `ament_lint_auto`:
+
+| | ROS 2 packages (`ws/src/*/`, e.g. `mc_test_utils`) | Standalone tools (`tools/`, e.g. `mission-orchestrator-sim`) |
+|---|---|---|
+| Build | `ament_cmake_python` + `ament_python_install_package()` in `CMakeLists.txt` | Plain `pip install -r requirements.txt` into a venv — no ROS 2, no colcon |
+| Lint | `ament_lint_auto` (flake8 + pep257) rides along in `colcon test`, same as C++ | None wired up — style is by convention/review only |
+| Quotes | `'single'` (flake8's default; observed consistently in `mc_test_utils/*.py`) | `"double"` (observed consistently in `mission_orchestrator_sim/*.py`) |
+| Type hints | Present but not exhaustive (mock nodes, callbacks) | Used consistently on every function signature (`cli.py`, `dialect.py`, `transport.py`) |
+
+Both flavors agree on:
+
+- `from __future__ import annotations` as the first import, in every file
+  that uses type hints.
+- Import order: standard library, blank line, then everything else
+  (third-party and local) alphabetized by module name in one block —
+  `from X import Y` and `import Z` are sorted together, not grouped
+  separately by style. Example (`ws/src/mc_test_utils/mc_test_utils/bag_playback.py`):
+
+  ```python
+  from __future__ import annotations
+
+  from rclpy.serialization import deserialize_message
+  import rosbag2_py
+  from rosidl_runtime_py.utilities import get_message
+  ```
+
+- A module-level docstring citing the ticket/spec section, in the same
+  voice as the C++ [comment culture](#comment-culture-cite-the-ticket-state-the-boundary-flag-the-gap)
+  above — what the module does, which ticket/ICD section it implements, and
+  any gap notes (see `mc_test_utils/swarm_protocol.py`'s `PEER_STATE_REQUEST`
+  and byte-count gap notes for the pattern). No copyright header block like
+  the C++ two-liner — none of the existing `.py` files carry one.
+- Executables get a `#!/usr/bin/env python3` shebang line before the
+  docstring (see `mc_test_utils/mock_fcc_node.py`); importable modules with
+  no standalone entry point don't need one.
+- `snake_case` functions/methods/variables, `PascalCase` classes — standard
+  PEP 8, no project-specific deviation.
+
+New Python code should match whichever column above it belongs to: a new
+`ws/src/` package's `.py` files follow the ROS/flake8 conventions (and must
+add the same `ament_lint_auto`/`set(ament_cmake_copyright_FOUND TRUE)`
+`CMakeLists.txt` wiring as `mc_test_utils`, per
+[Linting and formatting](#linting-and-formatting) below); a new standalone
+`tools/` script follows the double-quote/type-hint style of
+`mission-orchestrator-sim` instead of introducing a third convention.
+
 ## Linting and formatting
 
 Every package's `CMakeLists.txt` wires `ament_lint_auto` into
 `BUILD_TESTING` — running `colcon test` runs `cpplint`, `uncrustify`,
 `lint_cmake`, and `xmllint` alongside the gtest suites, so a clean
-`colcon test-result` already means the style checks passed too. Two things
-every new package needs to carry over:
+`colcon test-result` already means the style checks passed too. A Python
+package (`ament_cmake_python` build type, e.g. `mc_test_utils`) picks up
+`flake8` and `pep257` from the same `ament_lint_auto` call instead — no
+separate wiring needed. Two things every new package needs to carry over:
 
 ```cmake
 if(BUILD_TESTING)
@@ -214,6 +265,34 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
   trailer if Claude Code produced the commit, matching every prior commit
   in this repo's history that it authored.
 
+## CI/CD (TEST-005)
+
+Three GitHub Actions workflows, `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | Every PR, every push to `main` | Builds `ros2-core` (cached), then `colcon build` + `colcon test` across all of `ws/src/*` — `ament_lint_auto` (cpplint/cppcheck/uncrustify/xmllint) rides along since it's already wired into every package's `BUILD_TESTING` block (see [Linting and formatting](#linting-and-formatting) above). Results post to the job's step summary and as a downloadable artifact. |
+| `nightly-sitl.yml` | Scheduled, nightly | Placeholder until `TEST-002`'s SITL harness exists (`docs/TESTING.md`'s TP-ST row) — documented no-op, not a faked pass. |
+| `release.yml` | Push of a `v*` tag | Builds every `docker/*/Dockerfile` that exists at tag time and pushes to `ghcr.io/drone-mc/<service>:<tag>` — the automated replacement for manually running the `scripts/NN-build-*-image.sh` chain and hand-pushing tags. |
+
+See `INTEGRATION-AND-FLIGHT-TEST-PLAN.md` §2 for the design rationale
+(runner architecture, caching strategy) behind `ci.yml` specifically.
+
+### Required manual setup: branch protection
+
+GitHub doesn't expose branch protection as YAML-in-repo, so this is a
+one-time manual step in repo settings, not something any workflow file can
+do:
+
+1. **Settings → Branches → Add branch protection rule** for `main`.
+2. Enable **"Require status checks to pass before merging"** and add
+   `ci.yml`'s job (`build-test-lint`) as a required check.
+3. Enable **"Require branches to be up to date before merging"** so a
+   stale PR can't merge on an outdated green run.
+
+Until this is done, `ci.yml` still runs and reports status, but a failing
+run does not actually block a merge — it's advisory only.
+
 ## Opening a PR
 
 No PR has landed here yet, but if you open one: give it the same
@@ -223,39 +302,9 @@ your PR spans multiple commits. Keep a PR scoped to one ticket, matching
 how commits are scoped today — resist bundling unrelated tickets into one
 PR just because they touched nearby files.
 
-Every PR and every push to `main` runs `.github/workflows/ci.yml`
-(TEST-005): build `ros2-core`, `colcon build`/`colcon test` the whole
-workspace, `ament_lint_auto`'s checks (already wired into that same
-`colcon test` run — see `docs/TESTING.md`). Check the PR's own checks tab
-and job summary for results rather than re-running things by hand.
-
-### One-time manual setup: branch protection on `main`
-
-GitHub doesn't expose branch-protection rules as a committed YAML file —
-this is a one-time step a repo admin does in the GitHub UI (or via `gh api`/
-Terraform, if this repo ever grows infra-as-code for its own settings), not
-something `.github/workflows/*.yml` can configure for itself:
-
-1. Repo **Settings → Branches → Add branch protection rule**, pattern `main`.
-2. Enable **Require status checks to pass before merging**, then add the
-   `build-test` check (the job name in `.github/workflows/ci.yml`) as a
-   required check. Also enable **Require branches to be up to date before
-   merging** so a stale PR can't merge on a check result from before a
-   since-landed regression on `main`.
-3. Enable **Require a pull request before merging** (so the check above
-   actually has something to gate — a direct push bypasses required
-   checks entirely).
-4. Leave the nightly SITL workflow (`.github/workflows/nightly-sitl.yml`)
-   and the release workflow (`.github/workflows/release.yml`) out of the
-   required-checks list — they're not part of the per-PR gate: nightly
-   runs on a schedule, and release only runs on a `v*` tag.
-
-Without this step, `ci.yml` still runs and reports a status on every PR,
-but GitHub will let a PR merge with a red check — the workflow file alone
-is the mechanism, this setting is what actually makes it a gate.
-
 ## Where to go next
 
 - Writing or running tests for your change: `docs/TESTING.md`.
 - Which topics/messages your change needs to wire up or update: `docs/API-REFERENCE.md`.
 - Ticket backlog and current delivery status: `PROJECT-PLAN-5-MONTH.md`.
+- Cutting a release / how the CI/CD pipeline works: [CI/CD (TEST-005)](#cicd-test-005) above and `docs/DEPLOYMENT.md`.
