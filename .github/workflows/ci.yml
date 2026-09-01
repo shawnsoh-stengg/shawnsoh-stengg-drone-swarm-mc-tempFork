@@ -139,7 +139,19 @@ jobs:
                 --event-handlers console_cohesion+
               source install/setup.bash
               set -u
-              colcon test --merge-install --event-handlers console_cohesion+
+              # px4_msgs is vendored upstream (docs/CONTRIBUTING.md's
+              # package.xml-conventions section), not one of the 7
+              # first-party packages this pipeline lints. Its own
+              # rosidl-generated-code cpplint check already blows past
+              # ament_cmake_test's 120s default under QEMU aarch64
+              # emulation on the CI runner; it's upstream's lint to carry,
+              # not a gate on this repo's own code. Still built above
+              # (fcc_bridge depends on it) — only its own test suite is
+              # skipped.
+              colcon test \
+                --merge-install \
+                --packages-skip px4_msgs \
+                --event-handlers console_cohesion+
               colcon test-result --all --verbose
             "
 
