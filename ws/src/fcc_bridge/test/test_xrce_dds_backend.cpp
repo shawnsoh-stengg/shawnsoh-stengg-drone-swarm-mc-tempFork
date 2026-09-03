@@ -93,7 +93,9 @@ protected:
       [this](px4_msgs::msg::VehicleCommand::SharedPtr msg) {last_command_ = msg;});
     sub_offboard_control_mode_ = node_->create_subscription<px4_msgs::msg::OffboardControlMode>(
       "/fmu/in/offboard_control_mode", px4_qos(),
-      [this](px4_msgs::msg::OffboardControlMode::SharedPtr msg) {last_offboard_control_mode_ = msg;});
+      [this](px4_msgs::msg::OffboardControlMode::SharedPtr msg) {
+        last_offboard_control_mode_ = msg;
+      });
     sub_trajectory_setpoint_ = node_->create_subscription<px4_msgs::msg::TrajectorySetpoint>(
       "/fmu/in/trajectory_setpoint", px4_qos(),
       [this](px4_msgs::msg::TrajectorySetpoint::SharedPtr msg) {last_trajectory_setpoint_ = msg;});
@@ -130,9 +132,10 @@ TEST_F(XrceDdsBackendTest, AggregatesLocalPositionIntoVehicleState)
   msg.xy_valid = true;
   msg.z_valid = true;
 
-  ASSERT_TRUE(spin_until(
-    node_, [&] {pub_local_pos_->publish(msg); return backend_->get_vehicle_state().xy_valid;},
-    std::chrono::seconds(3)));
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_local_pos_->publish(msg); return backend_->get_vehicle_state().xy_valid;},
+      std::chrono::seconds(3)));
 
   const auto state = backend_->get_vehicle_state();
   EXPECT_FLOAT_EQ(state.x, 1.5F);
@@ -149,9 +152,10 @@ TEST_F(XrceDdsBackendTest, AggregatesGlobalPositionIntoVehicleState)
   msg.lon = 103.8198;
   msg.alt = 55.0F;
 
-  ASSERT_TRUE(spin_until(
-    node_, [&] {pub_global_pos_->publish(msg); return backend_->get_vehicle_state().lat != 0.0;},
-    std::chrono::seconds(3)));
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_global_pos_->publish(msg); return backend_->get_vehicle_state().lat != 0.0;},
+      std::chrono::seconds(3)));
 
   const auto state = backend_->get_vehicle_state();
   EXPECT_DOUBLE_EQ(state.lat, 1.3521);
@@ -165,16 +169,18 @@ TEST_F(XrceDdsBackendTest, AggregatesArmingAndNavStateFromVehicleStatus)
   msg.arming_state = px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED;
   msg.nav_state = px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_MISSION;
 
-  ASSERT_TRUE(spin_until(
-    node_,
+  ASSERT_TRUE(
+    spin_until(
+      node_,
       [&] {
         pub_status_->publish(msg);
         return backend_->get_vehicle_state().arming_state ==
-               px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED;
-    },
-    std::chrono::seconds(3)));
+        px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED;
+      },
+      std::chrono::seconds(3)));
 
-  EXPECT_EQ(backend_->get_vehicle_state().nav_state,
+  EXPECT_EQ(
+    backend_->get_vehicle_state().nav_state,
     px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_MISSION);
 }
 
@@ -183,7 +189,8 @@ TEST_F(XrceDdsBackendTest, AggregatesBatteryRemaining)
   px4_msgs::msg::BatteryStatus msg{};
   msg.remaining = 0.42F;
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       node_, [&] {
         pub_battery_->publish(msg);
         return backend_->get_vehicle_state().battery_remaining > 0.0F;
@@ -205,9 +212,10 @@ TEST_F(XrceDdsBackendTest, IsLinkAliveFalseBeforeAnyMessageWithZeroTimeout)
 TEST_F(XrceDdsBackendTest, IsLinkAliveTrueAfterRecentMessage)
 {
   px4_msgs::msg::VehicleLocalPosition msg{};
-  ASSERT_TRUE(spin_until(
-    node_, [&] {pub_local_pos_->publish(msg); return backend_->is_link_alive(5.0);},
-    std::chrono::seconds(3)));
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_local_pos_->publish(msg); return backend_->is_link_alive(5.0);},
+      std::chrono::seconds(3)));
 }
 
 // FCC-006: XrceDdsBackend must forward MissionProtocolClient's bool result
@@ -224,9 +232,10 @@ TEST_F(XrceDdsBackendTest, SendCommandPublishesVehicleCommandWithAllParams)
 {
   std::array<float, 7> params{1, 2, 3, 4, 5, 6, 7};
 
-  ASSERT_TRUE(spin_until(
-    node_, [&] {backend_->send_command(400, params); return last_command_ != nullptr;},
-    std::chrono::seconds(3)));
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {backend_->send_command(400, params); return last_command_ != nullptr;},
+      std::chrono::seconds(3)));
 
   EXPECT_EQ(last_command_->command, 400U);
   EXPECT_FLOAT_EQ(last_command_->param1, 1.0F);
@@ -246,13 +255,14 @@ TEST_F(XrceDdsBackendTest, StreamOffboardSetpointPublishesControlModeAndTrajecto
   sp.z = -10.0F;
   sp.yaw = 0.75F;
 
-  ASSERT_TRUE(spin_until(
-    node_,
+  ASSERT_TRUE(
+    spin_until(
+      node_,
       [&] {
         backend_->stream_offboard_setpoint(sp);
         return last_offboard_control_mode_ != nullptr && last_trajectory_setpoint_ != nullptr;
-    },
-    std::chrono::seconds(3)));
+      },
+      std::chrono::seconds(3)));
 
   EXPECT_TRUE(last_offboard_control_mode_->position);
   EXPECT_FALSE(last_offboard_control_mode_->velocity);

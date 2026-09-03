@@ -1,0 +1,66 @@
+# Camera intrinsics and distortion (SDD-MC-001 §12.5, DEP-004).
+#
+# PLACEHOLDER — not from a real checkerboard calibration run. Each block
+# below is computed from the camera's published nominal specs rather than
+# measured, per DEP-004's "real or placeholder-but-documented" bar. Replace
+# with a real calibration (e.g. the ROS `camera_calibration` package) before
+# any test that depends on geolocation accuracy (VIS-004, SDD §9.2's
+# K^-1 x [u,v,1]^T projection) or gimbal-video framing accuracy.
+#
+# Schema: one entry per camera, in the standard ROS `camera_info` layout
+# (camera_matrix/distortion_coefficients as row-major flattened arrays) so
+# it can be loaded straight into `sensor_msgs/CameraInfo` by whichever node
+# ends up owning that (perception_down_node / perception_front_node,
+# VIS-003/VU-001 — not yet implemented, see DEP-008).
+
+perception_down_camera:
+  # IMX219 CSI-2 (HID-MC-001 §5, HIF-003), downward-facing, used by
+  # perception_down_node (VIS-003/004) for detection geolocation.
+  # Default capture mode is 1280x720 (HID-MC-001 §5.4).
+  # fx = fy computed as focal_length_mm / effective_pixel_size_mm, where
+  # effective_pixel_size scales the sensor's native 1.12 um pixel pitch by
+  # the 3280x2464 -> 1280x720 output ratio (3.04 mm lens, both values from
+  # the Raspberry Pi Camera Module v2 datasheet the IMX219 module uses):
+  #   effective_pixel_size = 0.00112 mm * (3280 / 1280) = 0.00287 mm
+  #   fx = fy = 3.04 / 0.00287 = 1059.2 px
+  # cx/cy assumed at the image center; zero distortion assumed (no lens
+  # distortion data published for this module).
+  camera_name: perception_down
+  image_width: 1280
+  image_height: 720
+  distortion_model: plumb_bob
+  camera_matrix:
+    rows: 3
+    cols: 3
+    data: [1059.2, 0.0, 640.0,
+           0.0, 1059.2, 360.0,
+           0.0, 0.0, 1.0]
+  distortion_coefficients:
+    rows: 1
+    cols: 5
+    data: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+perception_front_camera:
+  # Gimbal IP camera (HID-MC-001 §9, HIF-007), front-facing, used by
+  # perception_front_node (VU-001, video_downlink package). HID-MC-001
+  # only specifies resolution/frame rate (1920x1080 @ 30 FPS, §9.4) for
+  # this third-party unit -- no lens/sensor spec is published, so fx/fy
+  # here assume a 90-degree horizontal FOV (a common wide-angle gimbal
+  # camera default) rather than a datasheet focal length:
+  #   fx = fy = (image_width / 2) / tan(90 deg / 2) = 960 / 1.0 = 960.0 px
+  # This assumption is the first thing to fix once the real unit's spec
+  # sheet or a checkerboard calibration is available.
+  camera_name: perception_front
+  image_width: 1920
+  image_height: 1080
+  distortion_model: plumb_bob
+  camera_matrix:
+    rows: 3
+    cols: 3
+    data: [960.0, 0.0, 960.0,
+           0.0, 960.0, 540.0,
+           0.0, 0.0, 1.0]
+  distortion_coefficients:
+    rows: 1
+    cols: 5
+    data: [0.0, 0.0, 0.0, 0.0, 0.0]

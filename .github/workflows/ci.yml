@@ -56,33 +56,36 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       # AC: "build ... (or cache/reuse it — full rebuild on every PR is
-      # wasteful)". GitHub Actions cache backend (type=gha) caches
-      # buildx layers keyed on their own content, so an unchanged
-      # docker/ros2-core/Dockerfile / cyclonedds.xml reuses every layer
-      # instead of re-running the apt-get chain under emulation.
-      # mode=min (the default, not mode=max) — this is a single-stage
-      # image so there's no discarded builder-stage layer worth the extra
-      # local disk mode=max would stage before upload.
-      - name: Build ros2-core (cached)
-        uses: docker/build-push-action@v6
-        with:
-          context: docker/ros2-core
-          file: docker/ros2-core/Dockerfile
-          platforms: linux/arm64
-          tags: ros2-core:ci
-          load: true
-          cache-from: type=gha,scope=ros2-core
-          cache-to: type=gha,scope=ros2-core
-
-      # Free the buildx cache-export staging + apt layers now that
-      # ros2-core is loaded — same disk-pressure reasoning as the "Free
-      # disk space" step above, just after the biggest single consumer.
-      - name: Prune docker build cache
-        run: docker builder prune -af || true
+      # wasteful)". This was originally a docker/build-push-action step
+      # using the docker-container buildx driver with `load: true` +
+      # `cache-to: type=gha` — that driver builds the image, exports it
+      # to an OCI tarball, then re-imports it into the daemon, so at peak
+      # it holds ~3 copies of this image (build cache + tarball +
+      # imported layers) at once. dustynv/ros:humble-ros-base-l4t-r36.3.0
+      # is a full Jetson L4T/CUDA/TensorRT userland image (single layers
+      # up to 3.48GB), not a small ROS image, and that tripled peak
+      # blew straight through the runner's disk mid-import ("no space
+      # left on device" writing libnvinfer_static.a). Plain `docker build`
+      # uses the default (non-container) buildx driver, which builds
+      # directly into the daemon's own image store — one copy, no
+      # export/import round trip. The trade-off: the default driver
+      # doesn't support the `type=gha` cache exporter, so this no longer
+      # caches our own apt-get layer across runs — acceptable here since
+      # every run is a fresh ephemeral VM anyway, so the dominant cost
+      # (pulling/extracting the ~6.5GB compressed base image itself) is
+      # re-paid every run regardless of whether our thin layer on top was
+      # cached. "Reuse" is still satisfied within a run: this same
+      # ros2-core:ci is what both the colcon build/test step and the
+      # summary step below run against, nothing rebuilds it twice.
+      - name: Build ros2-core
+        run: |
+          docker build \
+            --platform linux/arm64 \
+            --tag ros2-core:ci \
+            --file docker/ros2-core/Dockerfile \
+            docker/ros2-core
+          docker builder prune -af || true
 
       # fcc_bridge depends on px4_msgs (SDD-MC-001 §3), which is one of the
       # 7 first-party packages' dependencies but is fetched via
@@ -97,6 +100,21 @@ jobs:
         run: |
           pip install --user vcstool
           ~/.local/bin/vcs import --skip-existing ws/src < ws/px4_msgs.repos
+
+      # docker/ros2-core/cyclonedds.xml hard-requires a >=10MB socket receive
+      # buffer (SocketReceiveBufferSize min="10MB", tuned for the Jetson
+      # production host). net.core.rmem_max/wmem_max are global (non-
+      # namespaced) sysctls, so containers inherit whatever the runner VM's
+      # kernel allows — ubuntu-latest defaults to ~2MB, well under that
+      # minimum. CycloneDDS then fails outright rather than just warning
+      # ("failed to increase socket receive buffer size ... rmw_create_node:
+      # failed to create domain"), which fails every test that constructs an
+      # rclcpp::Node. Raise the ceiling on the host before any container
+      # creates a DDS participant.
+      - name: Raise socket buffer limits for CycloneDDS
+        run: |
+          sudo sysctl -w net.core.rmem_max=16777216
+          sudo sysctl -w net.core.wmem_max=16777216
 
       # Whole-workspace build + test inside ros2-core, matching
       # docs/TESTING.md's "Native package development" recipe (colcon
@@ -115,13 +133,25 @@ jobs:
             bash -c "
               set -eo pipefail
               source /opt/ros/humble/install/setup.bash
-              set -u
               colcon build \
                 --merge-install \
                 --cmake-args -DCMAKE_BUILD_TYPE=Release \
                 --event-handlers console_cohesion+
               source install/setup.bash
-              colcon test --merge-install --event-handlers console_cohesion+
+              set -u
+              # px4_msgs is vendored upstream (docs/CONTRIBUTING.md's
+              # package.xml-conventions section), not one of the 7
+              # first-party packages this pipeline lints. Its own
+              # rosidl-generated-code cpplint check already blows past
+              # ament_cmake_test's 120s default under QEMU aarch64
+              # emulation on the CI runner; it's upstream's lint to carry,
+              # not a gate on this repo's own code. Still built above
+              # (fcc_bridge depends on it) — only its own test suite is
+              # skipped.
+              colcon test \
+                --merge-install \
+                --packages-skip px4_msgs \
+                --event-handlers console_cohesion+
               colcon test-result --all --verbose
             "
 

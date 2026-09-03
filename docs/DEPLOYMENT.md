@@ -315,19 +315,24 @@ journalctl -u drone-mc-fcc-bridge -f
 MC_VERSION=1.0.0   # then restart the target
 ```
 
-Producing the `ghcr.io/drone-mc/<service>:${MC_VERSION}` images themselves
-is no longer a manual `scripts/NN-build-*-image.sh` chain + hand-pushed
-tags — pushing a `v1.0.0` git tag runs `.github/workflows/release.yml`
-(TEST-005), which builds every `docker/*/Dockerfile` that exists at that
-point and pushes each to `ghcr.io/drone-mc/<service>:1.0.0`. The
-`MC_VERSION=1.0.0` step above (setting which already-published tag a given
-drone runs) is unchanged — that's a per-drone deploy choice, not part of
-building the images.
-
 `scripts/02b-smoke-test-units.sh` verifies units/target/slices are
 installed, valid, and enabled without starting anything real;
 `LIVE_CHECK=1 ./scripts/02b-smoke-test-units.sh` additionally does a real
 boot test. See `docs/TESTING.md` for the full TP-SM smoke-test picture.
+
+## Cutting a release (TEST-005)
+
+Pushing a `v*` tag (e.g. `v1.0.0`) triggers `.github/workflows/release.yml`,
+which builds every `docker/*/Dockerfile` that exists at that point and
+pushes each to `ghcr.io/drone-mc/<service>:<tag>` — the same
+`ghcr.io/drone-mc/<service>:${MC_VERSION}` naming the systemd units above
+already reference. This replaces manually running the numbered
+`scripts/NN-build-*-image.sh` chain and hand-pushing tags; those scripts
+still work for a local/dev build (see `CLAUDE.md`'s Build System section),
+they're just no longer the release path. Set `MC_VERSION` on each drone to
+the tag pushed and restart `drone-mc.target` to roll it out. See
+`docs/CONTRIBUTING.md`'s [CI/CD (TEST-005)](CONTRIBUTING.md#cicd-test-005)
+section for the other two workflows (`ci.yml`, `nightly-sitl.yml`).
 
 ## Where to go next
 
