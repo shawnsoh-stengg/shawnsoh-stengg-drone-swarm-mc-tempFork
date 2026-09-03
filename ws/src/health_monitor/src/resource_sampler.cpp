@@ -61,7 +61,7 @@ std::optional<std::string> run_command_first_line(const std::string & command)
 // blocks f_bfree).
 std::optional<uint8_t> statvfs_disk_pct(const std::string & path)
 {
-  struct statvfs vfs {};
+  struct statvfs vfs{};
   if (::statvfs(path.c_str(), &vfs) != 0 || vfs.f_blocks == 0) {
     return std::nullopt;
   }

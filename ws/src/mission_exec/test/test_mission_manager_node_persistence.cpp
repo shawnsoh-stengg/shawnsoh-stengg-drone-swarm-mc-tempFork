@@ -120,7 +120,7 @@ protected:
       {
         rclcpp::Parameter("control_loop_period_s", 0.02),
         rclcpp::Parameter("mission_upload_path", path_),
-      });
+    });
     return opts;
   }
 
@@ -134,15 +134,13 @@ TEST_F(MissionManagerNodePersistenceTest, GcsUploadIsPersistedToDisk)
   auto pub_mission_upload = harness->create_publisher<mc_msgs::msg::MissionUpload>(
     "/mc/gcs/mission_upload", rclcpp::QoS(10));
 
-  ASSERT_TRUE(
-    spin_until(
+  ASSERT_TRUE(spin_until(
       {node, harness}, [&] {return pub_mission_upload->get_subscription_count() > 0;},
-      std::chrono::seconds(2)));
+    std::chrono::seconds(2)));
 
   pub_mission_upload->publish(full_mission_upload(*harness));
 
-  ASSERT_TRUE(
-    spin_until(
+  ASSERT_TRUE(spin_until(
       {node, harness}, [&] {
         std::ifstream f(path_);
         return f.good();
@@ -168,13 +166,11 @@ TEST_F(MissionManagerNodePersistenceTest, RestartedNodeReloadsUploadAndArmsWitho
     auto pub_mission_upload = harness->create_publisher<mc_msgs::msg::MissionUpload>(
       "/mc/gcs/mission_upload", rclcpp::QoS(10));
 
-    ASSERT_TRUE(
-      spin_until(
+    ASSERT_TRUE(spin_until(
         {node, harness}, [&] {return pub_mission_upload->get_subscription_count() > 0;},
-        std::chrono::seconds(2)));
+      std::chrono::seconds(2)));
     pub_mission_upload->publish(full_mission_upload(*harness));
-    ASSERT_TRUE(
-      spin_until(
+    ASSERT_TRUE(spin_until(
         {node, harness}, [&] {
           std::ifstream f(path_);
           return f.good();
@@ -191,23 +187,21 @@ TEST_F(MissionManagerNodePersistenceTest, RestartedNodeReloadsUploadAndArmsWitho
     "/mc/mission_phase", rclcpp::QoS(10),
     [](mc_msgs::msg::MissionPhase::SharedPtr) {});
 
-  ASSERT_TRUE(
-    spin_until(
+  ASSERT_TRUE(spin_until(
       {node2, harness2}, [&] {return pub_vehicle_state->get_subscription_count() > 0;},
-      std::chrono::seconds(2)));
+    std::chrono::seconds(2)));
 
   // Deliberately no /mc/gcs/mission_upload publish to node2 — the only
   // mission upload it ever sees comes from load_mission_upload() in its own
   // constructor, per the SDD §4.5 acceptance criterion.
   pub_vehicle_state->publish(good_vehicle_state(*harness2));
 
-  ASSERT_TRUE(
-    spin_until(
+  ASSERT_TRUE(spin_until(
       {node2, harness2},
       [&] {return node2->current_phase() == mission_exec::Phase::ARMING;},
       std::chrono::seconds(2)))
     << "node2 never reached ARMING — reloaded mission_upload_/arm_authorised_ "
-    "were not applied at startup";
+       "were not applied at startup";
 }
 
 }  // namespace

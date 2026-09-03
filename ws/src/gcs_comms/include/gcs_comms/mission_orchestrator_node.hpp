@@ -137,9 +137,7 @@ private:
     kActiveRead,  // synthetic "/_active" read session — no real fd (ICD §12.3)
   };
 
-  FtpError ftp_dispatch(
-    const FtpHeader & hdr, const uint8_t * data, uint8_t & out_size,
-    uint8_t * out_data);
+  FtpError ftp_dispatch(const FtpHeader & hdr, const uint8_t * data, uint8_t & out_size, uint8_t * out_data);
   FtpError ftp_list_directory(uint32_t entry_offset, uint8_t & out_size, uint8_t * out_data);
   FtpError ftp_open(
     const std::string & virtual_path, bool for_write, bool create_only, uint8_t & out_size,
@@ -159,8 +157,7 @@ private:
     const sockaddr_in & to);
 
   bool resolve_plan_path(
-    const std::string & virtual_path, std::string & out_full_path,
-    std::string & out_filename) const;
+    const std::string & virtual_path, std::string & out_full_path, std::string & out_filename) const;
 
   // Normal completion (TerminateSession on a write session): truncates to
   // the final written length (ICD §12.3 "Update" row) then validates the
@@ -183,9 +180,7 @@ private:
     kActivateRejectedNotFound = 2,
     kActivateRejectedPhase = 3,
   };
-  ActivateResult load_and_activate_plan(
-    const std::string & filename,
-    mc_msgs::msg::MissionUpload & out_msg);
+  ActivateResult load_and_activate_plan(const std::string & filename, mc_msgs::msg::MissionUpload & out_msg);
   bool parse_plan_json(const std::string & full_path, mc_msgs::msg::MissionUpload & out_msg) const;
   void on_mission_phase(const mc_msgs::msg::MissionPhase::SharedPtr msg);
 
