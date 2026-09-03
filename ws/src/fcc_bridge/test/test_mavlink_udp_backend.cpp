@@ -151,8 +151,7 @@ protected:
     mavlink_global_position_int_t pos{};
     mavlink_msg_global_position_int_encode(1, 1, &msg, &pos);
     send_frame(fcc_.fd(), backend_addr_, msg);
-    ASSERT_TRUE(
-      wait_until(
+    ASSERT_TRUE(wait_until(
         [&] {return backend_->get_vehicle_state().xy_valid;}, std::chrono::seconds(3)));
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
@@ -176,8 +175,7 @@ TEST_F(MavlinkUdpBackendTest, AggregatesGlobalPositionIntIntoVehicleState)
   pos.hdg = 9000;               // 90 deg, cdeg
   mavlink_msg_global_position_int_encode(1, 1, &msg, &pos);
 
-  ASSERT_TRUE(
-    wait_until(
+  ASSERT_TRUE(wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().xy_valid;
@@ -201,8 +199,7 @@ TEST_F(MavlinkUdpBackendTest, AggregatesAttitudeEulerAsQuaternion)
   att.yaw = static_cast<float>(M_PI / 2.0);  // 90 deg about Z
   mavlink_msg_attitude_encode(1, 1, &msg, &att);
 
-  ASSERT_TRUE(
-    wait_until(
+  ASSERT_TRUE(wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         const auto q = backend_->get_vehicle_state().q;
@@ -224,8 +221,7 @@ TEST_F(MavlinkUdpBackendTest, AggregatesBatteryRemainingAsFraction)
   batt.battery_remaining = 42;  // percent
   mavlink_msg_battery_status_encode(1, 1, &msg, &batt);
 
-  ASSERT_TRUE(
-    wait_until(
+  ASSERT_TRUE(wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().battery_remaining > 0.0F;
@@ -346,9 +342,8 @@ TEST_F(MavlinkUdpBackendTest, UploadMissionCompletesFullHandshakeOverSharedSocke
         send_frame(fcc_.fd(), backend_addr_, req_msg);
 
         mavlink_message_t item_msg;
-        if (!recv_frame(
-          fcc_.fd(), 2.0,
-          item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+        if (!recv_frame(fcc_.fd(), 2.0,
+        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
         {
           return;
         }
@@ -395,9 +390,8 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
   std::thread mock_fcc([&] {
       mock_ready = true;
       mavlink_message_t msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
+      if (!recv_frame(fcc_.fd(), 2.0,
+      msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
       {
         return;
       }
@@ -408,9 +402,8 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
       send_frame(fcc_.fd(), backend_addr_, req_msg);
 
       mavlink_message_t item_msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+      if (!recv_frame(fcc_.fd(), 2.0,
+      item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
       {
         return;
       }
