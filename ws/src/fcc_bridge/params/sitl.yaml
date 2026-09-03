@@ -1,0 +1,16 @@
+# fcc_bridge_node — SITL param overrides (SDD-MC-001 §2.4, DEP-004).
+#
+# Backend *selection* (SIMULATION_MODE -> MavlinkUdpBackend) and that
+# backend's own connection settings (SITL_FCC_PORT, FCC_MISSION_PORT,
+# FCC_TRANSPORT, FCC_SERIAL_DEVICE/BAUD) are env vars read directly by
+# factory.cpp/mavlink_udp_backend.cpp/xrce_dds_backend.cpp (see
+# config/environment) — fcc_bridge_node itself only declares the two ROS
+# params below, so those are the only ones this override file can affect.
+fcc_bridge_node:
+  ros__parameters:
+    vehicle_state_rate_hz: 10.0
+    # PX4 SITL's UDP link (Gazebo, loopback or bridged) sees more jitter
+    # than the real Pixhawk's wired ttyTHS1 serial link. Relaxed vs.
+    # default.yaml's 1.0 s so ordinary SITL scheduling jitter doesn't trip
+    # a spurious FCC_LINK_LOST fault (FR-015) during test runs.
+    link_timeout_s: 3.0
