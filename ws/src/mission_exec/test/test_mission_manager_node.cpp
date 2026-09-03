@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <thread>
@@ -90,6 +91,19 @@ class MissionManagerNodeTest : public ::testing::Test
 protected:
   void SetUp() override
   {
+    // Each test gets its own mission-upload persistence file rather than
+    // the production default (/var/drone-mc/mission_upload.yaml) — that
+    // default is shared by every TEST_F in this binary, so a mission
+    // upload one test's node persists to disk would otherwise be reloaded
+    // by the next test's node constructor, silently pre-arming it and
+    // pre-populating mission_upload_/arm_authorised_ before the test body
+    // runs a single publish. Mirrors test_mission_manager_node_
+    // persistence.cpp's own per-test TempDir() path.
+    mission_upload_path_ = ::testing::TempDir() + "mission_manager_node_test_" +
+      ::testing::UnitTest::GetInstance()->current_test_info()->name() + ".yaml";
+    std::remove(mission_upload_path_.c_str());
+    std::remove((mission_upload_path_ + ".tmp").c_str());
+
     rclcpp::NodeOptions opts;
     opts.parameter_overrides(
     {
@@ -101,6 +115,7 @@ protected:
       rclcpp::Parameter("takeoff_altitude_tolerance_m", 1.0),
       rclcpp::Parameter("waypoint_acceptance_radius_m", 3.0),
       rclcpp::Parameter("home_position_tolerance_m", 3.0),
+      rclcpp::Parameter("mission_upload_path", mission_upload_path_),
     });
     node_ = std::make_shared<mission_exec::MissionManagerNode>(opts);
     harness_ = std::make_shared<rclcpp::Node>("mission_manager_node_test_harness");
@@ -156,6 +171,8 @@ protected:
   {
     node_.reset();
     harness_.reset();
+    std::remove(mission_upload_path_.c_str());
+    std::remove((mission_upload_path_ + ".tmp").c_str());
   }
 
   mc_msgs::msg::VehicleState good_vehicle_state() const
@@ -269,6 +286,7 @@ protected:
     ASSERT_TRUE(spin_until({node_, harness_}, reached, std::chrono::seconds(2)));
   }
 
+  std::string mission_upload_path_;
   std::shared_ptr<mission_exec::MissionManagerNode> node_;
   rclcpp::Node::SharedPtr harness_;
 
