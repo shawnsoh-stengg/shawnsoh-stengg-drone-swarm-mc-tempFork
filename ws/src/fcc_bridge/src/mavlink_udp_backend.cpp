@@ -26,6 +26,15 @@ std::string env_or(const char * name, const std::string & fallback)
 constexpr uint8_t kCompIdOnboardComputer = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
 constexpr uint8_t kTargetSystem = 1;              // PX4 SITL default system ID
 constexpr uint8_t kTargetComponent = 1;           // PX4 SITL default component ID
+constexpr uint8_t kArmingStateStandby = 1;  // ICD-MC-001 §10.2
+constexpr uint8_t kArmingStateArmed = 2;    // ICD-MC-001 §10.2
+
+// mc_msgs/VehicleState.msg's own documented gnss_ok definition: "fix_type
+// >= 3 AND hdop < threshold". 2.0 matches ICD-MC-001 §10.8's GNSS_DEGRADED
+// fault trigger ("GNSS fix lost or HDOP > 2.0"), the only other place this
+// project already draws the same line.
+constexpr uint8_t kGnssFixType3d = 3;
+constexpr float kGnssHdopOkThreshold = 2.0F;
 
 uint8_t drone_id()
 {
@@ -120,6 +129,15 @@ void MavlinkUdpBackend::dispatch(const mavlink_message_t & msg)
     case MAVLINK_MSG_ID_BATTERY_STATUS:
       handle_battery_status(msg);
       break;
+    case MAVLINK_MSG_ID_LOCAL_POSITION_NED:
+      handle_local_position_ned(msg);
+      break;
+    case MAVLINK_MSG_ID_HEARTBEAT:
+      handle_heartbeat(msg);
+      break;
+    case MAVLINK_MSG_ID_GPS_RAW_INT:
+      handle_gps_raw_int(msg);
+      break;
     default:
       // Includes mission-protocol replies arriving outside an active
       // handshake (nothing is waiting for them) — dropped, matching
@@ -200,6 +218,59 @@ void MavlinkUdpBackend::handle_battery_status(const mavlink_message_t & msg)
     // confirms the fraction convention).
     state_.battery_remaining = static_cast<float>(batt.battery_remaining) / 100.0F;
   }
+  state_.stamp = node_->now();
+  last_fcc_msg_time_ = state_.stamp;
+}
+
+void MavlinkUdpBackend::handle_local_position_ned(const mavlink_message_t & msg)
+{
+  mavlink_local_position_ned_t pos{};
+  mavlink_msg_local_position_ned_decode(&msg, &pos);
+
+  std::scoped_lock lock(state_mtx_);
+  // Already NED meters, matching VehicleState.x/y/z's own documented frame
+  // exactly -- unlike GLOBAL_POSITION_INT's geodetic fields, no scaling.
+  state_.x = pos.x;
+  state_.y = pos.y;
+  state_.z = pos.z;
+  state_.xy_valid = true;
+  state_.z_valid = true;
+  state_.stamp = node_->now();
+  last_fcc_msg_time_ = state_.stamp;
+}
+
+void MavlinkUdpBackend::handle_heartbeat(const mavlink_message_t & msg)
+{
+  mavlink_heartbeat_t hb{};
+  mavlink_msg_heartbeat_decode(&msg, &hb);
+
+  std::scoped_lock lock(state_mtx_);
+  // MAV_MODE_FLAG_SAFETY_ARMED (bit 7, value 128) is standard across every
+  // MAVLink-compliant autopilot -- unlike nav_state, arming has a real
+  // standard-dialect bit to read instead of needing PX4-specific decode.
+  state_.arming_state = ((hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0) ?
+    kArmingStateArmed : kArmingStateStandby;
+  state_.stamp = node_->now();
+  last_fcc_msg_time_ = state_.stamp;
+}
+
+void MavlinkUdpBackend::handle_gps_raw_int(const mavlink_message_t & msg)
+{
+  mavlink_gps_raw_int_t gps{};
+  mavlink_msg_gps_raw_int_decode(&msg, &gps);
+
+  std::scoped_lock lock(state_mtx_);
+  state_.fix_type = gps.fix_type;
+  // eph/epv are HDOP/VDOP * 100, UINT16_MAX (65535) = unknown (MAVLink
+  // common.xml) -- left at 0.0F (already gnss_ok=false's default) rather
+  // than a nonsense 655.35 when unknown.
+  if (gps.eph != UINT16_MAX) {
+    state_.hdop = static_cast<float>(gps.eph) / 100.0F;
+  }
+  if (gps.epv != UINT16_MAX) {
+    state_.vdop = static_cast<float>(gps.epv) / 100.0F;
+  }
+  state_.gnss_ok = gps.fix_type >= kGnssFixType3d && state_.hdop < kGnssHdopOkThreshold;
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
 }

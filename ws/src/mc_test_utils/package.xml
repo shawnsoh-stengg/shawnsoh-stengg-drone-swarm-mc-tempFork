@@ -8,7 +8,11 @@
     fixtures and the four hardware-facing mock nodes TP-MC-001 §2.4
     specifies (mock_fcc_node, mock_camera_node, mock_peer_node,
     mock_gcs_node), so node-integration tests can run against realistic
-    hardware-facing inputs without real hardware (TEST-001).
+    hardware-facing inputs without real hardware (TEST-001). Also carries
+    mock_swarm_coord_node, a TP-ST (SITL) system-test double for the
+    not-yet-implemented swarm-coordination subsystem (TEST-002), and
+    mavlink_gcs_client, a reusable GCS-side MAVLink protocol driver for
+    the mission upload/command sequences a SITL scenario needs.
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>
@@ -20,9 +24,11 @@
   <depend>mc_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>rosbag2_py</depend>
   <depend>rosidl_runtime_py</depend>
+  <depend>python3-yaml</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
@@ -32,6 +38,8 @@
   <test_depend>launch_testing</test_depend>
   <test_depend>launch_testing_ros</test_depend>
   <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>geographic_msgs</test_depend>
+  <test_depend>gcs_comms</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

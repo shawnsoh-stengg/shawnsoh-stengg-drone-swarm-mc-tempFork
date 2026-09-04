@@ -201,7 +201,8 @@ std::optional<uint8_t> parse_cgroup_mem_pct(
     if (max_bytes == 0) {
       return std::nullopt;
     }
-    return clamp_to_pct(100.0 * static_cast<double>(current_bytes) / static_cast<double>(max_bytes));
+    return clamp_to_pct(
+      100.0 * static_cast<double>(current_bytes) / static_cast<double>(max_bytes));
   } catch (const std::exception &) {
     return std::nullopt;
   }

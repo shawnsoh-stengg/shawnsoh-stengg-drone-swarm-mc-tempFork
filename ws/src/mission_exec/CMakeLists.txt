@@ -80,6 +80,10 @@ install(
   DIRECTORY params/
   DESTINATION share/${PROJECT_NAME}/params
 )
+install(
+  DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -111,6 +115,13 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_search_planner_node test/test_search_planner_node.cpp)
   target_link_libraries(test_search_planner_node search_planner_node_lib)
+
+  # TEST-002: SITL system-test scenarios (TP-ST). Requires PX4_DIR (a built
+  # PX4-Autopilot checkout, TP-MC-001 §3.2) -- generate_test_description()
+  # raises a clear error and this test fails fast if it's unset/invalid,
+  # rather than silently skipping, so a CI misconfiguration is loud.
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_sitl_mission_scenarios.py)
 endif()
 
 ament_package()

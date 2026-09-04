@@ -44,6 +44,16 @@ struct VehicleState
   uint8_t arming_state{0};
   uint8_t nav_state{0};
 
+  // GNSS quality (TEST-002 addition -- see mavlink_udp_backend.hpp's
+  // handle_gps_raw_int() doc comment for why this was missing before).
+  // fix_type/hdop/vdop default to "no fix"/"unknown" until a real
+  // GPS_RAW_INT arrives, matching mc_msgs/VehicleState.msg's own
+  // documented gnss_ok semantics (fix_type >= 3 AND hdop < threshold).
+  uint8_t fix_type{0};
+  float hdop{0.0F};
+  float vdop{0.0F};
+  bool gnss_ok{false};
+
   // See note in XrceDdsBackend::on_vehicle_status — stock PX4 v1.14
   // VehicleStatus has no failure_detector_status field; this is
   // currently populated from vehicle_status.failsafe as a placeholder

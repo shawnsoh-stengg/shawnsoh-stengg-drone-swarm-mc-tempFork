@@ -35,16 +35,28 @@ TP-SM  Smoke Tests         Bash scripts               Deployment validation afte
   already had it and is not being migrated retroactively — new TP-NI
   coverage for a node under test should use `mc_test_utils`'s mocks and the
   `launch_testing` pattern instead, per the example tests.
-- 🧭 **TP-ST** and **TP-HW** — designed only. No PX4 SITL harness and no CI
-  pipeline wiring the `TP-SM → TP-UT → TP-NI → TP-ST` sequence (§2.1) exist
-  in this repo yet. Two of `TP-MC-001.md` §3.4's seven named fixtures now
-  exist (`mc_test_utils/test_data/bags/fcc_nominal`, `camera_outdoor` —
-  synthetic, built for TP-NI, see below); the other five
-  (`gnss_lost.bag`, `search_polygon_500m.json`, `mission_upload_3drone.yaml`,
-  `detection_ground_truth.json`, `gimbal_outdoor.mp4`) are TP-ST/TP-HW-only
-  and still don't exist. `ros2 launch mission_exec
-  sitl_mission_test.launch.py` in `CLAUDE.md` is the intended entry point
-  once TP-ST lands.
+- ✅🧭 **TP-ST** — partially real (TEST-002, 2026-09-04): a real PX4 SITL
+  instance + the actual `fcc_bridge_node`/`gcs_mavlink_node`/
+  `mission_manager_node`/`search_planner_node`/`health_monitor_node`
+  binaries, driven over real MAVLink
+  (`ws/src/mission_exec/test/test_sitl_mission_scenarios.py`,
+  `ros2 launch mission_exec sitl_mission_test.launch.py` for manual runs).
+  Verified live: PREFLIGHT→ARMING→TAKEOFF (3 real phase transitions) plus
+  the FCC-link-loss, low-battery, and GCS-link-loss failsafes all pass for
+  real. INGRESS onward is blocked by a real, separate PX4 mission-protocol
+  defect this suite itself discovered (not a harness gap) — those test
+  methods exist but are `@unittest.skip`'d with the specific reason; see
+  `PROJECT-PLAN-5-MONTH.md`'s TEST-002 entry for the full writeup,
+  including 2 other real bugs (one safety-relevant) found and fixed in
+  `fcc_bridge`/`health_monitor` along the way. `nightly-sitl.yml` runs this
+  suite nightly (TP-MC-001 §2.3) but hasn't had a first real watched run
+  yet. `mc_test_utils/test_data/mission_upload_3drone.yaml` (one of
+  `TP-MC-001.md` §3.4's seven named fixtures) now exists alongside
+  `fcc_nominal`/`camera_outdoor`; the remaining four (`gnss_lost.bag`,
+  `search_polygon_500m.json`, `detection_ground_truth.json`,
+  `gimbal_outdoor.mp4`) are still TP-ST/TP-HW-only and don't exist yet.
+- 🧭 **TP-HW** — designed only, no hardware-in-the-loop harness exists in
+  this repo yet.
 
 ## Running tests
 

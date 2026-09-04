@@ -444,6 +444,48 @@ TEST(HealthMonitorNode, LowBatteryPublishesFaultWithoutCommandingFcc)
   EXPECT_TRUE(harness->commands.empty());
 }
 
+// TEST-002: fcc_bridge's battery_pct=-1.0 "unknown" sentinel (published
+// legitimately for the first few /mc/fcc/vehicle_state messages after any
+// backend (re)start, before a real BATTERY_STATUS sample arrives) must not
+// read as "critically low" -- confirmed live against a real PX4 SITL
+// instance to cause a spurious immediate LOW_BATTERY/auto-RTL otherwise.
+TEST(HealthMonitorNode, UnknownBatterySentinelDoesNotTriggerLowBattery)
+{
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
+  auto harness = std::make_shared<FailsafeHarness>(
+    "health_monitor_node_test_harness_battery_unknown");
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {
+        return harness->vehicle_state_pub->get_subscription_count() > 0 && harness->ready();
+      }, std::chrono::seconds(2)));
+
+  mc_msgs::msg::VehicleState unknown_state;
+  unknown_state.fcc_link_ok = true;
+  unknown_state.battery_pct = -1.0F;  // fcc_bridge::VehicleState::battery_remaining's default
+  harness->vehicle_state_pub->publish(unknown_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(200));
+  EXPECT_TRUE(harness->faults.empty());
+
+  // A subsequent real, genuinely low reading still fires normally --
+  // confirms this isn't just permanently suppressing LOW_BATTERY outright.
+  mc_msgs::msg::VehicleState low_state;
+  low_state.fcc_link_ok = true;
+  low_state.battery_pct = 0.1F;
+  harness->vehicle_state_pub->publish(low_state);
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  node->sample_and_publish();
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::LOW_BATTERY);
+}
+
 // HEALTH-003: MC_CMD_GCS_OVERRIDE (ICD §4.5/§10.5, cmd=50004) with
 // OVERRIDE_LOW_BATTERY_RTL active suppresses the RTL -- a FaultEvent still
 // notifies the GCS (ACTION_NONE), but no FccCommand is sent.
