@@ -181,11 +181,53 @@ std::optional<uint8_t> max_thermal_zone_temp_c(
   return clamp_to_pct(static_cast<double>(*max_millidegrees) / 1000.0);
 }
 
+std::optional<uint8_t> parse_cgroup_mem_pct(
+  const std::string & current_contents, const std::string & max_contents)
+{
+  std::string trimmed_max = max_contents;
+  while (!trimmed_max.empty() &&
+    std::isspace(static_cast<unsigned char>(trimmed_max.back())))
+  {
+    trimmed_max.pop_back();
+  }
+  if (trimmed_max == "max") {
+    // No cap configured -- nothing to compute a percentage-of-cap against.
+    return std::nullopt;
+  }
+
+  try {
+    const uint64_t current_bytes = std::stoull(current_contents);
+    const uint64_t max_bytes = std::stoull(trimmed_max);
+    if (max_bytes == 0) {
+      return std::nullopt;
+    }
+    return clamp_to_pct(100.0 * static_cast<double>(current_bytes) / static_cast<double>(max_bytes));
+  } catch (const std::exception &) {
+    return std::nullopt;
+  }
+}
+
+std::optional<uint8_t> read_cgroup_mem_pct(
+  const std::string & current_path, const std::string & max_path)
+{
+  const std::optional<std::string> current_contents = read_file_to_string(current_path);
+  const std::optional<std::string> max_contents = read_file_to_string(max_path);
+  if (!current_contents.has_value() || !max_contents.has_value()) {
+    return std::nullopt;
+  }
+  return parse_cgroup_mem_pct(*current_contents, *max_contents);
+}
+
 ResourceSampler::ResourceSampler(ResourceSamplerConfig config)
 : config_(std::move(config)),
   disk_usage_provider_(statvfs_disk_pct),
   gpu_temp_line_provider_(
-    [this]() {return run_command_first_line(config_.gpu_temp_command);})
+    [this]() {return run_command_first_line(config_.gpu_temp_command);}),
+  vision_mem_pct_provider_(
+    [this]() {
+      return read_cgroup_mem_pct(
+        config_.vision_cgroup_memory_current_path, config_.vision_cgroup_memory_max_path);
+    })
 {
 }
 
@@ -199,6 +241,17 @@ void ResourceSampler::set_gpu_temp_line_provider(
   std::function<std::optional<std::string>()> provider)
 {
   gpu_temp_line_provider_ = std::move(provider);
+}
+
+void ResourceSampler::set_vision_mem_pct_provider(
+  std::function<std::optional<uint8_t>()> provider)
+{
+  vision_mem_pct_provider_ = std::move(provider);
+}
+
+std::optional<uint8_t> ResourceSampler::sample_vision_mem_pct()
+{
+  return vision_mem_pct_provider_();
 }
 
 void ResourceSampler::sample(mc_msgs::msg::SystemHealth & out)

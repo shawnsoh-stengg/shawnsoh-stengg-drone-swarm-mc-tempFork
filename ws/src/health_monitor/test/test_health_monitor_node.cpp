@@ -616,3 +616,91 @@ TEST(HealthMonitorNode, GpuOvertempThrottlesInferenceAndDoesNotRefire)
   EXPECT_EQ(harness->faults.size(), 1u);
   EXPECT_EQ(harness->status_texts.size(), 1u);
 }
+
+// INFRA-007: VISION_MEM_HIGH is time-windowed, not edge-on-first-sample --
+// it must not fire until usage has stayed at/above threshold continuously
+// for vision_mem_sustained_s.
+TEST(HealthMonitorNode, VisionMemHighDoesNotFireBeforeSustainedWindowElapses)
+{
+  rclcpp::NodeOptions opts;
+  opts.parameter_overrides(
+    {rclcpp::Parameter("vision_mem_sustained_s", 30.0)});  // real default, not shrunk
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>(opts);
+  node->resource_sampler().set_vision_mem_pct_provider(
+    [] {return std::optional<uint8_t>(95);});  // >= 80% threshold
+
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_vision_mem_1");
+  ASSERT_TRUE(
+    spin_until({node, harness->node}, [&] {return harness->ready();}, std::chrono::seconds(2)));
+
+  node->sample_and_publish();  // window just started -- 30s hasn't elapsed
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  EXPECT_TRUE(harness->faults.empty());
+}
+
+TEST(HealthMonitorNode, VisionMemHighFiresAfterSustainedWindowAndDoesNotRefire)
+{
+  constexpr double kSustainedS = 0.05;
+  rclcpp::NodeOptions opts;
+  opts.parameter_overrides(
+    {rclcpp::Parameter("vision_mem_sustained_s", kSustainedS)});
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>(opts);
+  node->resource_sampler().set_vision_mem_pct_provider(
+    [] {return std::optional<uint8_t>(95);});
+
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_vision_mem_2");
+  ASSERT_TRUE(
+    spin_until({node, harness->node}, [&] {return harness->ready();}, std::chrono::seconds(2)));
+
+  node->sample_and_publish();  // window starts
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));  // exceed kSustainedS
+  node->sample_and_publish();  // still over threshold -- window now satisfied
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+  EXPECT_EQ(harness->faults[0]->fault_id, mc_msgs::msg::FaultEvent::VISION_MEM_HIGH);
+  EXPECT_EQ(harness->faults[0]->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
+
+  node->sample_and_publish();  // condition persists -- must not re-fire
+  spin_until({node, harness->node}, [] {return false;}, std::chrono::milliseconds(50));
+  EXPECT_EQ(harness->faults.size(), 1u);
+}
+
+TEST(HealthMonitorNode, VisionMemHighRearmsAfterDroppingBelowThreshold)
+{
+  constexpr double kSustainedS = 0.05;
+  rclcpp::NodeOptions opts;
+  opts.parameter_overrides(
+    {rclcpp::Parameter("vision_mem_sustained_s", kSustainedS)});
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>(opts);
+  bool over_threshold = true;
+  node->resource_sampler().set_vision_mem_pct_provider(
+    [&over_threshold] {return std::optional<uint8_t>(over_threshold ? 95 : 10);});
+
+  auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_vision_mem_3");
+  ASSERT_TRUE(
+    spin_until({node, harness->node}, [&] {return harness->ready();}, std::chrono::seconds(2)));
+
+  node->sample_and_publish();
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  node->sample_and_publish();
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return !harness->faults.empty();}, std::chrono::seconds(2)));
+  ASSERT_EQ(harness->faults.size(), 1u);
+
+  over_threshold = false;
+  node->sample_and_publish();  // drops below threshold -- clears active state
+
+  over_threshold = true;
+  node->sample_and_publish();  // re-crosses -- window restarts
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  node->sample_and_publish();  // sustained again -- fires a second, distinct fault
+
+  ASSERT_TRUE(
+    spin_until(
+      {node, harness->node}, [&] {return harness->faults.size() >= 2u;}, std::chrono::seconds(2)));
+  EXPECT_EQ(harness->faults[1]->fault_id, mc_msgs::msg::FaultEvent::VISION_MEM_HIGH);
+}

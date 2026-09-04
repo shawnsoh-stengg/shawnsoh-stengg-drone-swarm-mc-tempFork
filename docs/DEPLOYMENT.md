@@ -85,6 +85,15 @@ including `mavlink-router` and `zenoh-bridge` — runs in `be.slice`
 Layer-4-vs-Layer-2 split elsewhere in the docs — it's a latency
 classification here, not a layer classification.
 
+`vision`'s `MemoryMax=6G` (be.slice) is watched from the outside, not just
+capped: `health_monitor_node` reads that cgroup's `memory.current`/
+`memory.max` directly (`INFRA-007`) and publishes `VISION_MEM_HIGH`
+(`/mc/fault`) once usage has stayed at/above 80% of the cap continuously
+for 30 s — long enough that a TensorRT engine reload's transient spike
+doesn't false-alarm, short enough to give real headroom before an
+OOM-kill. See `ICD-MC-001.md` §10.8 and `ws/src/health_monitor/params/
+default.yaml`'s `vision_mem_*` params to retune either number.
+
 ## Per-service unit anatomy
 
 Every `drone-mc-*.service` follows the same shape (`drone-mc-fcc-bridge.service` shown):

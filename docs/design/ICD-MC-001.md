@@ -1509,7 +1509,8 @@ uint32  rx_drop_count
 | 9 | `VISUAL_ODOM_FAIL` | Visual odometry not publishing when GNSS degraded |
 | 10 | `GIMBAL_LINK_LOST` | Gimbal camera RTSP link silent > 3 s (perception-only, no flight failsafe) |
 | 11 | `OFFBOARD_STREAM_STALE` | OFFBOARD setpoint stream age > 500 ms while OFFBOARD confirmed active (SFR-009) — `health_monitor_node` publishes this fault only; `mission_manager_node` executes the fallback (FR-029) |
-| 12–15 | Reserved | — |
+| 12 | `VISION_MEM_HIGH` | `vision.service` cgroup memory usage ≥ 80% of its `MemoryMax=6G` cap, sustained (INFRA-007) |
+| 13–15 | Reserved | — |
 
 ### 10.9 Node Alive Mask Bits
 

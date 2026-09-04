@@ -12,6 +12,9 @@ uint16 DISK_FULL        = 64
 uint16 CAMERA_FAIL      = 128
 uint16 GNSS_DEGRADED    = 256
 uint16 VISUAL_ODOM_FAIL = 512
+# Bits 10-11 (1024, 2048) are reserved for GIMBAL_LINK_LOST/OFFBOARD_STREAM_STALE
+# (ICD-MC-001 §10.8) -- not yet implemented, see health_monitor_node.hpp.
+uint16 VISION_MEM_HIGH  = 4096
 
 std_msgs/Header header
 uint16 fault_id          # see constants above

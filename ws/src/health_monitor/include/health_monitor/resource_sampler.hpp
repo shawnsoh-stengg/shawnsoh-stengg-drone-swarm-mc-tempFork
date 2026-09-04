@@ -62,6 +62,23 @@ std::optional<uint8_t> parse_tegrastats_gpu_temp_c(const std::string & line);
 std::optional<uint8_t> max_thermal_zone_temp_c(
   const std::vector<std::string> & thermal_zone_paths);
 
+// INFRA-007: parses a cgroup v2 memory.current value and memory.max value
+// (as read verbatim from those two files under the vision.service cgroup,
+// e.g. /sys/fs/cgroup/be.slice/drone-mc-vision.service/) into a 0-100 %
+// usage-of-cap figure. memory.max may hold the literal "max" instead of a
+// byte count when no cap is set -- that's std::nullopt (no cap means no
+// percentage to alert against), not 0, since the caller (health_monitor_
+// node's sustained-threshold check) must not treat "no data" as "healthy".
+std::optional<uint8_t> parse_cgroup_mem_pct(
+  const std::string & current_contents, const std::string & max_contents);
+
+// Reads current_path/max_path (cgroup v2 memory.current/memory.max) and
+// returns parse_cgroup_mem_pct's result, or std::nullopt if either path
+// isn't readable. Free function (like max_thermal_zone_temp_c) so a test
+// can point it at fixture files directly.
+std::optional<uint8_t> read_cgroup_mem_pct(
+  const std::string & current_path, const std::string & max_path);
+
 // Every external data source health_monitor_node's timer reads, bundled so
 // a test can point each one at a fixture instead of the real filesystem/
 // subprocess — the same swap-the-seam precedent as fcc_bridge's
@@ -76,6 +93,14 @@ struct ResourceSamplerConfig
   // popen()/pclose() pair behind the default GPU temp provider can't block
   // the 1 Hz timer waiting on a process that never exits on its own.
   std::string gpu_temp_command{"timeout 1 tegrastats --interval 500"};
+  // INFRA-007: vision.service's cgroup v2 memory accounting files. Default
+  // path matches drone-mc-vision.service's Slice=be.slice + unit name
+  // (SDD §12.3/§12.4) under the unified cgroup v2 hierarchy's standard
+  // mountpoint.
+  std::string vision_cgroup_memory_current_path{
+    "/sys/fs/cgroup/be.slice/drone-mc-vision.service/memory.current"};
+  std::string vision_cgroup_memory_max_path{
+    "/sys/fs/cgroup/be.slice/drone-mc-vision.service/memory.max"};
 };
 
 // Samples system resource metrics for health_monitor_node's 1 Hz timer
@@ -101,17 +126,30 @@ public:
   // Test seam: avoids spawning a real subprocess in unit tests.
   void set_gpu_temp_line_provider(std::function<std::optional<std::string>()> provider);
 
+  // INFRA-007: overrides the real cgroupfs-backed vision-memory reader with
+  // `provider`. Test seam: avoids depending on a real vision.service cgroup
+  // existing on the test host.
+  void set_vision_mem_pct_provider(std::function<std::optional<uint8_t>()> provider);
+
   // Fills cpu_pct/mem_pct/disk_pct/gpu_temp_c/cpu_temp_c on `out`. Does not
   // touch header, fault_mask, node_alive_mask, or uptime_s — those are
   // owned by health_monitor_node (liveness/failsafe land in HEALTH-002/
   // 003; uptime is a node-lifetime concern, not a resource sample).
   void sample(mc_msgs::msg::SystemHealth & out);
 
+  // INFRA-007: vision.service's cgroup memory usage as a 0-100 % of its
+  // MemoryMax cap, or std::nullopt if unavailable (no cgroup, no cap set,
+  // unreadable). Separate from sample()/SystemHealth: this is a per-service
+  // figure health_monitor_node's own sustained-threshold check consumes
+  // directly, not a system-wide SystemHealth field.
+  std::optional<uint8_t> sample_vision_mem_pct();
+
 private:
   ResourceSamplerConfig config_;
   std::optional<CpuTotals> prev_cpu_totals_;
   std::function<std::optional<uint8_t>(const std::string &)> disk_usage_provider_;
   std::function<std::optional<std::string>()> gpu_temp_line_provider_;
+  std::function<std::optional<uint8_t>()> vision_mem_pct_provider_;
 };
 
 }  // namespace health_monitor
