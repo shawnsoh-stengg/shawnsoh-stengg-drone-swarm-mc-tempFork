@@ -102,9 +102,21 @@ check "health_monitor default params set vision_mem_threshold_pct: 80" \
         "${REPO_ROOT}/ws/src/health_monitor/params/default.yaml"
 check "health_monitor default params set vision_mem_sustained_s" \
     grep -qE '^\s*vision_mem_sustained_s:' "${REPO_ROOT}/ws/src/health_monitor/params/default.yaml"
-if [[ -f "/etc/drone-mc/params/health_monitor.yaml" ]]; then
-    check "installed health_monitor.yaml carries vision_mem_threshold_pct" \
-        grep -qE '^\s*vision_mem_threshold_pct:' /etc/drone-mc/params/health_monitor.yaml
+if [[ -f "/etc/drone-mc/params/health_monitor.yaml" ]] && \
+    ! grep -qE '^\s*vision_mem_threshold_pct:' /etc/drone-mc/params/health_monitor.yaml
+then
+    # Not a failure: 02-install-systemd-units.sh deliberately never
+    # overwrites an existing per-drone params file (see its own "leaving
+    # per-drone tuning untouched" comment), so any host provisioned before
+    # this ticket landed will legitimately still be missing these keys.
+    # health_monitor_node's declare_parameter() calls fall back to the
+    # exact same values (80%, 30.0s, standard cgroup paths) in code, so
+    # this has no functional effect -- flagged here only so an operator
+    # who wants non-default tuning pinned to disk knows to add it by hand.
+    echo "INFO: /etc/drone-mc/params/health_monitor.yaml predates INFRA-007's"
+    echo "      vision_mem_* params -- health_monitor_node is using its"
+    echo "      built-in defaults (80%, 30.0s). Add them to that file"
+    echo "      manually if this drone needs non-default tuning."
 fi
 
 if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
