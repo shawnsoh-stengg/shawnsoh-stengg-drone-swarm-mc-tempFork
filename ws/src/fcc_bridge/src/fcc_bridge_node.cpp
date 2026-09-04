@@ -177,9 +177,16 @@ mc_msgs::msg::VehicleState FccBridgeNode::to_msg(const VehicleState & state, boo
   msg.arming_state = state.arming_state;
   msg.battery_pct = state.battery_remaining;
   msg.fcc_link_ok = link_alive;
-  // groundspeed, battery_v/battery_warning, and GNSS fix-quality fields are
-  // not yet aggregated by FccBackend::VehicleState — left at zero/false
-  // pending a backend enhancement, tracked separately from FCC-004.
+  // TEST-002: the "backend enhancement" this comment used to defer --
+  // MavlinkUdpBackend now aggregates these (handle_gps_raw_int()).
+  // XrceDdsBackend's own equivalent remains a separate, still-open gap.
+  msg.fix_type = state.fix_type;
+  msg.hdop = state.hdop;
+  msg.vdop = state.vdop;
+  msg.gnss_ok = state.gnss_ok;
+  // groundspeed and battery_v/battery_warning are still not aggregated by
+  // FccBackend::VehicleState — left at zero/false pending a backend
+  // enhancement, tracked separately from FCC-004.
   return msg;
 }
 

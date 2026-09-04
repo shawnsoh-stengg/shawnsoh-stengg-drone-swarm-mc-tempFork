@@ -230,6 +230,109 @@ TEST_F(MavlinkUdpBackendTest, AggregatesBatteryRemainingAsFraction)
   EXPECT_FLOAT_EQ(backend_->get_vehicle_state().battery_remaining, 0.42F);
 }
 
+// TEST-002: neither of these was in FCC-007's own 3-message AC -- only a
+// real PX4 SITL run (not FCC-007's own mock-peer tests) ever exercised
+// guard_arming_to_takeoff()/guard_takeoff_to_ingress(), surfacing that
+// VehicleState.arming_state/x/y/z were silently never populated by this
+// backend. See mavlink_udp_backend.hpp's handler doc comments.
+TEST_F(MavlinkUdpBackendTest, AggregatesLocalPositionNedIntoVehicleState)
+{
+  mavlink_message_t msg;
+  mavlink_local_position_ned_t pos{};
+  pos.x = 12.5F;
+  pos.y = -3.25F;
+  pos.z = -30.0F;  // NED: negative = above origin
+  mavlink_msg_local_position_ned_encode(1, 1, &msg, &pos);
+
+  ASSERT_TRUE(wait_until(
+      [&] {
+        send_frame(fcc_.fd(), backend_addr_, msg);
+        return backend_->get_vehicle_state().z_valid && backend_->get_vehicle_state().z != 0.0F;
+      }, std::chrono::seconds(3)));
+
+  const auto state = backend_->get_vehicle_state();
+  EXPECT_FLOAT_EQ(state.x, 12.5F);
+  EXPECT_FLOAT_EQ(state.y, -3.25F);
+  EXPECT_FLOAT_EQ(state.z, -30.0F);
+  EXPECT_TRUE(state.xy_valid);
+}
+
+TEST_F(MavlinkUdpBackendTest, AggregatesArmingStateFromHeartbeatSafetyArmedBit)
+{
+  mavlink_message_t msg;
+  mavlink_heartbeat_t hb{};
+  hb.base_mode = MAV_MODE_FLAG_SAFETY_ARMED | MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;
+  mavlink_msg_heartbeat_encode(1, 1, &msg, &hb);
+
+  ASSERT_TRUE(wait_until(
+      [&] {
+        send_frame(fcc_.fd(), backend_addr_, msg);
+        return backend_->get_vehicle_state().arming_state == 2;  // ARMED, ICD §10.2
+      }, std::chrono::seconds(3)));
+
+  EXPECT_EQ(backend_->get_vehicle_state().arming_state, 2);
+}
+
+TEST_F(MavlinkUdpBackendTest, ReportsStandbyWhenHeartbeatSafetyArmedBitClear)
+{
+  mavlink_message_t msg;
+  mavlink_heartbeat_t hb{};
+  hb.base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;  // armed bit clear
+  mavlink_msg_heartbeat_encode(1, 1, &msg, &hb);
+
+  ASSERT_TRUE(wait_until(
+      [&] {
+        send_frame(fcc_.fd(), backend_addr_, msg);
+        return backend_->get_vehicle_state().arming_state == 1;  // STANDBY, ICD §10.2
+      }, std::chrono::seconds(3)));
+
+  EXPECT_EQ(backend_->get_vehicle_state().arming_state, 1);
+}
+
+// Also not in FCC-007's original AC -- see mavlink_udp_backend.hpp's
+// handle_gps_raw_int() doc comment: nothing populated VehicleState.gnss_ok
+// via any live backend before this, only ever via synthetic unit-test
+// messages, so check_visual_localisation_if_gnss_degraded() could never
+// pass PREFLIGHT->ARMING against a real backend.
+TEST_F(MavlinkUdpBackendTest, AggregatesGnssOkFromGpsRawIntWhenFixGoodAndHdopLow)
+{
+  mavlink_message_t msg;
+  mavlink_gps_raw_int_t gps{};
+  gps.fix_type = 3;  // 3D fix
+  gps.eph = 150;     // HDOP 1.50, below the 2.0 threshold
+  gps.epv = 200;
+  mavlink_msg_gps_raw_int_encode(1, 1, &msg, &gps);
+
+  ASSERT_TRUE(wait_until(
+      [&] {
+        send_frame(fcc_.fd(), backend_addr_, msg);
+        return backend_->get_vehicle_state().gnss_ok;
+      }, std::chrono::seconds(3)));
+
+  const auto state = backend_->get_vehicle_state();
+  EXPECT_EQ(state.fix_type, 3);
+  EXPECT_FLOAT_EQ(state.hdop, 1.5F);
+  EXPECT_FLOAT_EQ(state.vdop, 2.0F);
+}
+
+TEST_F(MavlinkUdpBackendTest, ReportsGnssNotOkWhenHdopAboveThreshold)
+{
+  mavlink_message_t msg;
+  mavlink_gps_raw_int_t gps{};
+  gps.fix_type = 3;
+  gps.eph = 350;  // HDOP 3.50, above the 2.0 threshold
+  gps.epv = 200;
+  mavlink_msg_gps_raw_int_encode(1, 1, &msg, &gps);
+
+  ASSERT_TRUE(wait_until(
+      [&] {
+        send_frame(fcc_.fd(), backend_addr_, msg);
+        return backend_->get_vehicle_state().fix_type == 3;
+      }, std::chrono::seconds(3)));
+
+  EXPECT_FALSE(backend_->get_vehicle_state().gnss_ok);
+}
+
 TEST_F(MavlinkUdpBackendTest, IsLinkAliveFalseBeforeAnyMessageWithZeroTimeout)
 {
   std::this_thread::sleep_for(std::chrono::milliseconds(5));

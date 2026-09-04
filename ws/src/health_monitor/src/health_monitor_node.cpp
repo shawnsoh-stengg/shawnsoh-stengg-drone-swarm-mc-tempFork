@@ -432,7 +432,17 @@ void HealthMonitorNode::check_fcc_link()
 
 void HealthMonitorNode::check_low_battery()
 {
-  const bool low = latest_vehicle_state_ &&
+  // TEST-002: battery_pct carries fcc_bridge's -1.0 "unknown" sentinel
+  // (fcc_bridge::VehicleState::battery_remaining's documented default)
+  // until a real BATTERY_STATUS/battery_status sample has actually
+  // arrived -- MavlinkUdpBackend publishes /mc/fcc/vehicle_state at its
+  // regular rate regardless, so the first few messages after any backend
+  // (re)starts legitimately carry -1.0. Without this guard, -1.0 < any
+  // real threshold reads as "critically low" and fires an immediate
+  // spurious CRITICAL LOW_BATTERY (-> auto-RTL) before real telemetry
+  // ever arrives -- confirmed live against a real PX4 SITL instance
+  // during TEST-002's own development, not merely theoretical.
+  const bool low = latest_vehicle_state_ && latest_vehicle_state_->battery_pct >= 0.0F &&
     latest_vehicle_state_->battery_pct < effective_low_battery_threshold();
   if (!low_battery_was_active_ && low) {
     if (override_low_battery_rtl_) {
