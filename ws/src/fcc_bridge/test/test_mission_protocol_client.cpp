@@ -109,7 +109,7 @@ TEST_F(MissionProtocolClientTest, UploadMissionCompletesFullHandshake)
 
   std::atomic<bool> mock_fcc_ok{false};
   std::thread mock_fcc([&] {
-      // 1. Expect MISSION_COUNT
+    // 1. Expect MISSION_COUNT
       mavlink_message_t msg;
       if (!recv_frame(fcc_.fd(), 2.0, msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_COUNT) {
         return;
@@ -120,16 +120,15 @@ TEST_F(MissionProtocolClientTest, UploadMissionCompletesFullHandshake)
         return;
       }
 
-      // 2. Request each item in order, verify payload round-trips
+    // 2. Request each item in order, verify payload round-trips
       for (uint16_t seq = 0; seq < count_msg.count; ++seq) {
         mavlink_message_t req_msg;
         mavlink_msg_mission_request_int_pack(1, 1, &req_msg, 1, 191, seq, MAV_MISSION_TYPE_MISSION);
         send_frame(fcc_.fd(), mc_.addr(), req_msg);
 
         mavlink_message_t item_msg;
-        if (!recv_frame(
-          fcc_.fd(), 2.0,
-          item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+        if (!recv_frame(fcc_.fd(), 2.0,
+        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
         {
           return;
         }
@@ -140,11 +139,10 @@ TEST_F(MissionProtocolClientTest, UploadMissionCompletesFullHandshake)
         }
       }
 
-      // 3. Accept
+    // 3. Accept
       mavlink_message_t ack_msg;
-      mavlink_msg_mission_ack_pack(
-        1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED,
-        MAV_MISSION_TYPE_MISSION, 0);
+      mavlink_msg_mission_ack_pack(1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED,
+      MAV_MISSION_TYPE_MISSION, 0);
       send_frame(fcc_.fd(), mc_.addr(), ack_msg);
       mock_fcc_ok = true;
     });
@@ -166,9 +164,8 @@ TEST_F(MissionProtocolClientTest, UpdateMissionItemUsesPartialListNotFullUpload)
   std::atomic<bool> mock_fcc_ok{false};
   std::thread mock_fcc([&] {
       mavlink_message_t msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
+      if (!recv_frame(fcc_.fd(), 2.0,
+      msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
       {
         return;
       }
@@ -182,21 +179,19 @@ TEST_F(MissionProtocolClientTest, UpdateMissionItemUsesPartialListNotFullUpload)
 
       mavlink_message_t req_msg;
       mavlink_msg_mission_request_int_pack(
-        1, 1, &req_msg, 1, 191, fcc_bridge::FORMATION_SLOT, MAV_MISSION_TYPE_MISSION);
+      1, 1, &req_msg, 1, 191, fcc_bridge::FORMATION_SLOT, MAV_MISSION_TYPE_MISSION);
       send_frame(fcc_.fd(), mc_.addr(), req_msg);
 
       mavlink_message_t item_msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+      if (!recv_frame(fcc_.fd(), 2.0,
+      item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
       {
         return;
       }
 
       mavlink_message_t ack_msg;
-      mavlink_msg_mission_ack_pack(
-        1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED,
-        MAV_MISSION_TYPE_MISSION, 0);
+      mavlink_msg_mission_ack_pack(1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED,
+      MAV_MISSION_TYPE_MISSION, 0);
       send_frame(fcc_.fd(), mc_.addr(), ack_msg);
       mock_fcc_ok = true;
     });

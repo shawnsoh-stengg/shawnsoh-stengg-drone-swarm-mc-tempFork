@@ -13,8 +13,15 @@
 # Set LIVE_CHECK=1 to additionally start the built image and confirm the
 # container stays up for a few seconds without crashing — this is the
 # specific check that would catch a glibc-compatibility mismatch between
-# the vendor's prebuilt aarch64-gnu .deb and JetPack 6.2.2's glibc 2.35,
-# which has not yet been confirmed on real hardware (see Dockerfile note).
+# the vendor's prebuilt aarch64-gnu .deb and JetPack 6.2.2's glibc 2.35;
+# confirmed working on real orin-nx hardware 2026-09-03, but still worth
+# rerunning as a regression guard on new hardware/version bumps.
+#
+# If drone-mc-zenoh-bridge.service is already running, this stops it first
+# and restarts it on exit — both it and this check's own container bind
+# tcp/0.0.0.0:7447 with --network=host, so leaving the real service up
+# produces a false "container not running" failure (address already in
+# use), not a real crash. Needs root to stop/start the systemd unit.
 set -euo pipefail
 
 PASS=0; FAIL=0
@@ -59,7 +66,25 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     echo "==> LIVE_CHECK=1: verifying the container starts and stays up"
 
     WORKDIR="$(mktemp -d)"
-    trap 'rm -rf "${WORKDIR}"; [[ -n "${cid:-}" ]] && docker rm -f "${cid}" &>/dev/null || true' EXIT
+    SERVICE_WAS_ACTIVE=0
+    if command -v systemctl &>/dev/null \
+        && systemctl is-active --quiet drone-mc-zenoh-bridge.service 2>/dev/null
+    then
+        echo "==> drone-mc-zenoh-bridge.service is active — stopping it for" \
+             "the duration of this check to avoid a tcp/7447 port collision"
+        SERVICE_WAS_ACTIVE=1
+        systemctl stop drone-mc-zenoh-bridge.service
+    fi
+
+    cleanup() {
+        rm -rf "${WORKDIR}"
+        [[ -n "${cid:-}" ]] && docker rm -f "${cid}" &>/dev/null || true
+        if [[ "${SERVICE_WAS_ACTIVE}" -eq 1 ]]; then
+            echo "==> restarting drone-mc-zenoh-bridge.service"
+            systemctl start drone-mc-zenoh-bridge.service
+        fi
+    }
+    trap cleanup EXIT
 
     # Idle config: no reachable peers, matching the SITL/dev guidance in
     # zenoh-bridge-dds.json5's header comment.
