@@ -3,6 +3,7 @@
 # mission_manager_node heartbeat watchdog (FR-074).
 # HEALTH-003: failsafe decision tree (§10.3) and systemd-restart transport
 # (§10.4) tunables.
+# INFRA-007: vision.service cgroup memory sustained-threshold alerting.
 health_monitor_node:
   ros__parameters:
     sample_period_s: 1.0
@@ -30,6 +31,17 @@ health_monitor_node:
     manager_restart_retry_s: 10.0
     # SDD §10.1: GPU_OVERTEMP threshold.
     gpu_overtemp_threshold_c: 85
+    # INFRA-007/ICD §10.8: VISION_MEM_HIGH -- vision.service cgroup memory
+    # usage (memory.current/memory.max, drone-mc-vision.service's Slice=
+    # be.slice + MemoryMax=6G) at or above this percent-of-cap, sustained
+    # for vision_mem_sustained_s, fires the fault. 30s is long enough that a
+    # brief TensorRT engine (re)load spike doesn't false-alarm, short enough
+    # that a genuine leak toward the 6G cap is caught with headroom to
+    # spare before OOM-kill.
+    vision_mem_threshold_pct: 80
+    vision_mem_sustained_s: 30.0
+    vision_cgroup_memory_current_path: "/sys/fs/cgroup/be.slice/drone-mc-vision.service/memory.current"
+    vision_cgroup_memory_max_path: "/sys/fs/cgroup/be.slice/drone-mc-vision.service/memory.max"
     # SDD §10.4: drone-mc-watchdog privileged-helper Unix socket.
     watchdog_socket_path: "/var/run/drone-mc/watchdog.sock"
     watchdog_timeout_ms: 500

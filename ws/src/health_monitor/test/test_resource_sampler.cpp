@@ -131,6 +131,38 @@ TEST(MaxThermalZoneTempC, ReturnsNulloptWhenNoPathIsReadable)
   EXPECT_FALSE(max_thermal_zone_temp_c({"/no/such/path/at/all"}).has_value());
 }
 
+TEST(ParseCgroupMemPct, ComputesPercentOfCap)
+{
+  const auto pct = parse_cgroup_mem_pct("3000000000\n", "6000000000\n");
+  ASSERT_TRUE(pct.has_value());
+  EXPECT_EQ(*pct, 50);
+}
+
+TEST(ParseCgroupMemPct, ReturnsNulloptWhenMaxIsUncapped)
+{
+  EXPECT_FALSE(parse_cgroup_mem_pct("3000000000\n", "max\n").has_value());
+}
+
+TEST(ParseCgroupMemPct, ReturnsNulloptOnUnparseableContents)
+{
+  EXPECT_FALSE(parse_cgroup_mem_pct("not-a-number\n", "6000000000\n").has_value());
+}
+
+TEST(ReadCgroupMemPct, ReadsBothFilesFromDisk)
+{
+  const std::string current_path = write_fixture("vision_mem_current", "4800000000\n");
+  const std::string max_path = write_fixture("vision_mem_max", "6000000000\n");
+  const auto pct = read_cgroup_mem_pct(current_path, max_path);
+  ASSERT_TRUE(pct.has_value());
+  EXPECT_EQ(*pct, 80);
+}
+
+TEST(ReadCgroupMemPct, ReturnsNulloptWhenEitherPathIsUnreadable)
+{
+  const std::string current_path = write_fixture("vision_mem_current_only", "100\n");
+  EXPECT_FALSE(read_cgroup_mem_pct(current_path, "/no/such/memory.max").has_value());
+}
+
 TEST(ResourceSamplerSample, FillsAllFieldsFromMockedSources)
 {
   const std::string proc_stat_path = write_fixture("proc_stat", "cpu  100 0 100 700 100 0 0 0\n");

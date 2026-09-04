@@ -63,6 +63,10 @@ HealthMonitorNode::HealthMonitorNode(const rclcpp::NodeOptions & options)
   config.cpu_thermal_zone_paths =
     declare_parameter("cpu_thermal_zone_paths", config.cpu_thermal_zone_paths);
   config.gpu_temp_command = declare_parameter("gpu_temp_command", config.gpu_temp_command);
+  config.vision_cgroup_memory_current_path = declare_parameter(
+    "vision_cgroup_memory_current_path", config.vision_cgroup_memory_current_path);
+  config.vision_cgroup_memory_max_path = declare_parameter(
+    "vision_cgroup_memory_max_path", config.vision_cgroup_memory_max_path);
   sampler_ = ResourceSampler(config);
 
   const double sample_period_s = declare_parameter("sample_period_s", 1.0);
@@ -84,6 +88,11 @@ HealthMonitorNode::HealthMonitorNode(const rclcpp::NodeOptions & options)
   gpu_overtemp_threshold_c_ = static_cast<uint8_t>(
     declare_parameter(
       "gpu_overtemp_threshold_c", static_cast<int64_t>(gpu_overtemp_threshold_c_)));
+  vision_mem_threshold_pct_ = static_cast<uint8_t>(
+    declare_parameter(
+      "vision_mem_threshold_pct", static_cast<int64_t>(vision_mem_threshold_pct_)));
+  vision_mem_sustained_s_ =
+    declare_parameter("vision_mem_sustained_s", vision_mem_sustained_s_);
   watchdog_socket_path_ = declare_parameter(
     "watchdog_socket_path", std::string("/var/run/drone-mc/watchdog.sock"));
   watchdog_timeout_ms_ = static_cast<int>(
@@ -512,6 +521,36 @@ void HealthMonitorNode::check_gpu_overtemp(uint8_t gpu_temp_c)
   }
 }
 
+void HealthMonitorNode::check_vision_memory(const rclcpp::Time & current)
+{
+  const std::optional<uint8_t> pct = sampler_.sample_vision_mem_pct();
+  bool sustained_high = false;
+  if (pct.has_value() && *pct >= vision_mem_threshold_pct_) {
+    if (!vision_mem_over_since_.has_value()) {
+      vision_mem_over_since_ = current;
+    }
+    sustained_high = (current - *vision_mem_over_since_).seconds() >= vision_mem_sustained_s_;
+  } else {
+    vision_mem_over_since_.reset();
+  }
+
+  if (!vision_mem_high_active_ && sustained_high) {
+    // No flight command involved -- FR-026 doesn't apply here, same as
+    // GPU_OVERTEMP.
+    publish_fault(
+      mc_msgs::msg::FaultEvent::VISION_MEM_HIGH, kSeverityWarning,
+      "vision.service cgroup memory usage sustained at or above threshold -- "
+      "MemoryMax=6G budget at risk",
+      mc_msgs::msg::FaultEvent::ACTION_NONE);
+  }
+  vision_mem_high_active_ = sustained_high;
+  if (sustained_high) {
+    fault_mask_ |= mc_msgs::msg::FaultEvent::VISION_MEM_HIGH;
+  } else {
+    fault_mask_ &= static_cast<uint16_t>(~mc_msgs::msg::FaultEvent::VISION_MEM_HIGH);
+  }
+}
+
 void HealthMonitorNode::sample_and_publish()
 {
   mc_msgs::msg::SystemHealth msg;
@@ -537,6 +576,7 @@ void HealthMonitorNode::sample_and_publish()
   check_low_battery();
   check_gcs_link();
   check_gpu_overtemp(msg.gpu_temp_c);
+  check_vision_memory(current);
 
   msg.fault_mask = fault_mask_;
   pub_health_->publish(msg);

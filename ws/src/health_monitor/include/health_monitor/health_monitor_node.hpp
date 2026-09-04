@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -129,6 +130,13 @@ private:
   void check_low_battery();
   void check_gcs_link();
   void check_gpu_overtemp(uint8_t gpu_temp_c);
+  // INFRA-007: vision.service cgroup memory sustained above threshold
+  // (ICD §10.8 VISION_MEM_HIGH). Unlike the other check_*() methods, this
+  // one is time-windowed rather than edge-on-first-sample -- it must stay
+  // above vision_mem_threshold_pct_ for vision_mem_sustained_s_ before
+  // firing, so a transient spike (e.g. a TensorRT engine reload) doesn't
+  // false-alarm.
+  void check_vision_memory(const rclcpp::Time & current);
 
   bool mission_phase_requires_gcs_link_hold() const;
   float effective_low_battery_threshold() const;
@@ -182,6 +190,15 @@ private:
   bool low_battery_was_active_{false};
   bool gpu_overtemp_was_active_{false};
   uint8_t gpu_overtemp_threshold_c_{85};
+
+  // INFRA-007: VISION_MEM_HIGH sustained-threshold state.
+  // vision_mem_over_since_ is set the moment usage first crosses the
+  // threshold and cleared the moment it drops back below -- so it always
+  // reflects the start of the CURRENT excursion, not any prior one.
+  bool vision_mem_high_active_{false};
+  std::optional<rclcpp::Time> vision_mem_over_since_;
+  uint8_t vision_mem_threshold_pct_{80};
+  double vision_mem_sustained_s_{30.0};
 
   bool override_low_battery_rtl_{false};
   bool override_gcs_link_hold_{false};
