@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -90,7 +91,28 @@ class MissionManagerNodeTest : public ::testing::Test
 protected:
   void SetUp() override
   {
+    // Each test gets its own DDS domain, not just fresh node_/harness_
+    // objects. node_/harness_ are destroyed in the previous test's
+    // TearDown() before this SetUp() runs, but DDS participant/publisher
+    // teardown is asynchronous under the hood -- the destructor returning
+    // doesn't guarantee CycloneDDS has announced deletion or flushed
+    // in-flight datagrams. On fast hardware that window is negligible; under
+    // CI's slower QEMU aarch64 emulation it was wide enough for a stale
+    // MissionUpload(arm_authorised=true)/VehicleState from the previous
+    // test to be delivered to this test's brand-new node, flipping it out
+    // of PREFLIGHT before the test body even ran (observed: current_phase()
+    // == ARMING on a just-constructed node in InvalidTransitionRequestIsRejected
+    // and PhaseTransitionRejectedGetsAckWithReasonWithin500ms). A separate
+    // DDS domain per test makes that delivery structurally impossible
+    // instead of merely unlikely.
+    static std::atomic<size_t> next_domain_id{100};
+    rclcpp::InitOptions init_options;
+    init_options.set_domain_id(next_domain_id.fetch_add(1));
+    context_ = std::make_shared<rclcpp::Context>();
+    context_->init(0, nullptr, init_options);
+
     rclcpp::NodeOptions opts;
+    opts.context(context_);
     opts.parameter_overrides(
     {
       rclcpp::Parameter("control_loop_period_s", 0.02),
@@ -103,7 +125,8 @@ protected:
       rclcpp::Parameter("home_position_tolerance_m", 3.0),
     });
     node_ = std::make_shared<mission_exec::MissionManagerNode>(opts);
-    harness_ = std::make_shared<rclcpp::Node>("mission_manager_node_test_harness");
+    harness_ = std::make_shared<rclcpp::Node>(
+      "mission_manager_node_test_harness", rclcpp::NodeOptions().context(context_));
 
     pub_vehicle_state_ = harness_->create_publisher<mc_msgs::msg::VehicleState>(
       "/mc/fcc/vehicle_state", rclcpp::QoS(10));
@@ -155,6 +178,8 @@ protected:
   {
     node_.reset();
     harness_.reset();
+    context_->shutdown("test teardown");
+    context_.reset();
   }
 
   mc_msgs::msg::VehicleState good_vehicle_state() const
@@ -264,6 +289,7 @@ protected:
     ASSERT_TRUE(spin_until({node_, harness_}, reached, std::chrono::seconds(2)));
   }
 
+  rclcpp::Context::SharedPtr context_;
   std::shared_ptr<mission_exec::MissionManagerNode> node_;
   rclcpp::Node::SharedPtr harness_;
 
