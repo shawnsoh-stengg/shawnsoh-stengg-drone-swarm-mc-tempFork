@@ -52,7 +52,7 @@ cloud "MANET Mesh Network" as MANET_NW #E0E0E0
 package "Ground Control Station" as GCS_PKG #D8EED8 {
   rectangle "QGroundControl\n192.168.10.10\n\nVehicle Telemetry/Control\nOperator Monitor" as GCS #B8DCBA
 
-  rectangle "Mission Orchestrator\n(another team's app)\n\nMission Plan Library\nCreate · Update · Activate\n[not yet built]" as ORCH #C8D8F0
+  rectangle "Mission Orchestrator\n(another team's app)\n\nMission Plan Library\nCreate · Update · Activate\n[not yet built]" as ORCH #C8D8F0;line.dashed
 
   rectangle "Mesh Radio (Ground Unit)\n192.168.10.63" as GU #E0E0E0
 }
@@ -95,14 +95,19 @@ MC <-left-> FCC : "  uXRCE-DDS\n  ttyTHS1 (FCC: Telem2) serial\n"
 MC .left.> MISSPROTO : "MAVLink-Mission Comm.\n 192.168.12.3x ethernet\n  MISSION_COUNT\n  MISSION_ITEM_INT\n  MISSION_ACK"
 MISSPROTO .right.> FCC
 
-' Cameras → MC
+' Cameras → MC (downward CSI camera_node is real/deployed; gimbal ingest
+' is not — perception_front_node is a code scaffold, video_downlink has
+' no container/systemd unit built, verified 2026-09-08)
 CAM -up-> MC : "  CSI\n  /camera/image_raw\n  ≥15 FPS"
-GIMCAM -up-> MC : "  RTSP/H.265 :8554\n  (IFD-006, HIF-007,\n  shared switch)"
+GIMCAM .up.> MC : "  RTSP/H.265 :8554\n  (IFD-006, HIF-007,\n  shared switch)\n  [perception_front_node is a\n  scaffold — not implemented]"
 
-' MC ↔ MANET
-MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel)\n  Swarm heartbeat / coordination (UDP)\n  192.168.10.x"
+' MC ↔ MANET (swarm_coordinator_node/formation_controller_node are both
+' code scaffolds — bare Node() constructors, zero pub/sub/timer calls,
+' verified 2026-09-08 — so no swarm heartbeat/coordination traffic exists
+' yet; the MC↔GCS Channel B link itself is real)
+MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel, real)\n  Swarm heartbeat / coordination (UDP)\n  [not implemented — swarm_coord is a scaffold]\n  192.168.10.x"
 MC .up.> AU1 : "  Zenoh mesh (zenoh-bridge-dds)\n  TCP :7447 — peer MCs (ZBD-001, done)"
-MC -up-> AU1 : "  GCS Video Downlink (RTSP/H.265 + metadata)\n  Stream A :8555 (gimbal) · Stream B :8556 (downward)"
+MC .up.> AU1 : "  GCS Video Downlink (RTSP/H.265 + metadata)\n  Stream A :8555 (gimbal) · Stream B :8556 (downward)\n  [video_mux_node is a scaffold —\n  not implemented, no container built]"
 
 ' GCS ↔ MANET
 GCS <--> GU : "  MAVLink 2/UDP  →  FCC (Flight Telemetry ch.)\n  MAVLink 2/UDP  →  MC (separate ch.)\n  Commands · Telemetry"
@@ -111,8 +116,8 @@ ORCH .down.> GU : "  MAVLink 2/UDP  (Channel C)\n  :14571/14572\n  MAVFTP missio
 ' MANET Mesh Network
 GU <-down-> MANET_NW : Mesh Network Datalink
 MANET_NW <-up-> AU1
-MANET_NW <-down-> AU2 : "Swarm protocol/UDP\n  Heartbeat · Voronoi · ISR"
-MANET_NW <-down-> AU3 : "Swarm protocol/UDP"
+MANET_NW .down.> AU2 : "Swarm protocol/UDP\n  Heartbeat · Voronoi · ISR\n  [not implemented — swarm_coord is a scaffold]"
+MANET_NW .down.> AU3 : "Swarm protocol/UDP\n  [not implemented]"
 
 ' Peers ↔ MANET
 P2 <-left-> AU2 
@@ -130,7 +135,7 @@ legend right
   | <#E8D8F0> | Swarm Peer MCs |
   | <#EDE0F8> | Onboard Sensors |
   | <#F5ECF5> | MC↔FCC Mission Protocol (MAVLink exception, IR-007) |
-  | Dashed line | Orchestrator app awaiting other team — not GCS-004 itself, which is done |
+  | Dashed line | Either the Orchestrator app awaiting other team (not GCS-004\n  itself, which is done), or a link whose MC-side node is a code\n  scaffold (swarm_coord, vision, video_downlink packages — bare\n  Node() constructors, no pub/sub/timer logic, verified 2026-09-08) |
 endlegend
 
 @enduml

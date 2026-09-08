@@ -5,7 +5,7 @@
 ' MC-TP-001 §6 TP-ST-001
 ' ─────────────────────────────────────────────────────────────
 
-title "19 — TP-ST-001 Nominal 2-Drone Mission Test Sequence\nGCS Commands · Phase Transitions · Test Assertions  ·  MC-TP-001 §6"
+title "19 — TP-ST-001 Nominal 2-Drone Mission Test Sequence\nGCS Commands · Phase Transitions · Test Assertions  ·  MC-TP-001 §6\n<color:#C02020>Design target — actual TEST-002 harness is single-drone; only PREFLIGHT through TAKEOFF is exercised (see note below)</color>"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -47,6 +47,25 @@ participant "FCC SITL 2\n(PX4 SITL)" as FCC2 #FFE0C0
 ' SETUP
 ' ═══════════════════════════════════════════════════
 == Test Setup: Start SITL, MC stacks, wait for ready ==
+
+note over TEST, FCC2 #FFE0E0
+  <b>Status as of 2026-09-08 (test_sitl_mission_scenarios.py, TEST-002):</b>
+  This diagram is the TP-ST-001 design target. The actual automated harness
+  runs a SINGLE drone (instance 0 only) natively (ros2 launch, no Docker) —
+  Drone 2 / MC Instance 2 below does not run. Of the phase transitions shown,
+  only test_01 (PREFLIGHT→ARMING) and test_02 (ARMING→TAKEOFF) actually run
+  and pass. test_03 through test_09 — everything from TAKEOFF→INGRESS
+  onward, including MUSTER, ISR_SELECTION, VORONOI_PARTITION, SEARCH, and
+  RETURN/LAND below — are all @unittest.skip'd, blocked on a real PX4 defect
+  this harness discovered: PX4 never replies to the FORMATION_SLOT partial
+  mission-item update with MISSION_REQUEST_INT, so mission_manager_node
+  times out and escalates to FAULT before reaching INGRESS. ISR election
+  and Voronoi partitioning are also not really exercised even in the
+  skipped tests' design — swarm_coordinator_node/formation_controller_node/
+  search_planner_node are still scaffolds; a mock_swarm_coord_node publishes
+  just enough to satisfy mission_manager_node's own guards. See
+  PROJECT-PLAN-5-MONTH.md's TEST-002 entry for the full writeup.
+end note
 
 TEST -> FCC1 : start PX4 SITL instance 1
 TEST -> FCC2 : start PX4 SITL instance 2
@@ -124,9 +143,10 @@ MC1 --> GCS : MC_STATUS: mission_phase = TAKEOFF
 MC2 --> GCS : MC_STATUS: mission_phase = TAKEOFF
 
 ' ═══════════════════════════════════════════════════
-' INGRESS
+' INGRESS  (everything below: SKIPPED in the automated suite — see
+' the setup-section status note. Kept as the TP-ST-001 design target.)
 ' ═══════════════════════════════════════════════════
-== Phase: TAKEOFF → INGRESS (GCS command) ==
+== Phase: TAKEOFF → INGRESS (GCS command) — test_03, SKIPPED ==
 
 GCS -> MC1 : MC_CMD_PHASE_TRANSITION (50001)\n  param1 = PHASE_INGRESS
 GCS -> MC2 : MC_CMD_PHASE_TRANSITION (50001)\n  param1 = PHASE_INGRESS

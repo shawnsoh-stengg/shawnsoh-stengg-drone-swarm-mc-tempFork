@@ -228,7 +228,7 @@ If the topics are absent, check:
 | Interface | IP Address | Subnet | Purpose |
 |---|---|---|---|
 | Jetson eth0 (MC side) | `192.168.12.1` | 255.255.255.0 | MC endpoint on internal subnet |
-| Pixhawk Ethernet (FCC side) | `192.168.12.2` | 255.255.255.0 | FCC endpoint on internal subnet |
+| Pixhawk Ethernet (FCC side) | `192.168.12.31` | 255.255.255.0 | FCC endpoint on internal subnet |
 
 This subnet is isolated from the MANET radio subnet (192.168.10.x). The Jetson has two IP addresses on `eth0` — one on each subnet — configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel, e.g. `enP8p1s0`), the config uses `match`/`set-name` to rename it before assigning addresses, so `eth0` stays the stable logical name used everywhere else in this document:
 
@@ -805,7 +805,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 ### 12.3 Pre-Flight Verification (each flight)
 
 - [ ] **HIF-001** `ros2 topic hz /fmu/out/vehicle_status` — expect ≥ 5 Hz.
-- [ ] **HIF-002** (if Ethernet fallback active) `ping 192.168.12.2` from Jetson — expect < 1 ms RTT.
+- [ ] **HIF-002** (if Ethernet fallback active) `ping 192.168.12.31` from Jetson — expect < 1 ms RTT.
 - [ ] **HIF-003** `gst-launch-1.0 nvarguscamerasrc sensor-id=0 num-buffers=10 ! fakesink` — no errors.
 - [ ] **HIF-004** `ping 192.168.10.10` from Jetson — GCS reachable.
 - [ ] **HIF-007** `ping 192.168.10.200` from Jetson — gimbal camera reachable; confirm RTSP stream per §9.5.

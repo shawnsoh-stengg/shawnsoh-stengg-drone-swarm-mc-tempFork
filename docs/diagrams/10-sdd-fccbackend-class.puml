@@ -41,14 +41,19 @@ package "Shared Data Types  (mc_msgs)" as TYPES #F0F6E8 {
   class VehicleState << struct >> #D8EED8 {
     + x, y, z : float          ' NED m
     + vx, vy, vz : float       ' m/s
-    + heading : float          ' rad
+    + xy_valid : bool
+    + z_valid : bool
+    + lat, lon : double        ' geodetic deg
+    + alt_msl : float          ' m
     + q[4] : float             ' w,x,y,z
+    + heading : float          ' rad
     + battery_remaining : float
     + arming_state : uint8_t
     + nav_state : uint8_t
+    + fix_type : uint8_t       ' GNSS quality (TEST-002)
+    + hdop, vdop : float
+    + gnss_ok : bool
     + failure_flags : uint16_t
-    + xy_valid : bool
-    + z_valid : bool
     + stamp : rclcpp::Time
   }
 
@@ -81,16 +86,14 @@ package "Shared Data Types  (mc_msgs)" as TYPES #F0F6E8 {
 ' ═══════════════════════════════════════════════════
 
 abstract class FccBackend #C0D8F0 {
-  {abstract} + upload_mission(items : vector<MissionItem>) : void
-  {abstract} + update_mission_item(seq : uint16_t, item : MissionItem) : void
+  {abstract} + upload_mission(items : vector<MissionItem>) : bool
+  {abstract} + update_mission_item(seq : uint16_t, item : MissionItem) : bool
   {abstract} + stream_offboard_setpoint(sp : OffboardSetpoint) : void
   {abstract} + send_command(cmd : uint32_t, params : float[7]) : void
   {abstract} + publish_visual_odometry(vo : VisualOdometry) : void
   {abstract} + get_vehicle_state() : VehicleState
   {abstract} + is_link_alive(timeout_s : double = 1.0) : bool
-  # state_ : VehicleState
-  # state_mtx_ : std::mutex
-  # last_msg_time_ : rclcpp::Time
+  + ~FccBackend()
 }
 
 ' ═══════════════════════════════════════════════════
@@ -115,36 +118,79 @@ class XrceDdsBackend #A8CCEE {
   ' stream_offboard_setpoint() call — no internal buffering
   - pub_offboard_control_mode_
   - pub_trajectory_setpoint_
-  ' Mission protocol — MAVLink 2/UDP :14555, always 192.168.12.x
-  ' (not DDS; stock PX4 has no DDS-writable mission topic, IR-007)
+  ' Mission protocol — MAVLink 2/UDP :14555 (FCC_MISSION_PORT),
+  ' always 192.168.12.x (not DDS; stock PX4 has no DDS-writable
+  ' mission topic, IR-007). Protocol logic itself lives in the
+  ' shared MissionProtocolClient below, not in this class.
   - mission_sock_fd_ : int
-  - mission_target_addr_ : sockaddr_in
+  - mission_client_ : unique_ptr<MissionProtocolClient>
+  - state_mtx_ : std::mutex
+  - state_ : VehicleState
+  - last_fcc_msg_time_ : rclcpp::Time
   __
-  + on_local_pos(msg) : void
-  + on_vehicle_status(msg) : void
-  + on_battery(msg) : void
-  + on_attitude(msg) : void
-  + on_imu(msg) : void
-  - run_mission_upload_handshake(items) : bool
-  - run_mission_partial_update(seq, item) : bool
+  - on_local_pos(msg) : void
+  - on_global_pos(msg) : void
+  - on_vehicle_status(msg) : void
+  - on_battery(msg) : void
+  - on_attitude(msg) : void
+  - on_odometry(msg) : void
+  - on_imu(msg) : void
+  - touch_link_alive() : void
+  - open_mission_socket() : int
 }
 
 class MavlinkUdpBackend #B8D4E8 {
-  ' MAVLink UDP transport — SITL / fallback
-  - socket_fd_ : int
-  - target_addr_ : sockaddr_in
+  ' MAVLink UDP transport — SITL / fallback. One socket carries vehicle
+  ' state, commands, AND the mission protocol (no separate DDS channel
+  ' to fall back to in SITL) — unlike XrceDdsBackend's dedicated port.
+  - node_ : rclcpp::Node*
+  - sock_fd_ : int
   - recv_thread_ : std::thread
-  - running_ : std::atomic<bool>
+  - stop_ : std::atomic<bool>
+  - socket_use_mtx_ : std::mutex
+  ' Peer (PX4 SITL) is not a fixed address — learned dynamically via
+  ' the first recvfrom(), same pattern as MAVSDK's udpin:// style
+  - peer_mtx_ : std::mutex
+  - peer_known_ : bool
+  - peer_addr_ : sockaddr_in
+  - mission_client_ : unique_ptr<MissionProtocolClient>
+  - state_mtx_ : std::mutex
+  - state_ : VehicleState
+  - last_fcc_msg_time_ : rclcpp::Time
   __
-  + recv_loop() : void
-  - parse_global_position_int(msg) : void
-  - parse_attitude(msg) : void
-  - parse_battery_status(msg) : void
-  - encode_command_long(cmd, params) : mavlink_message_t
-  - run_mission_upload_handshake(items) : bool
-  - run_mission_partial_update(seq, item) : bool
-  ' FCC-009: same peer_known_/drop-and-warn convention as send_command()
-  - encode_set_position_target_local_ned(sp) : mavlink_message_t
+  - recv_loop() : void
+  - dispatch(msg) : void
+  - handle_global_position_int(msg) : void
+  - handle_attitude(msg) : void
+  - handle_battery_status(msg) : void
+  - handle_local_position_ned(msg) : void  ' TEST-002: x/y/z, NED
+  - handle_heartbeat(msg) : void           ' TEST-002: arming_state
+  - handle_gps_raw_int(msg) : void         ' TEST-002: gnss_ok/fix_type/hdop/vdop
+  - note_peer(addr) : void
+  - ensure_mission_client() : bool
+}
+
+' Not itself a FccBackend — a helper each concrete backend owns,
+' driving the standard MAVLink mission protocol over a caller-owned
+' UDP socket (ICD §3.3 "Mission Protocol"). Shared unmodified by both
+' backends — XrceDdsBackend over its dedicated port 14555,
+' MavlinkUdpBackend multiplexed over its single existing socket.
+class MissionProtocolClient #E8E0F8 {
+  - sock_fd_ : int
+  - target_addr_ : sockaddr_in
+  - system_id_ : uint8_t
+  - component_id_ : uint8_t
+  - seq_ : uint8_t  ' MAVLink frame sequence, wraps at 256
+  - logger_ : rclcpp::Logger
+  __
+  + MissionProtocolClient(sock_fd, target_addr, system_id, component_id, logger)
+  + upload_mission(items : vector<MissionItem>) : bool
+  + update_mission_item(seq, item, timeout_s = 0.5) : bool
+  - serve_single_item_request(item, timeout_s) : bool
+  - send_mission_count(count) : void
+  - send_mission_item_int(item) : void
+  - send_mission_write_partial_list(start_seq, end_seq) : void
+  - recv_frame(timeout_s, out_msg) : bool
 }
 
 ' ═══════════════════════════════════════════════════
@@ -152,35 +198,47 @@ class MavlinkUdpBackend #B8D4E8 {
 ' ═══════════════════════════════════════════════════
 
 class make_fcc_backend << (F,#D8C0F0) factory >> #E8D8F8 {
-  {static} operator()(node*) : unique_ptr<FccBackend>
-  ' Reads FCC_TRANSPORT env var
-  '  "xrce_dds"    → XrceDdsBackend
-  '  "mavlink_udp" → MavlinkUdpBackend
+  + make_fcc_backend(node : rclcpp::Node*) : unique_ptr<FccBackend>
+  ' Reads SIMULATION_MODE env var (bool)
+  '  true  → MavlinkUdpBackend
+  '  false → XrceDdsBackend
+  ' (FCC_TRANSPORT is a separate, XrceDdsBackend-internal env var —
+  ' serial vs ethernet — not the class-selection switch)
 }
 
 ' ═══════════════════════════════════════════════════
 ' OWNER NODE
 ' ═══════════════════════════════════════════════════
 
-class fcc_bridge_node #D8E8F8 {
+class FccBridgeNode << rclcpp::Node >> #D8E8F8 {
+  ' ROS 2 executable/node name: fcc_bridge_node. Zero business logic —
+  ' topic adapter + liveness monitoring + fault publication only
+  ' (FCC-004/005/006/009). No /mc/fcc/imu or /mc/fcc/odometry relay
+  ' exists yet — SDD §3.4 item 4, tracked separately, not built.
   - backend_ : unique_ptr<FccBackend>
-  - pub_vehicle_state_      ' /mc/fcc/vehicle_state  10 Hz
-  - pub_imu_                ' /mc/fcc/imu           ≥100 Hz
-  - pub_odometry_           ' /mc/fcc/odometry       ≥20 Hz
-  - sub_mission_upload_     ' /mc/fcc/mission_upload
-  - sub_mission_item_upd_   ' /mc/fcc/mission_item_update
-  - sub_send_command_       ' /mc/fcc/send_command
-  - sub_visual_odom_        ' /mc/fcc/visual_odometry
-  - sub_offboard_setpoint_  ' /mc/fcc/offboard_setpoint  (FCC-009)
-  - timer_10hz_ : WallTimer
-  - timer_1hz_  : WallTimer
+  - link_timeout_s_ : double
+  - link_was_alive_ : bool
+  - pub_vehicle_state_  ' /mc/fcc/vehicle_state  ≥10 Hz
+  - pub_fault_          ' /mc/fault  (FaultEvent, on FCC_LINK_LOST)
+  - pub_mission_ack_    ' /mc/fcc/mission_ack  (FCC-006)
+  - timer_cb_group_ : CallbackGroup
+  - publish_timer_ : TimerBase
+  - mission_cb_group_ : CallbackGroup   ' mission_upload + mission_item_update share this
+  - command_cb_group_ : CallbackGroup   ' send_command + offboard_setpoint share this
+  - sub_mission_upload_       ' /mc/fcc/mission_upload
+  - sub_mission_item_update_  ' /mc/fcc/mission_item_update
+  - sub_send_command_         ' /mc/fcc/send_command
+  - sub_offboard_setpoint_    ' /mc/fcc/offboard_setpoint  (FCC-009)
   __
-  + on_mission_upload(msg) : void
-  + on_mission_item_update(msg) : void
-  + on_offboard_setpoint(msg) : void
-  + on_send_command(msg) : void
-  + publish_vehicle_state() : void
-  + check_link_health() : void
+  + FccBridgeNode(options, backend = nullptr)  ' backend param: test seam only
+  - on_publish_timer() : void
+  - on_mission_upload(msg) : void
+  - on_mission_item_update(msg) : void
+  - on_offboard_setpoint(msg) : void
+  - on_send_command(msg) : void
+  - to_msg(state, link_alive) : mc_msgs::msg::VehicleState
+  - {static} to_mission_item(msg) : MissionItem
+  - publish_mission_ack(request_type, upload_id, seq, success) : void
 }
 
 ' ═══════════════════════════════════════════════════
@@ -193,8 +251,12 @@ FccBackend <|-- MavlinkUdpBackend
 make_fcc_backend ..> XrceDdsBackend    : <<creates>>
 make_fcc_backend ..> MavlinkUdpBackend : <<creates>>
 
-fcc_bridge_node *--> FccBackend        : backend_\n(owns via unique_ptr)
-fcc_bridge_node ..>  make_fcc_backend  : calls at startup
+FccBridgeNode *--> FccBackend          : backend_\n(owns via unique_ptr)
+FccBridgeNode ..>  make_fcc_backend    : calls at startup
+
+XrceDdsBackend   *--> MissionProtocolClient : mission_client_\n(owns via unique_ptr)
+MavlinkUdpBackend *--> MissionProtocolClient : mission_client_\n(owns via unique_ptr, lazily\nconstructed by ensure_mission_client())
+MissionProtocolClient ..> MissionItem  : accepts/produces
 
 FccBackend --> VehicleState       : returns (copy)
 FccBackend --> MissionItem        : accepts
@@ -206,10 +268,12 @@ FccBackend --> OffboardSetpoint   : accepts
 ' ═══════════════════════════════════════════════════
 
 note top of FccBackend
-  Abstract base. Application nodes never hold
+  Abstract base — no state of its own; each
+  concrete backend owns its own state_/state_mtx_/
+  last_fcc_msg_time_. Application nodes never hold
   a reference to the concrete type. All MC nodes
   communicate via  /mc/fcc/*  topics published
-  by  fcc_bridge_node  —  not by calling backend
+  by  FccBridgeNode  —  not by calling backend
   methods directly.  [FR-016, IR-001]
 end note
 
@@ -247,13 +311,16 @@ note right of MavlinkUdpBackend
   elsewhere in the system.  [SW-050]
   ──────────────────────────────
   Mission protocol logic is identical
-  to XrceDdsBackend's, just multiplexed
-  over socket_fd_ instead of a
-  dedicated port.
+  to XrceDdsBackend's (same shared
+  MissionProtocolClient class), just
+  multiplexed over sock_fd_ instead of
+  a dedicated port — lazily constructed
+  by ensure_mission_client() once the
+  peer address is known.
   ──────────────────────────────
   stream_offboard_setpoint() (FCC-009) sends
   SET_POSITION_TARGET_LOCAL_NED over the same
-  socket_fd_ — same peer_known_ drop-and-warn
+  sock_fd_ — same peer_known_ drop-and-warn
   convention send_command() already uses for
   "no SITL peer yet."
 end note

@@ -95,7 +95,7 @@ end note
 ' ═══════════════════════════════════════════════════
 ' IFD-002: MC ↔ GCS  (MAVLink 2/UDP)
 ' ═══════════════════════════════════════════════════
-== IFD-002 · MC ↔ GCS · MAVLink 2/UDP · recv :14551  send :14552  ·  sys_id=drone_id  comp_id=191 ==
+== IFD-002 · MC ↔ GCS · MAVLink 2/UDP · recv :14552  send :14551  ·  sys_id=drone_id  comp_id=191 ==
 
 GCS -[#208040]> MC : <color:#208040>HEARTBEAT (0)</color>  1 Hz\n  type=6 (GCS)  ·  autopilot=8
 GCS -[#208040]> MC : <color:#208040>COMMAND_LONG (76)</color>  event\n  MC_CMD_PHASE_TRANSITION (50001)  param1 = phase_id\n  MC_CMD_ARM_AUTHORISE (50002)  param1 = mission_upload_id\n  MC_CMD_END_MISSION (50003)\n  MC_CMD_GCS_OVERRIDE (50004)  param1=1/0  param2=override_type
@@ -205,7 +205,7 @@ end note
 ' GCS-004 — MC side done 2026-08-05; the Orchestrator App itself is
 ' another team's deliverable and has not been built yet.
 ' ═══════════════════════════════════════════════════
-== IFD-008 · MC ↔ Mission Orchestrator · MAVLink 2/UDP + MAVFTP · recv :14571  send :14572 ==
+== IFD-008 · MC ↔ Mission Orchestrator · MAVLink 2/UDP + MAVFTP · recv :14572  send :14571 ==
 
 ORCH -[#4060C0]> MC : <color:#4060C0>MAVFTP: CreateFile/OpenFileWO + WriteFile + TerminateSession</color>\n  create/update "<name>.json" under /var/drone-mc/mission_plans/\n  Nak(FileExists) on create if present · Nak(FileNotFound) on update if absent
 ORCH -[#4060C0]> MC : <color:#4060C0>MAVFTP: ListDirectory("/")</color>\n  one entry per stored plan · "/_active" (synthetic, read-only) reports the active filename
@@ -234,11 +234,14 @@ note over FCC, CAM #E8E8F8
   <b>Key /mc/* topics and flows</b>
 
   fcc_bridge_node  →  /mc/fcc/vehicle_state (≥10 Hz)  →  mission_manager · formation_controller · gcs_mavlink · health_monitor
-  fcc_bridge_node  →  /mc/fcc/imu  (≥100 Hz)          →  visual_localisation_node
+  fcc_bridge_node  →  /mc/fault (event, FaultEvent — FCC_LINK_LOST)  →  mission_manager_node
+  fcc_bridge_node  →  /mc/fcc/mission_ack (event, FCC-006)  →  mission_manager · formation_controller
   formation_controller  →  /mc/fcc/mission_item_update (≥5 Hz)  →  fcc_bridge_node (→ FCC mission, seq 0)
   formation_controller  →  /mc/fcc/offboard_setpoint (≥5 Hz, FCC-009)  →  fcc_bridge_node (→ FCC OFFBOARD stream, OFFBOARD-flagged legs only)
   mission_manager  →  /mc/fcc/mission_upload (on change)  →  fcc_bridge_node (→ FCC mission, full replace)
   mission_manager  →  /mc/fcc/send_command (event)  →  fcc_bridge_node (→ FCC vehicle_command, incl. OFFBOARD mode entry/exit)
+  NOT YET IMPLEMENTED (SDD §3.4 item 4, tracked separately — no publisher
+  exists in fcc_bridge_node today): /mc/fcc/imu, /mc/fcc/odometry relays
 
   gcs_mavlink_node  →  /mc/gcs/command (event)        →  mission_manager_node
   gcs_mavlink_node  →  /mc/gcs/mission_upload (event) →  mission_manager · swarm_coordinator

@@ -116,6 +116,24 @@ note left of ISR_SELECTION
   after ISR_SELECTION completes
 end note
 
+note as N_IMPL_STATUS #FFE0E0
+  <b>Implementation status (verified 2026-09-08):</b> this state
+  machine itself is fully implemented in mission_manager_node.cpp
+  (907 lines) — every transition guard shown here, including the
+  MUSTER quorum check and the ISR/Voronoi acceptance checks, is real
+  code that correctly subscribes to /mc/swarm/peer_states,
+  /mc/swarm/isr_role, /mc/swarm/voronoi_cell, and
+  /mc/search/coverage_path.
+  <b>However</b>, swarm_coordinator_node (publishes peer_states/
+  isr_role/voronoi_cell) and search_planner_node (publishes
+  coverage_path) are both code scaffolds today — a bare Node()
+  constructor with no publishers implemented. So in the current
+  build, a drone can reach MUSTER but nothing ever satisfies the
+  MUSTER → ISR_SELECTION guard, and autonomous progression stalls
+  there until swarm_coord (SC-*) and search_planner_node (part of
+  ME-001/EXEC-*) are actually built out.
+end note
+
 note bottom of VORONOI_PARTITION
   Peer loss during SEARCH (FR-036):
   remaining drones re-run

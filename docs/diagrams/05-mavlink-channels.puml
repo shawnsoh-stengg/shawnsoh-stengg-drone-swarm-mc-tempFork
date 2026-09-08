@@ -90,7 +90,9 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
     component "mavlink-router v4\n(routing daemon)\nSingle ingress/egress point\nfor Channel B" as MLR #B8DCA8
 
-    component "gcs_mavlink_node\n+ MAVROS\nMAVLink system_id = drone ID\ncomp_id = MAV_COMP_ID_ONBOARD_COMPUTER" as GCS_NODE #90C890
+    component "gcs_mavlink_node\nMAVLink system_id = drone ID\ncomp_id = MAV_COMP_ID_ONBOARD_COMPUTER" as GCS_NODE #90C890
+
+    component "MAVROS\n(apt package, not linked by\ngcs_mavlink_node — separate\nOS process, same container)" as MAVROS_PROC #C0E0D0;line.dashed
 
     rectangle "Mission Computer (MC)\n192.168.10.11\nJetson Orin NX 16GB" as MC #A8CCEE
 
@@ -105,6 +107,15 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
       (Mission upload moved to Channel C,
       MISSION-ORCHESTRATOR-MAVLINK-
       INTERFACE-SPEC.md, 2026-07-24.)
+      ──────────────────────────────
+      MAVROS carries NONE of the above —
+      it mirrors Channel A's own GCS<->FCC
+      vehicle telemetry (fcu_url ->
+      MAVROS_CHANNEL_A), not this channel's
+      traffic (GCS-005, SDD §11.1). Shown
+      dashed/separate: same container as
+      gcs_mavlink_node, different process,
+      different channel.
     end note
   }
 
@@ -185,6 +196,7 @@ QGC <-[#208040]-> AU : "  <&bolt> Channel B\n  MAVLink 2/UDP\n  Mission & coordi
 AU <-[#208040]-> MLR : "  <&bolt> Channel B\n  MAVLink 2/UDP\n  via mavlink-router"
 MLR <-[#208040]-> GCS_NODE
 GCS_NODE <--> MC : "  ROS 2 topics /services\n  /mc/gcs/command"
+MAVROS_PROC .[#E07000].> AU : "  mirrors Channel A telemetry\n  (fcu_url -> MAVROS_CHANNEL_A,\n  GCS-005) — not Channel B"
 
 ' Channel C: Orchestrator ↔ MC  (blue). MC side (GCS-004) is done — solid.
 ' The Orchestrator → AU leg stays dashed because it originates from the

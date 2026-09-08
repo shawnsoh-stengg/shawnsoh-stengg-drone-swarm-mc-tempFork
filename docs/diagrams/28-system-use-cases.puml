@@ -61,8 +61,8 @@ rectangle "Swarm Search Drone — Mission Computer System" as SYSTEM #F8F8FF {
 
   package "Vehicle Telemetry & Control  (MAVLink, QGC)" as PKG_TELEM #D8EED8 {
     usecase "Monitor vehicle telemetry\n(position, battery, mode)" as UC_TELEM #B8DCBA
-    usecase "View AI detections" as UC_DET #B8DCBA
-    usecase "View live video downlink\n(gimbal + downward, RTSP/H.265)" as UC_VIDEO #B8DCBA
+    usecase "View AI detections\n[NOT YET IMPLEMENTED —\nperception_down_node is a\ncode scaffold]" as UC_DET #C8C8C8;line.dashed
+    usecase "View live video downlink\n(gimbal + downward, RTSP/H.265)\n[NOT YET IMPLEMENTED —\nvideo_downlink package is a\ncode scaffold, no container built]" as UC_VIDEO #C8C8C8;line.dashed
     usecase "Arm / disarm vehicle" as UC_ARM #B8DCBA
     usecase "Command flight-mode change" as UC_MODE #B8DCBA
     usecase "Override autonomous behavior\n(≤500 ms authority, FR-003)" as UC_OVERRIDE #B8DCBA
@@ -76,10 +76,10 @@ rectangle "Swarm Search Drone — Mission Computer System" as SYSTEM #F8F8FF {
     usecase "Delete mission plan" as UC_DELETE #C8D8F0
   }
 
-  package "Swarm Coordination  (custom UDP protocol, machine actor)" as PKG_SWARM #F5ECF5 {
-    usecase "Exchange heartbeat /\npeer liveness" as UC_HB #E0C8F0
-    usecase "Participate in ISR election" as UC_ISR #E0C8F0
-    usecase "Participate in Voronoi\npartition consensus" as UC_VOR #E0C8F0
+  package "Swarm Coordination  (custom UDP protocol, machine actor)\n[NOT YET IMPLEMENTED]" as PKG_SWARM #ECECEC;line.dashed {
+    usecase "Exchange heartbeat /\npeer liveness" as UC_HB #D8D0E0;line.dashed
+    usecase "Participate in ISR election" as UC_ISR #D8D0E0;line.dashed
+    usecase "Participate in Voronoi\npartition consensus" as UC_VOR #D8D0E0;line.dashed
   }
 }
 
@@ -123,6 +123,13 @@ note right of PKG_SWARM
   whole-system completeness. Peer MCs
   are symmetric: each drone is also a
   "Peer Drone MC" to every other drone.
+  Status (verified 2026-09-08):
+  swarm_coordinator_node and
+  formation_controller_node are both
+  code scaffolds — a bare Node()
+  constructor with no pub/sub/timer
+  logic. None of these use cases are
+  reachable in the current build.
 end note
 
 note left of PKG_TELEM

@@ -2,7 +2,8 @@
 
 A step-by-step path for a developer new to this repo, from a fresh
 checkout to a running `drone-mc.target` on a Jetson, plus the native
-workflow for iterating on a single ROS 2 package. For architecture context
+workflow for iterating on a single ROS 2 package. Brand new to the
+project? Start with `docs/INTRODUCTION.md`. For architecture context
 first, read `docs/ARCHITECTURE.md`.
 
 ## Prerequisites

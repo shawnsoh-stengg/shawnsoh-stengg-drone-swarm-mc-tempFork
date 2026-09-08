@@ -5,7 +5,7 @@
 ' MC-TP-001 §2.4 / §3
 ' ─────────────────────────────────────────────────────────────
 
-title "21 — Mock Node Architecture per Test Level\nReal vs Mocked Nodes at Each Test Level  ·  MC-TP-001 §2.4"
+title "21 — Mock Node Architecture per Test Level\nReal vs Mocked Nodes at Each Test Level  ·  MC-TP-001 §2.4\n<color:#C02020>TP-ST level corrected to actual TEST-002 harness (single-drone, 2026-09-08) — see notes</color>"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -70,9 +70,9 @@ package "TP-UT — Unit Tests  (gtest, colcon test)" as UT_PKG #F4F0FF {
 
 package "TP-NI — Node Integration Tests  (launch_testing + rclpy)" as NI_PKG #F4F8FF {
 
-  rectangle "<b>Nodes under test (real code)</b>\nfcc_bridge_node\nformation_controller_node\nswarm_coordinator_node\nmission_manager_node\nsearch_planner_node\nvisual_localisation_node\nperception_down_node\ngcs_mavlink_node\nhealth_monitor_node" as NI_REAL #C8EEC8
+  rectangle "<b>Nodes under test (real code)</b>\nfcc_bridge_node\nformation_controller_node\nswarm_coordinator_node\nmission_manager_node\nsearch_planner_node\nvisual_localisation_node\nperception_down_node\ngcs_mavlink_node\nhealth_monitor_node\n(swarm_coordinator_node/formation_controller_node\nstill scaffolds — no mc_msgs dependency yet;\nNI tests exercise current stub behaviour only)" as NI_REAL #C8EEC8
 
-  rectangle "<b>Mock nodes (test stubs)</b>\nmock_fcc_node\n  ← bags/fcc_nominal.bag replayed\n  → accepts /mc/fcc/mission_upload\n  → accepts /mc/fcc/mission_item_update\n\nmock_camera_node\n  ← bags/camera_outdoor.bag replayed\n  ← bags/gnss_lost.bag for VO tests\n\nmock_peer_node\n  UDP loopback swarm heartbeats\n\nmock_gcs_node\n  MAVLink 2 on UDP loopback\n  sends cmds · records ACKs" as NI_MOCK #FFD4A8
+  rectangle "<b>Mock nodes (test stubs, mc_test_utils)</b>\nmock_fcc_node\n  ← bags/fcc_nominal bag replayed\n  → accepts /mc/fcc/mission_upload\n  → accepts /mc/fcc/mission_item_update\n\nmock_camera_node\n  ← bags/camera_outdoor bag replayed\n\nmock_peer_node\n  UDP loopback swarm heartbeats\n\nmock_gcs_node\n  MAVLink 2 on UDP loopback\n  sends cmds · records ACKs\n\nmock_swarm_coord_node\n  stands in for swarm_coordinator_node/\n  formation_controller_node/search_planner_node's\n  own topics (isr_role, voronoi_cell) so\n  mission_manager_node's guards can be exercised" as NI_MOCK #FFD4A8
 
   rectangle "NOT PRESENT\nPhysical Pixhawk\nIMX219 camera\nGazebo / PX4 SITL\nMANET radio" as NI_ABSENT #D0D0D0
 
@@ -85,13 +85,13 @@ package "TP-NI — Node Integration Tests  (launch_testing + rclpy)" as NI_PKG #
 
 package "TP-ST — SITL System Tests  (pytest + rclpy + PX4 SITL)" as ST_PKG #F4FFF4 {
 
-  rectangle "<b>Real MC nodes (full production code)</b>\nAll 9 application nodes\nAll Docker containers\ndrone-mc.target\nFCC_TRANSPORT=mavlink_udp" as ST_REAL #C8EEC8
+  rectangle "<b>Real MC nodes (actual TEST-002 harness,\n2026-09-08 — 5 of 9 nodes, single drone)</b>\nfcc_bridge_node · gcs_mavlink_node\nmission_manager_node · search_planner_node\nhealth_monitor_node\nNative ros2 launch processes — NO Docker,\nNO drone-mc.target, FCC_TRANSPORT=mavlink_udp" as ST_REAL #C8EEC8
 
-  rectangle "<b>Simulated / mock components</b>\nPX4 SITL + Gazebo\n  (replaces physical FCC)\n\nMicroXRCEAgent\n  (real binary, UDP to SITL)\n\nmock_camera_node\n  (still replays bags)\n\nmock_gcs_node\n  (scripted command sequences)" as ST_MOCK #FFD4A8
+  rectangle "<b>Simulated / mock components (actual)</b>\nPX4 SITL — SIH backend (automated);\n  Gazebo wired for manual runs only,\n  NOT used by the automated suite\n  (no MicroXRCEAgent — mavlink_udp transport)\n\nmock_swarm_coord_node\n  stands in for swarm_coordinator_node/\n  formation_controller_node/search_planner_\n  node's own topics — those stay scaffolds" as ST_MOCK #FFD4A8
 
-  rectangle "NOT PRESENT\nPhysical Pixhawk\nIMX219 CSI camera\nMANET radio hardware" as ST_ABSENT #D0D0D0
+  rectangle "NOT PRESENT\nPhysical Pixhawk\nIMX219 CSI camera (no camera-dependent\n  phase is reachable — see diagram 19)\nMANET radio hardware\nswarm_coordinator_node / formation_\n  controller_node / visual_localisation_node /\n  perception_down_node (not launched by\n  this harness at all)\nA second drone instance (single-drone only)" as ST_ABSENT #D0D0D0
 
-  rectangle "pytest test scripts\niptables (link drop injection)\ndocker kill (process injection)\nrclpy topic assertions\nros2 topic hz / delay / echo" as ST_HARNESS #E0D0F8
+  rectangle "pytest + launch_testing (native, no containers)\nPX4-side MAV_CMD_INJECT_FAILURE (battery)\npkill (FCC/PX4 process kill)\nwithheld MAVLink heartbeats (GCS link loss)\nrclpy topic assertions" as ST_HARNESS #E0D0F8
 }
 
 ' ═══════════════════════════════════════════════════
@@ -115,24 +115,27 @@ package "TP-HW — Hardware-in-the-Loop  (physical hardware, manual)" as HW_PKG 
 
 UT_PKG -[#3D5A80,thickness=3]down-> NI_PKG : Gate: all 18 unit tests pass
 NI_PKG -[#3D5A80,thickness=3]down-> ST_PKG : Gate: all 16 NI tests pass
-ST_PKG -[#3D5A80,thickness=3]down-> HW_PKG : Gate: all 12 SITL tests pass\nall S1/S2 defects closed
+ST_PKG -[#3D5A80,thickness=3]down-> HW_PKG : Gate (design): all 12 SITL tests pass\nall S1/S2 defects closed\n(actual: only 5/12 run — 7 skipped,\nsee diagram 16/19/20 status notes)
 
 ' ═══════════════════════════════════════════════════
 ' DATA ASSETS
 ' ═══════════════════════════════════════════════════
 
-package "Test Data Assets  (bags/ and test_data/)" as DATA #F8F8F0 {
-  rectangle "bags/fcc_nominal.bag\nbags/camera_outdoor.bag\nbags/gnss_lost.bag\ntest_data/search_polygon_500m.json\ntest_data/mission_upload_3drone.yaml\ntest_data/detection_ground_truth.json" as BAGS #F0EECC
+package "Test Data Assets  (ws/src/mc_test_utils/test_data/)" as DATA #F8F8F0 {
+  rectangle "bags/fcc_nominal/  (rosbag2 sqlite3)\nbags/camera_outdoor/  (rosbag2 sqlite3)\nmission_upload_3drone.yaml\ngenerate_bags.py  (regenerates the two bags above —\n  synthetic, not real hardware capture; TEST-001 AC)" as BAGS #F0EECC
 }
 
 NI_MOCK ..[#A0A000].. DATA : replayed by mock nodes
 ST_MOCK ..[#A0A000].. DATA : camera bag replayed
 
 note bottom of DATA
-  All test data collected from physical hardware
-  during initial lab bring-up (M2).
-  Bags are version-controlled in test_data/ repo.
-  SHA256 checksums verified before each test run.
+  Actual (2026-09-08): both bags are synthetic,
+  generated by generate_bags.py — no physical
+  hardware capture exists yet (TEST-001's own
+  acceptance criteria accepted a synthetic
+  equivalent instead). Design target of physical
+  lab-bringup capture + SHA256 verification not
+  yet implemented.
 end note
 
 @enduml

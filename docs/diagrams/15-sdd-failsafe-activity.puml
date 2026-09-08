@@ -2,6 +2,9 @@
 ' ─────────────────────────────────────────────────────────────
 ' Diagram 15: Health Monitor Failsafe Decision Tree
 ' SDD §10.3 — health_monitor_node  (1 Hz decision loop)
+' Redrawn 2026-09-08 against the real HEALTH-001..004 implementation
+' (ws/src/health_monitor/) — see health_monitor_node.hpp's own top-of-file
+' note for the FR-026-vs-SDD-§10.3 rationale this diagram now follows.
 ' MC-SDD-001
 ' ─────────────────────────────────────────────────────────────
 
@@ -38,114 +41,153 @@ skinparam note {
 
 start
 
-:1 Hz WallTimer fires;
+:1 Hz WallTimer fires\n(sample_and_publish());
+
+note right #FFE0E0
+  <b>FR-026 vs SDD §10.3:</b> the SDD text (and FR-072/FR-075) reads as if
+  health_monitor_node commands the FCC directly for HOLD/RTL. FR-026 is
+  explicit and absolute instead: mission_manager_node is the sole node
+  that commands a flight-mode change. Every branch below only publishes
+  an annotated /mc/fault; mission_manager_node's own pre-existing
+  on_fault()/is_critical_fault() machinery is what actually RTLs.
+  <b>The one deliberate exception</b> is Branch B's FR-075 final-resort
+  case: after 3 failed mission-exec.service restarts, mission_manager_node
+  is presumed unreachable, so health_monitor_node commands RTL directly.
+  That is the ONLY send_command() call anywhere in this node.
+  ─────────────────────────────────────────────────────────────
+  Also: all branches below run <b>sequentially</b>, in this exact order,
+  within one single-threaded WallTimer callback — not concurrently. The
+  fork/join grouping is only a readability device for six independent
+  checks, not a claim of parallel execution.
+end note
 
 fork
-  ' ─── Branch A: FCC link ───────────────────────────
-  :Read fcc_backend.is_link_alive(1.0s);
-  if (FCC link alive?) then (no)
-    :<color:#C02020>Set FCC_LINK_LOST in fault_mask</color>;
-    :Attempt vehicle_command HOLD\n via fcc_bridge_node;
-    if (FCC responds to HOLD?) then (no)
-      :<color:#C02020>Declare FAULT phase</color>;
-      :Publish /mc/health {FCC_LINK_DEAD};
-      :Notify GCS: STATUSTEXT CRITICAL;
+  ' ─── Branch A: FCC link (check_fcc_link) ────────────────
+  :Read /mc/fcc/vehicle_state.fcc_link_ok\n(published by fcc_bridge_node);
+  if (fcc_link_ok?) then (no)
+    if (was ok last tick?  (edge)) then (yes)
+      :<color:#C02020>publish_fault(FCC_LINK_LOST, CRITICAL,\nACTION_RTL)</color>;
       note right
-        Cannot RTL without FCC link.
-        PX4 independent failsafe
-        (RC/GCS loss) will act.
-        [FR-015]
+        Annotation only — no send_command() here.
+        fcc_bridge_node already publishes its own
+        FCC_LINK_LOST fault; mission_manager_node's
+        existing on_fault()/is_critical_fault()
+        (severity ≤ CRITICAL) is what actually RTLs.
+        This is a second, independent observation
+        for /mc/health visibility (defense-in-depth).
+        [FR-026, FR-072]
       end note
-    else (yes)
-      :Log fault: FCC_TIMEOUT;
-      :Notify GCS: STATUSTEXT WARN;
+    else (no — still down, already reported this outage)
     endif
   else (yes)
   endif
+  :Set/clear FCC_LINK_LOST in fault_mask\nto match current fcc_link_ok  (every tick);
 
 fork again
-  ' ─── Branch B: Manager node liveness ────────────
-  :Check /mc/manager/heartbeat age;
-  if (age > 5 s?) then (yes)
-    :restart_count[manager]++;
-    if (restart_count > 3?) then (yes)
-      :<color:#C02020>CRITICAL_FAULT — manager dead</color>;
-      :Command RTL via fcc_bridge_node directly\n(bypass mission_manager);
-      :Publish /mc/health {MANAGER_DEAD};
-      :Notify GCS: STATUSTEXT CRITICAL;
-      note right
-        Restart attempts exhausted.
-        fcc_bridge_node is still alive
-        and can accept vehicle_command.
-        [FR-075, SFR-004]
-      end note
-    else (no)
-      :Trigger systemd restart\n(via watchdog.sock);\n→ docker restart mission-exec.service;
-      :Notify GCS: STATUSTEXT WARN\n"manager restarting (attempt N/3)";
-    endif
+  ' ─── Branch B: Manager node liveness (check_manager_heartbeat) ──
+  :node_watches_[mission_manager_node] alive?\n(heartbeat seen within\nmanager_heartbeat_timeout_s, default 5 s);
+  if (alive now?) then (yes)
+    :restart_count ← 0; escalated ← false;\nClear MANAGER_DEAD in fault_mask;
   else (no)
-  endif
-
-fork again
-  ' ─── Branch C: GCS link ──────────────────────────
-  :Read /mc/gcs/link_status.gcs_link_ok;
-  if (GCS link lost?) then (yes)
-    if (mission_phase in autonomous phases?) then (yes)
-      ' INGRESS, MUSTER, ISR_SELECTION,
-      ' VORONOI_PARTITION, SEARCH
-      if (GCS override HOLD active?) then (no)
-        :Signal mission_manager:\n  command HOLD via /mc/fault;
-        :Log fault: GCS_TIMEOUT;
-        note right
-          On GCS recovery:
-          GCS must re-issue phase command.
-          HOLD is not auto-released.
-          [FR-073, SFR-007]
-        end note
-      else (yes: GCS explicit override)
+    :Set MANAGER_DEAD in fault_mask  (every tick);
+    if (already escalated to RTL?) then (yes)
+      :Do nothing further —\nedge-triggered, waits for recovery;
+    else (no)
+      if (just died this tick,\nOR ≥ manager_restart_retry_s (10 s)\nsince last action?) then (no — still cooling down)
+        :Do nothing this tick;
+      else (yes)
+        :restart_count++;
+        if (restart_count ≤ 3?) then (yes)
+          :Request systemd restart via watchdog.sock\n(target: mission-exec.service);
+          :<color:#E05000>publish_fault(MANAGER_DEAD, CRITICAL,\n"restart attempt N/3", ACTION_NONE)</color>;
+        else (no — restart budget exhausted)
+          :escalated ← true;
+          :<color:#C02020>send_fcc_command(RTL)</color>\n<b>— the ONE branch that ever calls\nsend_command() (FR-075)</b>;
+          :<color:#C02020>publish_fault(MANAGER_DEAD, CRITICAL,\n"restart budget exhausted — commanded\nRTL directly (FR-075)", ACTION_RTL)</color>;
+        endif
       endif
-    else (no: safe phase)
     endif
-  else (no)
   endif
 
 fork again
-  ' ─── Branch D: Battery ───────────────────────────
-  :Read battery_remaining from /mc/fcc/vehicle_state;
-  if (battery_remaining < 20%?) then (yes)
-    if (GCS override LOW_BATTERY_RTL active\n AND GCS link healthy?) then (yes)
-      :Log suppressed: operator override active;
+  ' ─── Branch C: GCS link (check_gcs_link) ────────────────
+  :Read /mc/gcs/link_status.gcs_link_ok;
+  if (ok → lost this tick?  (edge)) then (yes)
+    if (mission_phase in {INGRESS, MUSTER, ISR_SELECTION,\nVORONOI_PARTITION, SEARCH}\nAND override_gcs_link_hold_ not active?) then (yes)
+      :publish_fault(GCS_LINK_LOST, WARNING, ACTION_HOLD);
       note right
-        Override only honoured with
-        a healthy GCS link.
-        [SFR-008]
+        Severity WARNING (not CRITICAL) — deliberately
+        does NOT trip mission_manager_node's blanket
+        "any critical fault → RTL" reaction.
+        <b>Known, documented gap:</b> mission_manager_node
+        has no HOLD-on-fault path today, so nothing
+        actually enacts HOLD yet — annotation/telemetry
+        only, same class of accepted gap as
+        OFFBOARD_STREAM_STALE / GIMBAL_LINK_LOST.
+        [FR-073 intent, SFR-007 — tracked, not silently
+        reinterpreted]
       end note
+    else (no — safe phase, or override active)
+      :publish_fault(GCS_LINK_LOST, WARNING, ACTION_NONE);
+    endif
+  else (no change, or already lost)
+  endif
+  :Set/clear GCS_LINK_LOST in fault_mask\nto match current gcs_link_ok;
+
+fork again
+  ' ─── Branch D: Battery (check_low_battery) ──────────────
+  :Read battery_pct from /mc/fcc/vehicle_state\n(ignore -1.0 "unknown" sentinel\nuntil a real sample arrives — TEST-002);
+  if (0 ≤ battery_pct < effective threshold?\n(default 20%, or mission_upload's\nper-mission override)  — edge only) then (yes)
+    if (override_low_battery_rtl_ active?) then (yes)
+      :publish_fault(LOW_BATTERY, WARNING,\n"suppressed by operator override", ACTION_NONE);
     else (no)
-      :<color:#C02020>Command RTL\n via fcc_bridge_node</color>;
-      :Publish /mc/health {LOW_BATTERY};
-      :Notify GCS: STATUSTEXT WARN\n"low battery — initiating RTL";
+      :<color:#C02020>publish_fault(LOW_BATTERY, CRITICAL,\nACTION_RTL)</color>;
+      note right
+        Annotation only, same pattern as Branch A —
+        no send_command() here either. CRITICAL
+        severity is enough for mission_manager_node's
+        existing is_critical_fault() to auto-RTL
+        on its own. [FR-026]
+      end note
     endif
   else (no)
   endif
+  :Set/clear LOW_BATTERY in fault_mask;
 
 fork again
-  ' ─── Branch E: Thermal ───────────────────────────
-  :Read GPU temp (tegrastats pipe)\nand CPU temp (/sys/class/thermal/...);
-  if (GPU temp > 85 °C?) then (yes)
-    :Reduce inference_rate_limit_fps → 5 FPS\n(dynamic ROS 2 param update);
-    :Notify GCS: STATUSTEXT WARN "GPU thermal throttle";
+  ' ─── Branch E: GPU thermal (check_gpu_overtemp) ─────────
+  :Read gpu_temp_c  (tegrastats pipe,\nvia ResourceSampler);
+  if (gpu_temp_c > gpu_overtemp_threshold_c\n(default 85 °C)?  — edge only) then (yes)
+    :Set perception_down_node param\ninference_rate_limit_fps → 5 FPS\n(AsyncParametersClient, best-effort —\nnode may not exist yet);
+    :publish_status_text(WARNING,\n"GPU temperature ... exceeds threshold");
+    :publish_fault(GPU_OVERTEMP, WARNING, ACTION_NONE);
   else (no)
   endif
-  if (CPU temp > 90 °C?) then (yes)
-    :<color:#E05000>Set CPU_OVERTEMP in fault_mask</color>;
-    :Notify GCS: STATUSTEXT WARN;
+  :Set/clear GPU_OVERTEMP in fault_mask;
+
+fork again
+  ' ─── Branch F: vision.service cgroup memory (check_vision_memory) ──
+  ' INFRA-007 — not in the original SDD §10.3 text; added after this
+  ' diagram was last drawn. Time-windowed, not edge-on-first-sample.
+  :Sample vision.service cgroup\nmemory_current / memory_max  %;
+  if (usage ≥ vision_mem_threshold_pct\n(default 80%), sustained\n≥ vision_mem_sustained_s (default 30 s)?\n— edge only) then (yes)
+    :publish_fault(VISION_MEM_HIGH, WARNING,\n"MemoryMax=6G budget at risk", ACTION_NONE);
   else (no)
   endif
+  :Set/clear VISION_MEM_HIGH in fault_mask;
 
 end fork
 
 :Publish /mc/health\n(all metrics + fault_mask + node_alive_mask);
 :Publish MC_HEALTH (50103) → GCS via gcs_mavlink_node;
+
+note right
+  There is no "CPU_OVERTEMP" fault or decision branch —
+  mc_msgs/FaultEvent.msg defines no such constant, and
+  no code path samples CPU temperature into a failsafe
+  decision (only GPU_OVERTEMP and VISION_MEM_HIGH above).
+  An earlier version of this diagram showed one; removed.
+end note
 
 end
 

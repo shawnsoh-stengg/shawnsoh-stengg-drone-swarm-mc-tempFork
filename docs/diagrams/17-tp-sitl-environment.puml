@@ -4,7 +4,7 @@
 ' MC-TP-001 §3.2
 ' ─────────────────────────────────────────────────────────────
 
-title "17 — SITL Test Environment Topology\nSoftware-In-The-Loop Network and Process Layout  ·  MC-TP-001 §3.2"
+title "17 — SITL Test Environment Topology\nSoftware-In-The-Loop Network and Process Layout  ·  MC-TP-001 §3.2\n<color:#C02020>Design target — actual TEST-002 harness is single-drone, native processes, no Docker (see note)</color>"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -40,53 +40,41 @@ skinparam arrow {
 ' ═══════════════════════════════════════════════════
 ' SITL HOST  (x86_64 Ubuntu 22.04 Desktop)
 ' ═══════════════════════════════════════════════════
-package "SITL Host  ·  Ubuntu 22.04 x86_64  ·  192.168.10.50" as SITL_HOST #FFF0E0 {
+package "SITL Host  ·  Ubuntu 22.04 x86_64  ·  127.0.0.1 (loopback only)" as SITL_HOST #FFF0E0 {
 
-  package "PX4 SITL Instance 1  (Drone 1)" as PX4_1 #FFE0C0 {
-    rectangle "px4  (jmavsim / Gazebo)\nTCP:4560  · UDP:14540\nMAV_SYS_ID=1" as PX4_1A #FFD4A8
-    rectangle "MicroXRCEAgent\nUDP:8888 (instance 1)\nbridges PX4 uORB ↔ ROS 2" as XRCE_1 #FFD4A8
+  package "PX4 SITL Instance 0  (only instance actually run)" as PX4_1 #FFE0C0 {
+    rectangle "px4  (SIH backend, automated;\nGazebo/gz_x500 available for\nmanual use_gazebo=True runs only)\nROS_DOMAIN_ID=20 · MAV_SYS_ID=1\nnative process, no Docker" as PX4_1A #FFD4A8
   }
 
-  package "PX4 SITL Instance 2  (Drone 2)" as PX4_2 #FFE0C0 {
-    rectangle "px4  (jmavsim / Gazebo)\nTCP:4561  · UDP:14541\nMAV_SYS_ID=2" as PX4_2A #FFD4A8
-    rectangle "MicroXRCEAgent\nUDP:8889 (instance 2)\nbridges PX4 uORB ↔ ROS 2" as XRCE_2 #FFD4A8
+  package "PX4 SITL Instance 1+  (wired, NOT runtime-verified)" as PX4_2 #E8E8E8;line.dashed {
+    rectangle "sitl_common.py's ROS_DOMAIN_ID/port-stride\nscheme supports further instances,\nbut the automated pytest suite only ever\nexercises instance 0 — real multi-drone\nswarm coordination is moot while\nswarm_coord/search_planner_node remain\nscaffolds (see mock_swarm_coord_node)" as PX4_2A #E0E0E0;line.dashed
   }
 
-  rectangle "Gazebo Garden\n3D physics simulation\nIMU · GPS · camera · collisions\nShared world for all instances" as GAZEBO #F4C88A
+  rectangle "mock_gcs_node  (mc_test_utils.mavlink_gcs_client)\nSends MAVLink 2 to the one MC instance on\n127.0.0.1:14560 (GCS_LOOPBACK_PORT_BASE)\nRecords ACKs/status for assertion" as MOCKGCS #C8E0A8
 
-  rectangle "mock_gcs_node\n(Python / rclpy)\nSends MAVLink 2 to MC instances\nReceives MC_STATUS · MC_DETECTION\nRecords all GCS traffic for assertion" as MOCKGCS #C8E0A8
-
-  rectangle "pytest test script\n(per TP-ST test case)\nOrchestrates: GCS commands · fault injection\nAsserts: phase transitions · topic rates · content\nRecords: latencies · fault times · resource usage" as PYTEST #B8DCA8
+  rectangle "pytest test script\n(test_sitl_mission_scenarios.py, launch_testing)\nOrchestrates: GCS commands · PX4-side failure\ninjection (MAV_CMD_INJECT_FAILURE) · pkill\nAsserts via rclpy subscriptions to real topics" as PYTEST #B8DCA8
 }
 
 ' ═══════════════════════════════════════════════════
 ' MC INSTANCE 1  (Docker stack — Drone 1)
 ' ═══════════════════════════════════════════════════
-package "MC Instance 1  ·  Docker stack  ·  192.168.10.11" as MC1 #E4EEF8 {
-  rectangle "drone-mc.target\nFCC_TRANSPORT=mavlink_udp\nSIMULATION_MODE=true\nDRONE_ID=1" as MC1_ENV #C0D8F0
+package "MC Instance 0  ·  native processes (ros2 launch, no Docker)  ·  127.0.0.1" as MC1 #E4EEF8 {
+  rectangle "SIMULATION_MODE=true · DRONE_ID=1\nROS_DOMAIN_ID=20 (ROS_DOMAIN_ID_BASE)\nlaunched by sitl_common.py.build_drone_nodes(0)" as MC1_ENV #C0D8F0
 
-  rectangle "fcc_bridge_node\n[MavlinkUdpBackend]\nUDP → 192.168.10.50:14540" as MC1_FCC #A8CCEE
+  rectangle "fcc_bridge_node\n[MavlinkUdpBackend]\nUDP loopback :14540 ↔ PX4 instance 0" as MC1_FCC #A8CCEE
 
-  rectangle "mission_manager_node\nswarm_coordinator_node\nformation_controller_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node\nvisual_localisation_node\nperception_down_node" as MC1_NODES #B8D0E8
+  rectangle "mission_manager_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node" as MC1_NODES #B8D0E8
 
-  rectangle "mock_camera_node\n(replaces CSI camera_node)\nreplays bags/camera_outdoor.bag\n1280×720 BGR8 ≥15 FPS" as MC1_CAM #D0E0F8
+  rectangle "mock_swarm_coord_node  (mc_test_utils)\nStands in for swarm_coordinator_node/\nformation_controller_node/search_planner_\nnode's own topics — those real nodes are\nstill scaffolds (no mc_msgs dependency).\nPublishes just enough isr_role/voronoi_cell\nto satisfy mission_manager_node's guards." as MC1_MOCKSWARM #D0E0F8
 
-  rectangle "CycloneDDS\nDomain 0  ·  DRONE_ID=1" as MC1_DDS #C8D8F0
+  rectangle "CycloneDDS\nDomain 20 (this instance's ROS_DOMAIN_ID)" as MC1_DDS #C8D8F0
 }
 
 ' ═══════════════════════════════════════════════════
-' MC INSTANCE 2  (Docker stack — Drone 2)
+' MC INSTANCE 1+  (wired, not exercised)
 ' ═══════════════════════════════════════════════════
-package "MC Instance 2  ·  Docker stack  ·  192.168.10.12" as MC2 #EEE4F8 {
-  rectangle "drone-mc.target\nFCC_TRANSPORT=mavlink_udp\nSIMULATION_MODE=true\nDRONE_ID=2" as MC2_ENV #C8B0E8
-
-  rectangle "fcc_bridge_node\n[MavlinkUdpBackend]\nUDP → 192.168.10.50:14541" as MC2_FCC #C0A0E0
-
-  rectangle "mission_manager_node\nswarm_coordinator_node\nformation_controller_node\nsearch_planner_node\nhealth_monitor_node\ngcs_mavlink_node\nvisual_localisation_node\nperception_down_node" as MC2_NODES #C8B8E0
-
-  rectangle "mock_camera_node\n(replays bags/camera_outdoor.bag)" as MC2_CAM #D8C8F0
-
-  rectangle "CycloneDDS\nDomain 0  ·  DRONE_ID=2" as MC2_DDS #C8C0F0
+package "MC Instance 1+  ·  NOT RUNTIME-VERIFIED" as MC2 #E8E8E8;line.dashed {
+  rectangle "Same node set as Instance 0 would be\nlaunched with ROS_DOMAIN_ID=21+,\nport-stride 10 — but the automated\npytest suite never starts a second\ninstance. No camera/vision nodes run\nat any instance (mock_camera_node exists\nin mc_test_utils but this SITL harness\ndoesn't launch it — no camera-dependent\nphase is reachable, see test skip reasons)." as MC2_NODES #E0E0E0;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════
@@ -94,55 +82,54 @@ package "MC Instance 2  ·  Docker stack  ·  192.168.10.12" as MC2 #EEE4F8 {
 ' ═══════════════════════════════════════════════════
 
 ' FCC SITL ↔ MC  (MAVLink UDP — FccBackend)
-MC1_FCC <-[#E07000]-> PX4_1A : MAVLink 2 / UDP\n:14540 ↔ :14550
-MC2_FCC <-[#E07000]-> PX4_2A : MAVLink 2 / UDP\n:14541 ↔ :14551
+MC1_FCC <-[#E07000]-> PX4_1A : MAVLink 2 / UDP\n:14540 (SITL_FCC_PORT)
+PX4_2A -[hidden]-> MC2_NODES
 
 ' GCS ↔ MC  (MAVLink 2/UDP — Channel B)
-MOCKGCS <-[#208040]-> MC1_NODES : MAVLink 2 / UDP\n:14551/:14552 (Drone 1)
-MOCKGCS <-[#208040]-> MC2_NODES : MAVLink 2 / UDP\n:14553/:14554 (Drone 2)
+MOCKGCS <-[#208040]-> MC1_NODES : MAVLink 2 / UDP\nloopback :14560 (GCS_LOOPBACK_PORT_BASE)
 
-' Swarm peer-to-peer (UDP loopback)
-MC1_NODES <-[#7030A0]-> MC2_NODES : Swarm Protocol / UDP\n192.168.10.11↔12\n:14900 hb · :14901 coord
-
-' Camera mock → nodes
-MC1_CAM -[#5050C0]-> MC1_NODES : /camera/image_raw\n/camera/camera_info  ≥15 FPS
-MC2_CAM -[#5050C0]-> MC2_NODES : /camera/image_raw\n/camera/camera_info  ≥15 FPS
+' mock_swarm_coord_node feeds mission_manager_node/search_planner_node's guards
+MC1_MOCKSWARM -[#7030A0]-> MC1_NODES : /mc/swarm/isr_role\n/mc/swarm/voronoi_cell\n(same-process ROS 2 topics, domain 20)
 
 ' Pytest control
 PYTEST -[#208040]-> MOCKGCS : GCS commands + assertions
-PYTEST -[#C02020]-> MC1_NODES : fault injection\n(iptables / docker kill)
-PYTEST -[#C02020]-> MC2_NODES : fault injection
-
-' Gazebo shared physics
-GAZEBO -[#A08020]-> PX4_1A : sensor data (IMU · GPS · camera)
-GAZEBO -[#A08020]-> PX4_2A : sensor data
+PYTEST -[#C02020]-> MC1_FCC : PX4-side MAV_CMD_INJECT_FAILURE\n(battery, via px4 SITL's own MAVLink port)
+PYTEST -[#C02020]-> PX4_1A : pkill px4_sitl_default\n(FCC link loss — test_10c)
 
 ' ═══════════════════════════════════════════════════
 ' NOTES
 ' ═══════════════════════════════════════════════════
 
 note bottom of MC1
-  CycloneDDS domain 0 is per-instance (DRONE_ID env var
-  included in domain partition key), so Drone 1 and Drone 2
-  internal topics do not cross-contaminate.
-  Each stack runs in its own Docker bridge network segment.
+  All processes here (px4, fcc_bridge_node, gcs_mavlink_node,
+  mission_manager_node, search_planner_node, health_monitor_node,
+  mock_swarm_coord_node) are launched natively by
+  ws/src/mission_exec/launch/sitl_common.py via ros2 launch —
+  no Docker, no drone-mc.target, no camera/vision nodes.
+  ROS_DOMAIN_ID=20 isolates this instance's ROS graph;
+  a second instance would use 21, a third 22, etc.
 end note
 
 note bottom of SITL_HOST
-  Network layout replicates production 192.168.10.x on loopback:
-  SITL host acts as router via iptables NAT rules.
-  Fault injection: iptables DROP on specific ports simulates link loss.
-  docker kill targets specific containers to simulate node crashes.
+  Everything runs on one host's loopback (127.0.0.1) — there is
+  no 192.168.10.x network, no iptables NAT, no MANET, and no
+  Docker in this test level. Fault injection is real, not
+  simulated: PX4-side MAV_CMD_INJECT_FAILURE for battery,
+  withheld MAVLink heartbeats for GCS link loss (test_10b —
+  note this only asserts /mc/gcs/link_status, NOT a phase
+  transition to HOLD; mission_manager_node has no HOLD state,
+  see SDD-MC-001.md §10.3's documented gap), and pkill for FCC
+  link loss (test_10c, destructive — kills the shared PX4
+  process, so it runs last).
 end note
 
 legend right
   | Line | Interface |
-  | <#E07000> Orange  | FCC ↔ MC  (MAVLink UDP — SITL transport) |
-  | <#208040> Green   | GCS ↔ MC  (MAVLink 2/UDP Channel B) |
-  | <#7030A0> Purple  | MC ↔ MC Peer  (Swarm Protocol/UDP) |
-  | <#5050C0> Blue    | Camera → MC  (ROS 2 topics) |
-  | <#C02020> Red     | pytest fault injection  (iptables / docker) |
-  | <#A08020> Olive   | Gazebo → PX4 SITL  (sensor simulation) |
+  | <#E07000> Orange  | FCC ↔ MC  (MAVLink 2/UDP, loopback — SITL transport) |
+  | <#208040> Green   | GCS ↔ MC  (MAVLink 2/UDP Channel B, loopback) |
+  | <#7030A0> Purple  | mock_swarm_coord_node → mission_manager/search_planner (ROS 2 topics) |
+  | <#C02020> Red     | pytest fault injection (PX4 failure injection / pkill — no iptables/docker) |
+  | Dashed            | Wired in sitl_common.py but never runtime-exercised |
 endlegend
 
 @enduml
