@@ -54,7 +54,7 @@ package "GCS (Ground Control Station)" as GCS_PKG #E8F4E8 {
 }
 
 package "Swarm Peer Drone MCs" as PEER_PKG #F0E8F8 {
-  rectangle "Peer MC #2\n192.168.10.12\nUDP: 14900 hb\nUDP: 14901 coord" as PEER #D8C0F0
+  rectangle "Peer MC #2\n192.168.10.12\nUDP: 14900 hb\nUDP: 14901 coord\n[DESIGN ONLY — swarm_coordinator_node\nis still a scaffold, no networking\ncode implemented yet]" as PEER #D8C0F0;line.dashed
 }
 
 rectangle "Debug Host\nUbuntu x86_64\nlaptop / bench PC" as DBG #D8D8F8
@@ -74,7 +74,7 @@ package "MC Assembly — Holybro Pixhawk Jetson Baseboard" as MC_PKG #E0EAF8 {
 
   rectangle "Baseboard\nPower regulator · Ethernet switch\nUART bridge (on-board trace)\nINA226 power monitor" as BB #C8D8E8
 
-  package "Pixhawk 6X  ·  192.168.10.31 / 192.168.12.2" as PX4 #F4EAD4 {
+  package "Pixhawk 6X  ·  192.168.10.31 / 192.168.12.31" as PX4 #F4EAD4 {
     rectangle "PX4 v1.14 / NuttX\nSTM32H7\nuXRCE-DDS client" as PX4_SW #E8D4A8
     rectangle "Peripherals\nUART B · Ethernet\nMicroSD · GPS · ESC\nRC · TELEM" as PX4_HW #E8D4A8
   }
@@ -96,7 +96,7 @@ end note
 ' HIF-002: INTERNAL ETHERNET (192.168.12.x)
 ' ═══════════════════════════════════════════════════
 
-BB <-[#208040,thickness=2]-> PX4_HW : **HIF-002**  100BASE-T (on-board)\n192.168.12.1 ↔ 192.168.12.2\nUDP:8888 uXRCE-DDS secondary
+BB <-[#208040,thickness=2]-> PX4_HW : **HIF-002**  100BASE-T (on-board)\n192.168.12.1 ↔ 192.168.12.31\nUDP:8888 uXRCE-DDS secondary
 
 ' ═══════════════════════════════════════════════════
 ' HIF-003: CSI-2 CAMERA
@@ -122,9 +122,12 @@ AU -[#90B890,dashed]-> PEER : MANET wireless
 
 note on link #E8F4E8
   All external traffic via this interface:
-  GCS↔MC MAVLink 2/UDP
-  GCS↔FCC MAVLink 2/UDP (routed)
+  GCS↔MC MAVLink 2/UDP (Channel B, done)
+  GCS↔FCC MAVLink 2/UDP (Channel A, routed)
+  GCS↔MC MAVLink 2/UDP (Channel C — mission
+    plan library, MC side done, GCS-004/006)
   Swarm heartbeat/coordination UDP
+    [DESIGN ONLY — not implemented yet]
 end note
 
 ' ═══════════════════════════════════════════════════

@@ -118,29 +118,31 @@ FCC_BE --> HM : RTL confirmed
 
 GCS ->X EXEC : (GCS MAVLink link drops)
 
-note over EXEC
-  gcs_mavlink_node publishes
-  /mc/gcs/link_status.
-  Timeout threshold: 10 s  [FR-073]
+note over HM #FFE0E0
+  <b>Real implementation (verified 2026-09-08, HEALTH-003):</b>
+  health_monitor_node is the one that detects this — it consumes
+  gcs_mavlink_node's /mc/gcs/link_status directly. mission_manager_node
+  has no GCS-link timer of its own (no code match for it in
+  mission_manager_node.cpp). HM publishes /mc/fault{GCS_LINK_LOST,
+  action=HOLD} at deliberately NON-critical severity, specifically so
+  it does NOT trip mission_manager_node's blanket critical-fault→RTL
+  reaction. But mission_manager_node's on_fault()/guard_any_fault()
+  machinery only ever knows how to RTL — there is no HOLD-consumption
+  path implemented anywhere in the code.
+  <b>Net effect: no FCC command is ever actually sent for this
+  scenario today.</b> This is a documented, known gap (see
+  HEALTH-003's own resolution notes), not a diagram omission.
 end note
 
-EXEC -> EXEC : GCS link lost timer starts
-
-EXEC -> EXEC : 10 s elapsed — GCS still absent
-
-EXEC -> FCC_BE : vehicle_command: HOLD
-FCC_BE -> FCC : vehicle_command: HOLD
-FCC --> FCC_BE : HOLD ✓
-
-EXEC -> HM : GCS_LINK_LOST event
-HM -> HM : log fault: GCS_TIMEOUT
+HM -> HM : /mc/gcs/link_status stale >10 s  [FR-073]
+HM -> EXEC : /mc/fault {GCS_LINK_LOST,\nseverity=non-critical, action=HOLD}
 
 note over EXEC, HM
-  Drone holds position until GCS link
-  recovers. On recovery, GCS must
-  re-issue phase command.
-  SFR-007: applies in INGRESS, MUSTER,
-  ISR_SELECTION, VORONOI_PARTITION, SEARCH
+  <color:#C02020>GAP: EXEC has no HOLD-consumption path for this
+  fault — no vehicle_command is sent to FCC_BE.</color>
+  SFR-007's target design once closed: drone holds position until GCS
+  link recovers, applies in INGRESS, MUSTER, ISR_SELECTION,
+  VORONOI_PARTITION, SEARCH.
 end note
 
 GCS -> EXEC : (link recovers)\nMAVLink HEARTBEAT received
@@ -154,21 +156,35 @@ FCC_BE -> FCC : resume coverage path
 ' ═══════════════════════════════════════════════════
 == Scenario E — Low Battery: Automatic RTL  [FR-072, SFR-008] ==
 
+note over HM, EXEC #FFE0E0
+  <b>Real implementation (verified 2026-09-08, HEALTH-003):</b>
+  health_monitor_node subscribes to /mc/fcc/vehicle_state directly
+  (battery_pct) — mission_manager_node does not forward battery state
+  to it. And per FR-026's single-commander invariant, HM itself never
+  calls send_command() here — it only publishes /mc/fault{LOW_BATTERY,
+  action=RTL}. The actual vehicle_command: RTL is sent by
+  mission_manager_node's existing on_fault()/action_command_rtl()
+  machinery, the same path FCC_LINK_LOST already used before
+  HEALTH-003 existed.
+end note
+
 FCC -> FCC_BE : battery_status\n{remaining=19%, voltage=14.6V}
-FCC_BE -> EXEC : /mc/fcc/vehicle_state\n{battery_remaining=19%}
-EXEC -> HM : battery below LOW_BATTERY_THRESHOLD (20%)
+FCC_BE -> HM : /mc/fcc/vehicle_state\n{battery_pct=19%}
 
 HM -> GCS : STATUSTEXT "WARN: battery 19%, initiating RTL"
 HM -> GCS : /mc/health {fault_mask=LOW_BATTERY}
+HM -> EXEC : /mc/fault {LOW_BATTERY,\nseverity=critical, action=RTL}
 
-HM -> FCC_BE : vehicle_command: RTL
+EXEC -> FCC_BE : vehicle_command: RTL
 FCC_BE -> FCC : NAV_RETURN_TO_LAUNCH
 FCC --> FCC_BE : RTL accepted
 
 note right of HM
-  SFR-008: RTL not suppressible unless
-  GCS override command is active AND
-  GCS link is healthy. Default: always RTL.
+  SFR-008: suppressible only via
+  override_low_battery_rtl_ (GCS
+  OVERRIDE_LOW_BATTERY_RTL), which HM
+  checks before publishing the fault at
+  all. Default: always RTL.
 end note
 
 ' ═══════════════════════════════════════════════════
@@ -181,19 +197,30 @@ FCC_BE ->X EXEC : (uXRCE-DDS bridge silent)
 note over FCC_BE
   fcc_bridge_node monitors last
   received uORB message timestamp.
-  Timeout: 1 s  [FR-015]
+  Timeout: 1 s  [FR-015]. Publishes
+  vehicle_state.fcc_link_ok=false —
+  health_monitor_node polls this field
+  itself (same /mc/fcc/vehicle_state
+  subscription as Scenario E's battery
+  check), it is not pushed as a
+  separate FCC_LINK_LOST event.
 end note
 
 FCC_BE -> FCC_BE : uXRCE-DDS silence >1 s
-FCC_BE -> HM : FCC_LINK_LOST
+FCC_BE -> HM : /mc/fcc/vehicle_state\n{fcc_link_ok=false}
 HM -> GCS : STATUSTEXT "CRITICAL: FCC link lost"
-HM -> HM : declare FAULT phase
+HM -> EXEC : /mc/fault {FCC_LINK_LOST,\nseverity=critical, action=RTL}
 
 note over HM
-  With no FCC link, vehicle_command
-  cannot be sent. The FCC PX4 failsafe
-  (RC loss / GCS loss) will independently
-  trigger failsafe actions.
+  Per FR-026, HM never calls send_command()
+  here either — mission_manager_node's
+  existing on_fault() RTL path is reused
+  (same as Scenario E). In practice the
+  RTL command likely can't reach FCC via
+  the same dead uXRCE-DDS link either; the
+  FCC PX4 failsafe (RC loss / GCS loss)
+  will independently trigger failsafe
+  actions regardless.
   MC declares FAULT and notifies GCS.
 end note
 

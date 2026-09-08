@@ -4,7 +4,7 @@
 ' MC-TP-001 §2.3 / §10
 ' ─────────────────────────────────────────────────────────────
 
-title "18 — CI/CD Test Pipeline\nAutomation Flow · Gates · Milestone Schedule  ·  MC-TP-001 §2.3 / §10"
+title "18 — CI/CD Test Pipeline\nAutomation Flow · Gates · Milestone Schedule  ·  MC-TP-001 §2.3 / §10\n<color:#C02020>NOT CURRENTLY AUTOMATED — see status note below</color>"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -45,6 +45,21 @@ skinparam swimlane {
 |Pull Request CI  (every PR, ~10 min)|
 
 start
+
+note right #FFE0E0
+  <b>Status as of 2026-09-08:</b> this diagram is the TEST-005 design —
+  it was actually implemented as three GitHub Actions workflows
+  (`.github/workflows/ci.yml`, `nightly-sitl.yml`, `release.yml`),
+  done 2026-08-28, then <b>all three were deleted</b> ("Remove GitHub
+  Actions workflows", 2026-09-05) and have not been reinstated. No
+  stage below currently runs automatically — every gate shown here
+  (smoke/unit/node-integration/SITL/HIL) is only exercised by a
+  developer running the matching colcon test/ros2 launch/script
+  command by hand (see docs/TESTING.md). Branch protection was
+  never enabled either way (blocked on a GitHub plan upgrade for this
+  private repo). Kept here as the target design to restore, not a
+  description of current automation.
+end note
 
 fork
   :TP-SM-001–010\nSmoke tests\nin Docker image;

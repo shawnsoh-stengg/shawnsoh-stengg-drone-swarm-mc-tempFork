@@ -111,7 +111,7 @@ UART_BRIDGE -[#3D5A80,thickness=2]--> JET_CORE  : ttyTHS1\n921600 bps
 UART_BRIDGE -[#3D5A80,thickness=2]--> PX4_CORE  : UART B
 
 SW          -[#208040]--> JET_CORE  : eth0\n192.168.10.11\n192.168.12.1
-SW          -[#208040]--> PX4_CORE  : Ethernet\n192.168.10.31\n192.168.12.2
+SW          -[#208040]--> PX4_CORE  : Ethernet\n192.168.10.31\n192.168.12.31
 SW          -[#208040]--> J3         : external port
 SW          -[#208040]--> J15        : ETH port 1\n(gimbal camera)
 

@@ -45,7 +45,7 @@ package "Internal Subnet  192.168.12.0/24\n(on-board Ethernet switch — not MAN
 
   rectangle "Jetson eth0\n192.168.12.1\n(HIF-002 internal address)\nListens: UDP:8888 (XRCE-DDS Agent)\nListens: UDP:14555 (mission protocol, always on)" as JET_INT #A8CCEE
 
-  rectangle "Pixhawk 6X Ethernet\n192.168.12.2\n(HIF-002 FCC address)\nConnects: UDP:8888 (XRCE-DDS Client)\nConnects: UDP:14555 (mission protocol, always on)" as PX4_INT #FFD4A8
+  rectangle "Pixhawk 6X Ethernet\n192.168.12.31\n(HIF-002 FCC address)\nConnects: UDP:8888 (XRCE-DDS Client)\nConnects: UDP:14555 (mission protocol, always on)" as PX4_INT #FFD4A8
 
   rectangle "On-board Ethernet Switch\n100BASE-T\n(baseboard fabric — no ext. cable)" as INT_SW #D0D8E8
 }
@@ -118,25 +118,39 @@ package "UDP Port Map  (on 192.168.10.x)" as PORTS #F4F8FF {
 
   rectangle "MC → GCS  (Channel B send)\nDst: 192.168.10.10:14552\nMC_STATUS (50100)  ≥2 Hz\nMC_DETECTION (50101)  event\nMC_HEALTH (50103)  ≥1 Hz\nCOMMAND_ACK · STATUSTEXT" as PB2 #D4E8D4
 
-  rectangle "Swarm Heartbeat\nSrc/Dst: .11↔.12↔.13 :14900\n1 Hz SWARM_HEARTBEAT\n40-byte binary protocol" as PSH #E8D4F0
+  rectangle "GCS ↔ MC  (Channel C — mission plan library)\nOrchestrator recv: 192.168.10.11:14571\nOrchestrator send: 192.168.10.10:14572\nLoopback to mission_orchestrator_node: 14580\nMAVFTP CRUD · MC_MISSION_PLAN_ACTIVATE/ACK\nDone — GCS-004/GCS-006, MC side" as PC #D4E0EC
 
-  rectangle "Swarm Coordination\nSrc/Dst: .11↔.12↔.13 :14901\nISR_CANDIDATE · ISR_RESULT\nVORONOI_PROPOSAL · VORONOI_ACCEPT\nPEER_STATE" as PSC #E8D4F0
+  rectangle "Swarm Heartbeat  [DESIGN ONLY —\nswarm_coordinator_node not yet implemented]\nSrc/Dst: .11↔.12↔.13 :14900\n1 Hz SWARM_HEARTBEAT\n40-byte binary protocol" as PSH #E8E8E8;line.dashed
+
+  rectangle "Swarm Coordination  [DESIGN ONLY —\nswarm_coordinator_node not yet implemented]\nSrc/Dst: .11↔.12↔.13 :14901\nISR_CANDIDATE · ISR_RESULT\nVORONOI_PROPOSAL · VORONOI_ACCEPT\nPEER_STATE" as PSC #E8E8E8;line.dashed
 
   rectangle "Zenoh DDS Bridge\nSrc/Dst: .11↔.12↔.13 :7447 (TCP)\nzenoh-bridge-dds · peer mode\nForwards no topics by default —\nno cross-host DDS topic exists yet" as PZBD #D4E0F0
 
-  rectangle "Gimbal Camera Source Stream\nMC (client) → .200:8554\nRTSP/H.265 · perception_front_node\n(IFD-006, HIF-007)" as PGIM #C8E8D8
+  rectangle "Gimbal Camera Source Stream  [DESIGN ONLY —\nperception_front_node not yet implemented]\nMC (client) → .200:8554\nRTSP/H.265 · perception_front_node\n(IFD-006, HIF-007)" as PGIM #E8E8E8;line.dashed
 
-  rectangle "GCS Video Downlink — Stream A (gimbal)\nMC .11:8555 → GCS\nRTSP/H.265 + metadata · video_mux_node\nIndependent of Channel A/B  (IFD-007)" as PVID #A8D8C0
+  rectangle "GCS Video Downlink — Stream A  [DESIGN ONLY —\nvideo_mux_node not yet implemented]\nMC .11:8555 → GCS\nRTSP/H.265 + metadata · video_mux_node\nIndependent of Channel A/B  (IFD-007)" as PVID #E8E8E8;line.dashed
 
-  rectangle "GCS Video Downlink — Stream B (downward)\nMC .11:8556 → GCS\nRTSP/H.265 + metadata · video_mux_node\nNo track_id — perception_down_node has\nno tracker  (IFD-007 §8.1a, added 2026-07-22)" as PVIDB #98C8B0
+  rectangle "GCS Video Downlink — Stream B  [DESIGN ONLY —\nvideo_mux_node not yet implemented]\nMC .11:8556 → GCS\nRTSP/H.265 + metadata · video_mux_node\nNo track_id — perception_down_node has\nno tracker  (IFD-007 §8.1a, added 2026-07-22)" as PVIDB #E8E8E8;line.dashed
 }
 
 note bottom of PORTS
-  mavlink-router v4 handles Channel B routing.
-  It listens on :14551 and forwards to GCS :14552.
-  Channel A traffic (port 14550) passes through
-  the MANET transparently to the FCC — the MC
-  does not inspect or modify it.
+  mavlink-router v4 handles Channel A/B/C routing
+  (three independent mavlink-routerd processes in
+  one container, GCS-001/MAVR-001/GCS-006). It
+  listens on :14551 and forwards to GCS :14552 for
+  Channel B; :14571/:14572 for Channel C. Channel A
+  traffic (port 14550) passes through the MANET
+  transparently to the FCC — the MC does not
+  inspect or modify it.
+  ──────────────────────────────────────────
+  DESIGN ONLY entries above (dashed): swarm_coord's
+  swarm_coordinator_node/formation_controller_node
+  and video_downlink's perception_front_node/
+  video_mux_node are all still 15-line scaffolds
+  (constructor + one log line, no networking/RTSP
+  code) as of 2026-09-08 — these ports exist only in
+  SDD-MC-001.md/ICD-MC-001.md's design, not in any
+  running code yet.
 end note
 
 ' ═══════════════════════════════════════════════════
@@ -163,6 +177,7 @@ legend right
   | <#20A070><b>───</b> | Gimbal camera (shared switch, HIF-007) |
   | <#408040><b>- - -</b> | MANET wireless (L2 bridge) |
   | <#3D5A80><b>- - -</b> | Optional / fallback link |
+  | Dashed gray card | Design-only port — no code implements it yet (scaffold node) |
 endlegend
 
 INT_NET -down[hidden]-> EXT_NET

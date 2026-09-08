@@ -75,7 +75,7 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
 
   rectangle "IFD-001\nfcc_bridge_node\n[FccBackend]\n─────────────────\nttyTHS1  921600 baud\n192.168.12.x  UDP:8888  uXRCE-DDS Agent\n192.168.12.x  UDP:14555  mission protocol (MAVLink, always on)" as IFD001 #C0D8F0
 
-  rectangle "IFD-002\nmavlink-router v4\ngcs_mavlink_node  +  MAVROS\n─────────────────\nUDP :14551 (recv)  :14552 (send)\nsys_id = drone_id  comp_id = 191" as IFD002 #A8D0A8
+  rectangle "IFD-002\nmavlink-router v4\ngcs_mavlink_node\n─────────────────\nUDP :14552 (recv)  :14551 (send)\nsys_id = drone_id  comp_id = 191\n·····································\nMAVROS also runs in this container\n(separate OS process) but mirrors\nChannel A telemetry, GCS-005 — not\nan IFD-002/Channel B participant" as IFD002 #A8D0A8
 
   rectangle "IFD-003\nswarm_coordinator_node\n─────────────────\nUDP :14900 heartbeat\nUDP :14901 coordination\nSwarm binary protocol v1" as IFD003 #C8A8E8
 
@@ -85,7 +85,7 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
 
   rectangle "IFD-007\nvideo_mux_node\n─────────────────\nRTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of IFD-002 MAVLink" as IFD007 #A8D8C0
 
-  rectangle "IFD-008\nmavlink-router v4 (channel-c.conf)\nmission_orchestrator_node\n─────────────────\nUDP :14571 (recv)  :14572 (send)\nMAVFTP + MC_MISSION_PLAN_ACTIVATE/ACK" as IFD008 #C8D8F0
+  rectangle "IFD-008\nmavlink-router v4 (channel-c.conf)\nmission_orchestrator_node\n─────────────────\nUDP :14572 (recv)  :14571 (send)\nMAVFTP + MC_MISSION_PLAN_ACTIVATE/ACK" as IFD008 #C8D8F0
 
   package "IFD-005  ·  Internal ROS 2 Topics  ·  CycloneDDS  ·  Domain 0" as IFD005 #E8E8F8 {
     rectangle "/mc/fcc/*\nvehicle_state · odometry · imu\nmission_upload · mission_item_update · send_command\noffboard_setpoint  (FCC-009)" as T_FCC #D8E8F8

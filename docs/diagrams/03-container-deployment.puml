@@ -98,17 +98,24 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
         component "watchdog supervisor" as WD
       }
 
-      package "vision.service" as SVC_VIS #D8F0D8 {
+      package "camera.service" as SVC_CAM #D8F0D8 {
         component "camera_node  (gscam2)" as N_CAM
+      }
+
+      package "vision.service" as SVC_VIS #D8F0D8 {
         component "visual_localisation_node" as N_VIS
         component "perception_down_node\n(renamed from detection_node)" as N_DET
       }
 
-      package "video-ingest.service" as SVC_INGEST #D8F0D8 {
+      package "mission-orchestrator.service" as SVC_ORCH #D8F0D8 {
+        component "mission_orchestrator_node\n(GCS-006 — see diagram 05,\nChannel C)" as N_ORCH
+      }
+
+      package "video-ingest.service  [NOT YET BUILT —\nSDD-MC-001 §12.4 design only]" as SVC_INGEST #E8E8E8;line.dashed {
         component "perception_front_node" as N_PFRONT
       }
 
-      package "video-downlink.service" as SVC_VIDEO #D8F0D8 {
+      package "video-downlink.service  [NOT YET BUILT —\nSDD-MC-001 §12.4 design only]" as SVC_VIDEO #E8E8E8;line.dashed {
         component "video_mux_node" as N_VMUX
       }
 
@@ -155,32 +162,38 @@ BASE <.. SVC_FCC : "extends"
 BASE <.. SVC_SWARM : "extends"
 BASE <.. SVC_GCS : "extends"
 BASE <.. SVC_EXEC : "extends"
+BASE <.. SVC_CAM : "extends"
 BASE <.. SVC_VIS : "extends"
-BASE <.. SVC_INGEST : "extends"
-BASE <.. SVC_VIDEO : "extends"
+BASE <.. SVC_ORCH : "extends"
+BASE <.[#888888,dashed].. SVC_INGEST : "would extend\n(not built)"
+BASE <.[#888888,dashed].. SVC_VIDEO : "would extend\n(not built)"
 BASE <.. SVC_HM : "extends"
 
 WS --> SVC_FCC : "bind mount"
 WS --> SVC_SWARM : "bind mount"
 WS --> SVC_GCS : "bind mount"
 WS --> SVC_EXEC : "bind mount"
+WS --> SVC_CAM : "bind mount"
 WS --> SVC_VIS : "bind mount"
-WS --> SVC_INGEST : "bind mount"
-WS --> SVC_VIDEO : "bind mount"
+WS --> SVC_ORCH : "bind mount"
 WS --> SVC_HM : "bind mount"
 
 TTY --> SVC_FCC : "DeviceAllow"
-VIDDEV --> SVC_VIS : "DeviceAllow"
+VIDDEV --> SVC_CAM : "DeviceAllow /dev/video0"
 ETH_INT --> SVC_FCC
-ETH_GIMCAM --> SVC_INGEST : "DeviceAllow (network_mode=host)"
+ETH_GIMCAM .[#888888,dashed].> SVC_INGEST : "DeviceAllow (network_mode=host)\n(not built)"
 
 SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
-SVC_MLR --> GCS_HW : "MAVLink 2/UDP"
+SVC_MLR --> GCS_HW : "MAVLink 2/UDP\nChannel A/B (+ Channel C\nfor SVC_ORCH below)"
+SVC_ORCH .[#4060C0].> GCS_HW : "MAVLink 2/UDP\nChannel C, routed via\nSVC_MLR — see diagram 05"
+SVC_FCC --> SVC_ORCH : "required by\n(GCS-006 unit dependency)"
+SVC_CAM --> SVC_VIS : "/camera/image_raw\n(cross-container, same-host DDS)"
+SVC_FCC --> SVC_VIS : "IMU pre-integration scale\n(cross-container, same-host DDS)"
 SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
 SVC_ZENOH --> PEER_HW : "Zenoh mesh (DDS bridge)\nTCP :7447 / 192.168.10.x"
 ZBD_CFG --> SVC_ZENOH : "bind mount\n/etc/drone-mc"
-SVC_INGEST --> SVC_VIDEO : "/mc/perception/front/detections\n/mc/perception/front/tracks\n(same-host DDS, cross-container)"
-SVC_VIDEO --> GCS_HW : "RTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of MAVLink"
+SVC_INGEST .[#888888,dashed].> SVC_VIDEO : "/mc/perception/front/detections\n/mc/perception/front/tracks\n(same-host DDS, cross-container)\n(neither service built yet)"
+SVC_VIDEO .[#888888,dashed].> GCS_HW : "RTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of MAVLink — not built yet"
 
 note right of SVC_FCC
   DeviceAllow=ttyTHS1
@@ -189,26 +202,54 @@ note right of SVC_FCC
   PrivateTmp=yes
 end note
 
+note right of SVC_CAM
+  network_mode=host
+  DeviceAllow=/dev/video0 rw
+  MemoryMax=1G
+  CPUQuota=50%
+  Split out from vision.service so the
+  lightweight capture path can restart
+  independently of the GPU-heavy
+  VO/detection pipeline below.
+end note
+
 note right of SVC_VIS
-  DeviceAllow=/dev/video*
-  DeviceAllow=/dev/nvidia*
+  DeviceAllow=/dev/nvhost-gpu rw
+  DeviceAllow=/dev/nvmap rw
   MemoryMax=6G
   CPUQuota=100%
-  GPUAccess=all
+  Requires=camera.service, fcc-bridge.service
+  (image stream + IMU pre-integration scale)
+end note
+
+note right of SVC_ORCH
+  network_mode=host
+  MemoryMax=256M
+  CPUQuota=20%
+  Requires=fcc-bridge.service, mavlink-router.service
+  Bind-mounts /var/drone-mc/mission_plans
+  (plan-library persistence across restarts, GCS-006 AC4)
 end note
 
 note right of SVC_INGEST
+  NOT YET BUILT — no docker/video-ingest
+  directory, systemd unit, or build script
+  exists yet (SDD-MC-001 §12.4 design only).
+  Intended design once built:
   network_mode=host (RTSP :8554 ingest)
   DeviceAllow=/dev/nvidia*
   MemoryMax=4G
   GPUAccess=all
-  Split into its own container 2026-07-22:
-  an RTSP-link/inference hang here no
-  longer takes video-downlink.service
-  (both streams) down with it.
+  Split into its own container so an
+  RTSP-link/inference hang here can't
+  take video-downlink.service down with it.
 end note
 
 note right of SVC_VIDEO
+  NOT YET BUILT — no docker/video-downlink
+  directory, systemd unit, or build script
+  exists yet (SDD-MC-001 §12.4 design only).
+  Intended design once built:
   network_mode=host (RTSP :8555/:8556)
   DeviceAllow=/dev/nvidia*
   MemoryMax=4G
@@ -216,8 +257,7 @@ note right of SVC_VIDEO
   Stream A subscribes to video-ingest's
   output; Stream B subscribes to vision
   container's /camera/image_raw +
-  /mc/detections. Both cross-container,
-  same-host DDS, no new hardware access.
+  /mc/detections.
 end note
 
 note right of SVC_ZENOH

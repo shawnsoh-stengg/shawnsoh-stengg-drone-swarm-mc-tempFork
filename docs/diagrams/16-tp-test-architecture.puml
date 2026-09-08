@@ -49,10 +49,10 @@ package "TP-HW — Hardware-in-the-Loop  (Milestone M5, M6)" as HW #FFE8C0 {
 ' ═══════════════════════════════════════════════════
 ' LEVEL 4 — SITL System Tests
 ' ═══════════════════════════════════════════════════
-package "TP-ST — SITL System Tests  (M3 partial, M4 full, nightly CI)" as ST #D8EED8 {
-  rectangle "Environment\nPX4 SITL + Gazebo (x86_64 host)\nMC Docker stack: SIMULATION_MODE=true\n2–3 MC instances on loopback LAN\nQGroundControl / mock_gcs_node" as ST_ENV #B8DCA8
-  rectangle "Scope\n12 tests: nominal 2-drone mission · GCS loss HOLD\nbattery RTL · manager crash · peer loss re-partition\nFCC comms loss · mission upload · detection geolocation\nVO mode · ISR failover · telemetry · resource usage" as ST_SCOPE #B8DCA8
-  rectangle "Tools\npytest + rclpy assertions\niptables (link injection) · docker kill (fault injection)\nros2 topic echo / hz / delay" as ST_TOOLS #B8DCA8
+package "TP-ST — SITL System Tests  (TEST-002, done 2026-09-05 — PARTIAL, see note)" as ST #D8EED8 {
+  rectangle "Environment\nPX4 SITL SIH backend (x86_64 host, native — no Docker)\nSingle drone only (instance 0);\nmulti-instance ROS_DOMAIN_ID scheme wired\nbut not runtime-verified\nGazebo available for manual runs only\nmock_gcs_node (mc_test_utils)" as ST_ENV #B8DCA8
+  rectangle "Scope\n12 test methods defined; only 5 run/pass:\ntest_01 preflight→arming · test_02 arming→takeoff\ntest_10a low battery fault · test_10b GCS link loss\ntest_10c FCC link loss.\ntest_03–09 (ingress…land, incl. Voronoi/search)\nSKIPPED — blocked on a real PX4 defect this\nharness found (MISSION_WRITE_PARTIAL_LIST never\nACKed). swarm_coordinator_node/formation_\ncontroller_node/search_planner_node are still\nscaffolds — mock_swarm_coord_node stands in." as ST_SCOPE #B8DCA8
+  rectangle "Tools\npytest + rclpy assertions (launch_testing)\nPX4-side MAV_CMD_INJECT_FAILURE (battery)\npkill (FCC link loss) · withheld heartbeats (GCS loss)\n(no iptables/docker kill — nodes run natively, not\nin containers, for this test level)" as ST_TOOLS #B8DCA8
 }
 
 ' ═══════════════════════════════════════════════════
@@ -116,19 +116,28 @@ end note
 
 note right of UT
   M2 (month 2): all TP-UT
-  CI: every pull request
+  CI: every pull request (design target —
+  no CI currently runs this, see ST's note)
 end note
 
 note right of NI
   M2 (month 2): TP-NI-001–007
   M4 (month 4): TP-NI-001–016
-  CI: every pull request
+  CI: every pull request (design target —
+  no CI currently runs this, see ST's note)
 end note
 
 note right of ST
-  M3 (month 3): TP-ST-001,003,006,007
-  M4 (month 4): full suite (TP-ST-001–012)
-  Nightly CI: TP-ST-001,002,003,006,007
+  M3 (month 3): TP-ST-001,003,006,007 (design target)
+  M4 (month 4): full suite (TP-ST-001–012, design target)
+  <b>Actual as of 2026-09-08:</b> TEST-002 implemented
+  single-drone only, 7 of 12 test methods skipped
+  (blocked on a real PX4 defect, not yet worked
+  around). "Nightly CI" does not run anything —
+  GitHub Actions automation was implemented then
+  fully removed 2026-09-05 (see diagram 18's status
+  note). Every level below is exercised manually via
+  colcon test / the scripts in scripts/.
 end note
 
 note right of HW

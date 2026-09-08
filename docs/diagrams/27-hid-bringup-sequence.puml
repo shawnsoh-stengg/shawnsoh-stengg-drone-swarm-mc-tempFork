@@ -89,7 +89,9 @@ endif
 
 :Mount baseboard on airframe using
 4× M3 silicone grommets (shore 40A)
-Torque M3 bolts to 0.5 N·m;
+per HID-MC-001.md §10.2 —
+torque M3 bolts per Holybro baseboard
+spec (no value specified in this HID doc);
 
 ' ═══════════════════════════════════════════════════
 ' PHASE 2: SOFTWARE CONFIGURATION  (one-time per unit)
@@ -101,10 +103,20 @@ Torque M3 bolts to 0.5 N·m;
 (or connect via console J5 at 115200 bps)
 Log in to Jetson;
 
-:Run OS installation scripts
-01-install-os.sh through 10-install-networking.sh
-Each script: idempotent · set -euo pipefail
-Verify each companion smoke test passes;
+:Run the numbered install/build scripts in order
+(each is idempotent · set -euo pipefail ·
+has a matching <n>b/<n>c smoke-test companion —
+run it right after, see docs/GETTING-STARTED.md):
+  01-install-os.sh              (OS/netplan/udev/sysctl)
+  04-install-ros2-core.sh       (ros2-core base image)
+  05-build-workspace.sh         (colcon workspace)
+  08 through 15 *-build-*-image.sh
+    (fcc-bridge · mavlink-router · zenoh-bridge ·
+     gcs-comms · mission-exec · swarm-coord ·
+     health-monitor · mission-orchestrator)
+  02-install-systemd-units.sh   (drone-mc.target + units)
+There is no single "networking" script — netplan/
+udev/sysctl are all installed by 01-install-os.sh;
 
 :Configure Netplan on Jetson
 /etc/netplan/01-drone-mc.yaml:
@@ -165,8 +177,10 @@ else (no)
   stop
 endif
 
-:Run full smoke test suite:
-  sudo bash 10b-smoke-test-networking.sh
+:Run the full smoke-test suite, in script order:
+  01b · 02b · 04b · 04c · 05b · 06b · 06c · 07b ·
+  08b · 09b · 10b · 11b · 12b · 13b · 14b · 15b
+  (each sudo bash scripts/<n>{b,c}-smoke-test-*.sh)
   All checks must pass;
 
 :Configuration complete — unit ready for flight;
@@ -216,7 +230,10 @@ else (no)
 endif
 
 :Run pre-flight smoke test:
-  sudo bash 10b-smoke-test-networking.sh;
+  sudo bash scripts/01b-smoke-test-os.sh
+  (netplan/udev/sysctl still correct)
+  sudo bash scripts/02b-smoke-test-units.sh
+  (all drone-mc-*.service units active);
 
 if (Smoke test PASS?) then (yes)
   :Pre-flight complete

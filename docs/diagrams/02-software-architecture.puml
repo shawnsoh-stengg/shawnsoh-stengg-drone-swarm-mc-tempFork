@@ -84,57 +84,100 @@ package "fcc-bridge" as C_FCC #E0ECF8 {
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: mavlink-router + gcs-comms
+' CONTAINER: mavlink-router (ONE container/service — entrypoint.sh
+' launches 3 independent mavlink-routerd processes, one per channel
+' .conf, sharing no process or routing table; not 3 containers)
 ' ═══════════════════════════════════════════════════
-package "mavlink-router / gcs-comms" as C_GCS #E0F0E8 {
-  component "mavlink_router\nv4 daemon\nChannel A/B routing" as MLR #B8DCA8
-  component "gcs_mavlink_node\n[MAVROS bridge]\nGCS↔MC MAVLink channel\nCommand · Telemetry · Detections" as GCS_NODE #90C890
-  component "mavlink_router\nv4 daemon (channel-c.conf)\nChannel C routing — isolated\nprocess/ports from A/B" as MLR_C #90C890
+package "mavlink-router" as C_MLR #E0F0E8 {
+  component "mavlink_router v4\n(channel-a.conf)\nChannel A routing" as MLR #B8DCA8
+  component "mavlink_router v4\n(channel-b.conf)\nChannel B routing" as MLR_B #B8DCA8
+  component "mavlink_router v4\n(channel-c.conf)\nChannel C routing" as MLR_C #B8DCA8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: gcs-comms (gcs_mavlink_node + MAVROS as a second,
+' independent OS process — GCS-005 deliberately scoped MAVROS to
+' mirror Channel A telemetry, NOT to be gcs_mavlink_node's own
+' transport; see SDD-MC-001.md §11.1)
+' ═══════════════════════════════════════════════════
+package "gcs-comms" as C_GCS #E0F0E8 {
+  component "gcs_mavlink_node\nGCS↔MC Channel B\nCommand · Telemetry · Detections" as GCS_NODE #90C890
+  component "MAVROS\n(mavros_node, apt package)\nMirrors Channel A telemetry\nonly — not gcs_mavlink_node's\ntransport (GCS-005)" as MAVROS_NODE #A8D8A8
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: mission-orchestrator (own container/service, GCS-006 —
+' deliberately NOT folded into gcs-comms; see that unit's own header
+' comment in config/systemd/drone-mc-mission-orchestrator.service)
+' ═══════════════════════════════════════════════════
+package "mission-orchestrator" as C_ORCH #E0F0E8 {
   component "mission_orchestrator_node\nMAVFTP server\nMission plan library (JSON)\nCreate · List · Update\nActivate · Delete" as ORCH_NODE #90C890
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: swarm-coord
+' CONTAINER: swarm-coord — SCAFFOLD ONLY. Both node .cpp files are a
+' bare Node() constructor + one startup log line (15 lines each,
+' zero create_publisher/create_subscription/create_wall_timer calls,
+' verified 2026-09-08). None of the design below (ISR election, Voronoi
+' partitioning, peer heartbeat) is implemented yet.
 ' ═══════════════════════════════════════════════════
-package "swarm-coord" as C_SWARM #F0E8F8 {
-  component "swarm_coordinator_node\nPeer discovery · Heartbeat\nISR selection\nVoronoi consensus" as SWARM #C8A8E8
-  component "formation_controller_node\nPD position controller\nNED setpoints ≥5 Hz" as FORM #D8B8F0
+package "swarm-coord  [SCAFFOLD — not implemented]" as C_SWARM #E8E0F0;line.dashed {
+  component "swarm_coordinator_node  [SCAFFOLD]\nDesign: peer discovery · heartbeat\nISR selection · Voronoi consensus\n(none of this exists in code yet)" as SWARM #D8C8E8;line.dashed
+  component "formation_controller_node  [SCAFFOLD]\nDesign: PD position controller\nNED setpoints ≥5 Hz\n(none of this exists in code yet)" as FORM #E0D0F0;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: mission-exec
+' CONTAINER: mission-exec — mission_manager_node is real (907 lines,
+' full state machine implemented). search_planner_node is SCAFFOLD ONLY
+' (bare Node() constructor, 15 lines, zero pub/sub/timer calls,
+' verified 2026-09-08) — boustrophedon coverage is design only.
 ' ═══════════════════════════════════════════════════
 package "mission-exec" as C_EXEC #FFF0E0 {
   component "mission_manager_node\n[State machine]\nPREFLIGHT → FAULT\nGCS authority · Autonomous triggers\nWatchdog heartbeat ≥1 Hz" as EXEC #FFD090
-  component "search_planner_node\nBoustrophedon path\nVoronoi cell → waypoints" as PLAN #FFE0A8
+  component "search_planner_node  [SCAFFOLD]\nDesign: boustrophedon path\nVoronoi cell → waypoints\n(none of this exists in code yet)" as PLAN #FFE8C0;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: vision
+' CONTAINER: camera (split OUT of vision.service 2026-07-22 — its own
+' drone-mc-camera.service, so the lightweight capture path can restart
+' independently of the GPU-heavy VO/detection pipeline below)
 ' ═══════════════════════════════════════════════════
-package "vision" as C_VIS #F4EEF8 {
+package "camera" as C_CAM #F4EEF8 {
   component "camera_node\n(gscam2)\nIMX219 CSI driver\n/camera/image_raw ≥15 FPS" as CAMNODE #E0C8F8
-  component "visual_localisation_node\nVisual odometry + IMU fusion\n6-DoF pose ≥10 Hz\nGNSS-denied fallback" as VISLOC #D0B0F0
-  component "perception_down_node\n(renamed from detection_node)\nAI inference (GPU)\nTarget detection\n≤500 ms latency" as DET #C0A0E8
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: video-ingest (renamed from shared video-uplink container,
-' split 2026-07-22 — perception_front_node's RTSP-link flakiness/GPU
-' inference no longer shares a restart cycle with video_mux_node, which
-' now also serves the unrelated downward-camera stream (Stream B, FR-086)
+' CONTAINER: vision — SCAFFOLD ONLY (camera_node lives in its own
+' "camera" container, above, and IS real/deployed). Both remaining
+' nodes' .cpp files are a bare Node() constructor + one startup log
+' line (15 lines each, zero pub/sub/timer calls, verified 2026-09-08).
+' Neither the VO pipeline nor the detection pipeline is implemented yet.
 ' ═══════════════════════════════════════════════════
-package "video-ingest" as C_INGEST #E8F4F0 {
-  component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nSearch & detection (front-facing)\nIndependent of vision pipeline" as PFRONT #A8E0C8
+package "vision  [SCAFFOLD — not implemented]" as C_VIS #EEE4F8;line.dashed {
+  component "visual_localisation_node  [SCAFFOLD]\nDesign: visual odometry + IMU fusion\n6-DoF pose ≥10 Hz, GNSS-denied fallback\n(none of this exists in code yet)" as VISLOC #DCC8F0;line.dashed
+  component "perception_down_node  [SCAFFOLD]\n(renamed from detection_node)\nDesign: AI inference (GPU)\nTarget detection ≤500 ms latency\n(none of this exists in code yet)" as DET #D0B8EC;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════
-' CONTAINER: video-downlink (renamed from video-uplink; split from
-' video-ingest into its own container, 2026-07-22 — both nodes still
-' live in the one video_downlink ROS 2 package)
+' CONTAINER: video-ingest — NOT YET BUILT (SDD-MC-001.md §12.4 design
+' only: no docker/video-ingest directory, systemd unit, or build script
+' exists). Intended design: split out of a shared video-uplink container
+' so perception_front_node's RTSP-link flakiness/GPU inference doesn't
+' share a restart cycle with video_mux_node (Stream B, FR-086).
 ' ═══════════════════════════════════════════════════
-package "video-downlink" as C_VIDEO #DCF0E8 {
-  component "video_mux_node\nRe-encode + metadata mux\nStream A :8555 (gimbal)\nStream B :8556 (downward)" as VMUX #90D0B0
+package "video-ingest  [NOT YET BUILT]" as C_INGEST #E8E8E8;line.dashed {
+  component "perception_front_node\nRTSP/H.265 ingest (gimbal)\nAI inference + tracking\nSearch & detection (front-facing)\nIndependent of vision pipeline" as PFRONT #C8E0D8;line.dashed
+}
+
+' ═══════════════════════════════════════════════════
+' CONTAINER: video-downlink — NOT YET BUILT (SDD-MC-001.md §12.4 design
+' only: no docker/video-downlink directory, systemd unit, or build
+' script exists; both nodes already live in the one video_downlink ROS 2
+' package, which builds natively via colcon but has no service/container
+' of its own yet)
+' ═══════════════════════════════════════════════════
+package "video-downlink  [NOT YET BUILT]" as C_VIDEO #E8E8E8;line.dashed {
+  component "video_mux_node\nRe-encode + metadata mux\nStream A :8555 (gimbal)\nStream B :8556 (downward)" as VMUX #C0E0D0;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════
@@ -148,13 +191,15 @@ package "health-monitor" as C_HEALTH #F0F0F0 {
 ' EXTERNAL ↔ INTERNAL CONNECTIONS
 ' ═══════════════════════════════════════════════════
 UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
-QGC <--> MLR : "MAVLink 2/UDP\nGCS↔MC channel"
-MLR <--> GCS_NODE
+QGC <--> MLR : "MAVLink 2/UDP\nChannel A (autopilot,\nno ROS 2 node consumer)"
+QGC <--> MLR_B : "MAVLink 2/UDP\nChannel B"
+MLR <--> MAVROS_NODE : "MAVLink 2/UDP :14553\n(MAVROS_CHANNEL_A endpoint)"
+MLR_B <--> GCS_NODE
 ORCH_APP ..> MLR_C : "MAVLink 2/UDP (Channel C)\n:14571/14572, MAVFTP\n[dashed: Orchestrator App not yet built]"
 MLR_C --> ORCH_NODE : ":14580 (loopback)"
-PEERS <--> SWARM : "Swarm protocol/UDP\nMANET · 192.168.10.x"
+PEERS .[#888888,dashed].> SWARM : "Swarm protocol/UDP\nMANET · 192.168.10.x\n(SWARM is a scaffold — not implemented)"
 CAM --> CAMNODE : "CSI"
-GIMCAM --> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)"
+GIMCAM .[#888888,dashed].> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)\n(not built yet)"
 
 ' ═══════════════════════════════════════════════════
 ' INTERNAL ROS 2 TOPIC FLOWS
@@ -162,8 +207,8 @@ GIMCAM --> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)"
 
 ' FCC bridge → consumers
 FCC_BRIDGE -down-> EXEC : "/mc/fcc/vehicle_state"
-FCC_BRIDGE -down-> FORM : "/mc/fcc/vehicle_state"
-FCC_BRIDGE -down-> VISLOC : "(IMU data)"
+FCC_BRIDGE .[#888888,dashed].> FORM : "/mc/fcc/vehicle_state\n(FORM is a scaffold — not implemented)"
+FCC_BRIDGE .[#888888,dashed].> VISLOC : "(IMU data)\n(VISLOC is a scaffold — not implemented)"
 
 ' Mission manager → all
 EXEC -right-> GCS_NODE : "/mc/mission_phase"
@@ -177,39 +222,42 @@ GCS_NODE -left-> EXEC : "/mc/gcs/command\n/mc/gcs/mission_upload"
 ' MISSION-ORCHESTRATOR-MAVLINK-INTERFACE-SPEC.md §5.4)
 ORCH_NODE --> EXEC : "/mc/gcs/mission_upload (on activate)"
 
-' Swarm → consumers
-SWARM -down-> FORM : "/mc/swarm/peer_states"
-SWARM -down-> PLAN : "/mc/swarm/voronoi_cell"
-SWARM --> EXEC : "/mc/swarm/isr_role"
+' Swarm → consumers (SWARM/FORM/PLAN are all scaffolds — not implemented)
+SWARM .[#888888,dashed].> FORM : "/mc/swarm/peer_states\n(not implemented)"
+SWARM .[#888888,dashed].> PLAN : "/mc/swarm/voronoi_cell\n(not implemented)"
+SWARM .[#888888,dashed].> EXEC : "/mc/swarm/isr_role\n(not implemented)"
 
-' Formation → FCC
-FORM -up-> FCC_BRIDGE : "/mc/fcc/mission_item_update\n(MISSION mode)"
+' Formation → FCC (FORM is a scaffold — not implemented)
+FORM .[#888888,dashed].> FCC_BRIDGE : "/mc/fcc/mission_item_update\n(MISSION mode)\n(not implemented)"
 
-' Search planner → manager
-PLAN --> EXEC : "/mc/search/coverage_path"
+' Search planner → manager (PLAN is a scaffold — not implemented)
+PLAN .[#888888,dashed].> EXEC : "/mc/search/coverage_path\n(not implemented)"
 
-' Vision pipeline
-CAMNODE -down-> VISLOC : "/camera/image_raw"
-CAMNODE -down-> DET : "/camera/image_raw"
-VISLOC --> DET : "/mc/local_pose"
-VISLOC -up-> FCC_BRIDGE : "(vehicle_visual_odometry)"
+' Vision pipeline (VISLOC/DET are scaffolds — not implemented;
+' CAMNODE/camera_node itself is real and deployed)
+CAMNODE .[#888888,dashed].> VISLOC : "/camera/image_raw\n(VISLOC not implemented)"
+CAMNODE .[#888888,dashed].> DET : "/camera/image_raw\n(DET not implemented)"
+VISLOC .[#888888,dashed].> DET : "/mc/local_pose\n(neither implemented)"
+VISLOC .[#888888,dashed].> FCC_BRIDGE : "(vehicle_visual_odometry)\n(VISLOC not implemented)"
 
 ' Detections → GCS (both cameras report their own detections over MAVLink,
 ' per ICD §9.1's topic catalogue — gcs_mavlink is a documented subscriber
-' of both /mc/detections and /mc/perception/front/detections)
-DET --> GCS_NODE : "/mc/detections"
-PFRONT --> GCS_NODE : "/mc/perception/front/detections"
+' of both /mc/detections and /mc/perception/front/detections; both
+' producers, DET and PFRONT, are scaffolds — not implemented)
+DET .[#888888,dashed].> GCS_NODE : "/mc/detections\n(DET not implemented)"
+PFRONT .[#888888,dashed].> GCS_NODE : "/mc/perception/front/detections\n(PFRONT not implemented)"
 
 ' Gimbal video pipeline (Stream A, independent of vision pipeline and GCS MAVLink channel)
-PFRONT --> VMUX : "/mc/perception/front/detections\n/mc/perception/front/tracks"
-VMUX --> QGC : "RTSP/H.265 + metadata\nStream A :8555 (gimbal)\nStream B :8556 (downward)"
-PFRONT --> HEALTH : "(liveness heartbeat)"
-VMUX --> HEALTH : "/mc/video/downlink_status\n/mc/video/down_downlink_status"
+' — video-ingest/video-downlink not built yet, so this whole pipeline is design-only.
+PFRONT .[#888888,dashed].> VMUX : "/mc/perception/front/detections\n/mc/perception/front/tracks\n(not built yet)"
+VMUX .[#888888,dashed].> QGC : "RTSP/H.265 + metadata\nStream A :8555 (gimbal)\nStream B :8556 (downward)\n(not built yet)"
+PFRONT .[#888888,dashed].> HEALTH : "(liveness heartbeat, not built yet)"
+VMUX .[#888888,dashed].> HEALTH : "/mc/video/downlink_status\n/mc/video/down_downlink_status\n(not built yet)"
 
 ' Downward camera video pipeline (Stream B — additive, perception_down_node's
 ' detection role is unchanged; this is a new consumer of existing topics)
-CAMNODE --> VMUX : "/camera/image_raw\n(Stream B input)"
-DET --> VMUX : "/mc/detections\n(Stream B metadata)"
+CAMNODE .[#888888,dashed].> VMUX : "/camera/image_raw\n(Stream B input, not built yet)"
+DET .[#888888,dashed].> VMUX : "/mc/detections\n(Stream B metadata, not built yet)"
 
 ' Health → GCS + manager
 HEALTH --> GCS_NODE : "/mc/health"
@@ -218,15 +266,17 @@ HEALTH --> EXEC : "/mc/fault (failsafe trigger)"
 legend right
   | Color | Container |
   | <#A8CCEE> | fcc-bridge |
+  | <#B8DCA8> | mavlink-router |
   | <#90C890> | gcs-comms |
-  | <#C8A8E8> | swarm-coord |
-  | <#FFD090> | mission-exec |
-  | <#C0A0E8> | vision |
-  | <#E8F4F0> | video-ingest |
-  | <#90D0B0> | video-downlink |
+  | <#90C890> | mission-orchestrator |
+  | <#D8C8E8> | swarm-coord  [SCAFFOLD — not implemented] |
+  | <#FFD090> | mission-exec (mission_manager_node real;\nsearch_planner_node scaffold) |
+  | <#E0C8F8> | camera (real, deployed) |
+  | <#DCC8F0> | vision  [SCAFFOLD — not implemented] |
+  | <#E8E8E8> | video-ingest / video-downlink  [NOT YET BUILT — no container/unit exists;\nnodes themselves are also scaffolds] |
   | <#D0D0D0> | health-monitor |
-  | <#C8D8F0> | Mission Orchestrator (another team's app, not yet built) |
-  | Dashed border/line | Orchestrator App awaiting other team — not GCS-004 itself, which is done |
+  | <#C8D8F0> | Mission Orchestrator (another team's GCS-side app, not yet built) |
+  | Dashed border/line | Either "not yet built" (no container/deployment) or\n"scaffold" (Node() constructor only, no pub/sub/timer logic) — see notes on each package |
 endlegend
 
 @enduml

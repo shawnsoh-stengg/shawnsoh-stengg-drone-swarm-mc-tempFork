@@ -5,7 +5,7 @@
 ' MC-TP-001 §6  TP-ST-002 through TP-ST-006, TP-ST-010
 ' ─────────────────────────────────────────────────────────────
 
-title "20 — Failsafe Test Injection Points\nSITL Fault Injection on Mission Phase FSM  ·  MC-TP-001 §6"
+title "20 — Failsafe Test Injection Points\nSITL Fault Injection on Mission Phase FSM  ·  MC-TP-001 §6\n<color:#C02020>Design target — only TP-ST-003/002/006 are actually implemented (test_10a/b/c), see notes</color>"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -88,50 +88,52 @@ MUSTER --> FAULT : GCS ABORT
 ' ═══════════════════════════════════════════════════
 
 note right of SEARCH #FFE0E0
-  <b>Fault Injection Points</b>
-  during SEARCH phase:
+  <b>Fault Injection Points</b> (design target;
+  actual status noted per test — 2026-09-08):
   ─────────────────────────
-  <b>TP-ST-002</b>  GCS Link Loss
-  Inject: iptables DROP GCS ports
-  Trigger: 10 s timeout → HOLD
-  Assert: fault_mask = GCS_TIMEOUT
-  Recovery: GCS reconnect → cmd
+  <b>TP-ST-002</b>  GCS Link Loss — IMPLEMENTED
+  (test_10b), but NOT phase-gated as drawn:
+  the real test withholds MAVLink heartbeats and
+  asserts only /mc/gcs/link_status flips false
+  then true on recovery. There is no HOLD state —
+  mission_manager_node does not change mission_phase
+  on GCS loss at all (SDD-MC-001.md §10.3's own
+  documented gap). No iptables used (native process,
+  not a container).
   ─────────────────────────
-  <b>TP-ST-003</b>  Low Battery RTL
-  Inject: mock battery_status 18%
-  Trigger: immediate (< 2 s)
-  Assert: nav_state = AUTO_RTL
-  Assert: STATUSTEXT WARN received
+  <b>TP-ST-003</b>  Low Battery RTL — PARTIALLY
+  IMPLEMENTED (test_10a): real PX4-side failure
+  injection (MAV_CMD_INJECT_FAILURE via PX4's own
+  MAVLink port, not a spoofed BATTERY_STATUS frame).
+  Only asserts health_monitor_node publishes
+  FaultEvent.LOW_BATTERY — does NOT assert
+  nav_state=AUTO_RTL or a STATUSTEXT WARN (mission
+  RTL response is untested here; SEARCH phase itself
+  is unreachable, see diagram 19's status note).
   ─────────────────────────
-  <b>TP-ST-004</b>  Manager Crash
-  Inject: docker kill mc-mission-exec
-  Trigger: 5 s watchdog → restart
-  Assert: heartbeat resumes < 15 s
-  Assert: FCC holds during restart
-  Extension: 3× crash → RTL
-  Assert: fault_mask = MANAGER_DEAD
+  <b>TP-ST-004</b>  Manager Crash — NOT IMPLEMENTED.
+  No Docker in this test harness, so no
+  "docker kill mc-mission-exec"; watchdog-restart
+  behavior is untested by TEST-002.
   ─────────────────────────
-  <b>TP-ST-005</b>  Peer Drone Lost
-  Inject: stop Drone 2 MC stack
-  Trigger: 3 s → re-partition
-  Assert: voronoi_cell updated
-  Assert: new path covers full polygon
+  <b>TP-ST-005</b>  Peer Drone Lost — NOT IMPLEMENTED.
+  No second drone instance ever runs; re-partition
+  on peer loss is untested by TEST-002.
   ─────────────────────────
-  <b>TP-ST-006</b>  FCC Comms Lost
-  Inject: docker kill mc-fcc-bridge
-  Trigger: 1 s → FCC_LINK_LOST
-  Assert: phase = FAULT
-  Assert: STATUSTEXT CRITICAL
+  <b>TP-ST-006</b>  FCC Comms Lost — IMPLEMENTED
+  (test_10c): real `pkill` on the shared PX4 SITL
+  process (not "docker kill mc-fcc-bridge" — no
+  Docker here). Asserts FaultEvent.FCC_LINK_LOST
+  published. Destructive — runs last.
 end note
 
 note left of ISR_SELECTION #FFE0E0
-  <b>TP-ST-010</b>  Coordinator Failover
-  Inject: kill Drone 1 MC stack
-  at entry to ISR_SELECTION
-  Trigger: 8 s failover timeout
-  Assert: Drone 2 broadcasts ISR_RESULT
-  Assert: election completes correctly
-  Assert: phase proceeds to VORONOI
+  <b>TP-ST-010</b>  Coordinator Failover — NOT
+  IMPLEMENTED. No second drone instance ever runs,
+  and swarm_coordinator_node itself is still a
+  scaffold (mock_swarm_coord_node stands in) —
+  real coordinator election/failover is untested
+  by TEST-002.
 end note
 
 note left of PREFLIGHT #FFE8CC
@@ -143,12 +145,15 @@ note left of PREFLIGHT #FFE8CC
 end note
 
 note right of FAULT #FFD0D0
-  <b>All failsafe tests ultimately</b>
-  <b>resolve through this state.</b>
+  <b>Design target: all failsafe tests</b>
+  <b>ultimately resolve through this state.</b>
   ─────────────────────────
-  TP-ST-003: Low battery → RTL → LAND
-  TP-ST-004 (ext.): 3× crash → RTL
-  TP-ST-006: FCC lost → FAULT declared
+  TP-ST-003: Low battery → RTL → LAND (design;
+    test_10a only asserts the fault event, not this path)
+  TP-ST-004 (ext.): 3× crash → RTL (not implemented)
+  TP-ST-006: FCC lost → FAULT declared (test_10c
+    asserts the fault event; does not further confirm
+    mission_manager_node's own phase transition here)
   ─────────────────────────
   S1 severity: any failsafe that does
   NOT reach expected safe state.
@@ -158,14 +163,14 @@ end note
 ' EXPECTED OUTCOMES LEGEND
 ' ═══════════════════════════════════════════════════
 legend right
-  | Test | Injection Phase | Injected Fault | Expected outcome |
-  | <b>TP-ST-002</b> | SEARCH | GCS link DROP | HOLD until recovery |
-  | <b>TP-ST-003</b> | SEARCH | battery = 18% | RTL immediately |
-  | <b>TP-ST-004</b> | SEARCH | manager kill | restart < 15 s; HOLD |
-  | <b>TP-ST-004 ext.</b> | SEARCH | 3× manager kill | RTL; MANAGER_DEAD |
-  | <b>TP-ST-005</b> | SEARCH | peer MC stop | re-partition → new path |
-  | <b>TP-ST-006</b> | SEARCH | fcc-bridge kill | FAULT; STATUSTEXT CRITICAL |
-  | <b>TP-ST-010</b> | ISR_SELECTION | coordinator kill | Drone 2 takes over |
+  | Test | Design: Phase | Design: Fault | Design: Outcome | <b>Actual (2026-09-08)</b> |
+  | <b>TP-ST-002</b> | SEARCH | GCS link DROP | HOLD until recovery | test_10b: implemented, phase-independent; asserts link_status only, no HOLD state exists |
+  | <b>TP-ST-003</b> | SEARCH | battery = 18% | RTL immediately | test_10a: implemented (real PX4 failure injection); asserts LOW_BATTERY fault only, not RTL |
+  | <b>TP-ST-004</b> | SEARCH | manager kill | restart < 15 s; HOLD | NOT IMPLEMENTED — no Docker in this harness |
+  | <b>TP-ST-004 ext.</b> | SEARCH | 3× manager kill | RTL; MANAGER_DEAD | NOT IMPLEMENTED |
+  | <b>TP-ST-005</b> | SEARCH | peer MC stop | re-partition → new path | NOT IMPLEMENTED — single-drone harness |
+  | <b>TP-ST-006</b> | SEARCH | fcc-bridge kill | FAULT; STATUSTEXT CRITICAL | test_10c: implemented as `pkill` on PX4 SITL; asserts FCC_LINK_LOST fault |
+  | <b>TP-ST-010</b> | ISR_SELECTION | coordinator kill | Drone 2 takes over | NOT IMPLEMENTED — single-drone harness, swarm_coord still a scaffold |
 endlegend
 
 @enduml

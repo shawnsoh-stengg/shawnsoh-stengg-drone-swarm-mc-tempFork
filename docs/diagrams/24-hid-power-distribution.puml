@@ -70,11 +70,10 @@ rectangle "LDO D\n5V_SYS → 1.8V_PERIPH\n±3% · 500 mA max\nIMX219 digital cor
 ' ═══════════════════════════════════════════════════
 
 package "Jetson Orin NX 16GB  (5V_SYS)" as JET_PKG #D8E8F4 {
-  rectangle "CPU (8-core Arm Cortex-A78AE)\nIdle: 1.0 A  ·  Peak: 2.5 A" as JET_CPU #B8D4EC
-  rectangle "GPU (1024-core Ampere)\nInference peak: +1.5 A" as JET_GPU #B8D4EC
+  rectangle "Jetson SoC (CPU+GPU, MAXN mode)\nIdle: 0.6 A  ·  Peak: 2.5 A\n(HID-MC-001.md §7.3 — CPU and GPU\nshare one combined power-budget line,\nnot separately metered)" as JET_SOC #B8D4EC
   rectangle "LPDDR5 16 GB RAM\nIdle: 0.2 A  ·  Peak: 0.8 A" as JET_RAM #B8D4EC
-  rectangle "NVMe SSD (if fitted)\nPeak: 0.6 A" as JET_SSD #B8D4EC
-  rectangle "USB / HDMI peripherals\nPeak: 0.3 A" as JET_USB #B8D4EC
+  rectangle "NVMe SSD (if fitted)\nIdle: 0.1 A  ·  Peak: 0.6 A" as JET_SSD #B8D4EC
+  rectangle "USB / HDMI peripherals\nIdle: 0.1 A  ·  Peak: 0.3 A" as JET_USB #B8D4EC
 }
 
 rectangle "Jetson Total\nIdle: ~1.0 A\nPeak (inference): ~4.2 A\nRated supply: 5 A" as JET_TOT #90B8DC
@@ -117,8 +116,7 @@ REGA  -[#D08000,thickness=2]-->  REGC     : → 3.3V_PERIPH
 REGA  -[#D08000,thickness=2]-->  REGD     : → 1.8V_PERIPH
 REGB  -[#E07000,thickness=3]-->  PX4_TOT  : 5V_FC  · 2 A rated
 
-JET_TOT --> JET_CPU : power
-JET_TOT --> JET_GPU : power
+JET_TOT --> JET_SOC : power
 JET_TOT --> JET_RAM : power
 JET_TOT --> JET_SSD : power
 JET_TOT --> JET_USB : power
