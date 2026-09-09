@@ -331,17 +331,23 @@ boot test. See `docs/TESTING.md` for the full TP-SM smoke-test picture.
 
 ## Cutting a release (TEST-005)
 
-Pushing a `v*` tag (e.g. `v1.0.0`) triggers `.github/workflows/release.yml`,
-which builds every `docker/*/Dockerfile` that exists at that point and
-pushes each to `ghcr.io/drone-mc/<service>:<tag>` — the same
+**Status: manual — the automated release workflow was removed.**
+`TEST-005` originally built `.github/workflows/release.yml`, which
+triggered on a pushed `v*` tag (e.g. `v1.0.0`) and built every
+`docker/*/Dockerfile` that existed at that point, pushing each to
+`ghcr.io/drone-mc/<service>:<tag>`. That workflow (along with `ci.yml` and
+`nightly-sitl.yml`) was deleted on 2026-09-05 and has not been reinstated.
+
+Cutting a release today means doing what `release.yml` used to do by
+hand: run the numbered `scripts/NN-build-*-image.sh` chain (see
+`CLAUDE.md`'s Build System section) for every service, tag each image
+`ghcr.io/drone-mc/<service>:<tag>` — the same
 `ghcr.io/drone-mc/<service>:${MC_VERSION}` naming the systemd units above
-already reference. This replaces manually running the numbered
-`scripts/NN-build-*-image.sh` chain and hand-pushing tags; those scripts
-still work for a local/dev build (see `CLAUDE.md`'s Build System section),
-they're just no longer the release path. Set `MC_VERSION` on each drone to
-the tag pushed and restart `drone-mc.target` to roll it out. See
+already reference — and push the tags yourself. Set `MC_VERSION` on each
+drone to the tag pushed and restart `drone-mc.target` to roll it out. See
 `docs/CONTRIBUTING.md`'s [CI/CD (TEST-005)](CONTRIBUTING.md#cicd-test-005)
-section for the other two workflows (`ci.yml`, `nightly-sitl.yml`).
+section for the manual equivalents of the other two removed workflows
+(`ci.yml`, `nightly-sitl.yml`).
 
 ## Where to go next
 

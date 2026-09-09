@@ -1,0 +1,8 @@
+# IGS-001: gnss_sim_node dead-reckoning fusion core tunables.
+gnss_sim_node:
+  ros__parameters:
+    # A /mc/sensors/optical_flow sample arriving more than this many
+    # seconds after the previous one is dropped from integration rather
+    # than integrated across a stale/glitched gap. IGS-005 owns the real
+    # staleness *fault*; this is just the fusion core's own sanity bound.
+    max_flow_dt_s: 0.5
