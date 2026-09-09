@@ -267,31 +267,31 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
 
 ## CI/CD (TEST-005)
 
-Three GitHub Actions workflows, `.github/workflows/`:
+**Status: removed, not currently automated.** `TEST-005` built three
+GitHub Actions workflows under `.github/workflows/`
+(`ci.yml`, `nightly-sitl.yml`, `release.yml`) — done 2026-08-28. **All
+three were deleted** ("Remove GitHub Actions workflows", 2026-09-05) and
+have not been reinstated as of this writing. Nothing in this section runs
+automatically today; every gate below is a manual step a developer runs
+by hand before opening or merging a PR:
 
-| Workflow | Trigger | What it does |
+| Stage | What `ci.yml` used to do | Manual equivalent today |
 |---|---|---|
-| `ci.yml` | Every PR, every push to `main` | Builds `ros2-core` (cached), then `colcon build` + `colcon test` across all of `ws/src/*` — `ament_lint_auto` (cpplint/cppcheck/uncrustify/xmllint) rides along since it's already wired into every package's `BUILD_TESTING` block (see [Linting and formatting](#linting-and-formatting) above). Results post to the job's step summary and as a downloadable artifact. |
-| `nightly-sitl.yml` | Scheduled, nightly | Placeholder until `TEST-002`'s SITL harness exists (`docs/TESTING.md`'s TP-ST row) — documented no-op, not a faked pass. |
-| `release.yml` | Push of a `v*` tag | Builds every `docker/*/Dockerfile` that exists at tag time and pushes to `ghcr.io/drone-mc/<service>:<tag>` — the automated replacement for manually running the `scripts/NN-build-*-image.sh` chain and hand-pushing tags. |
+| Build + test | `colcon build` + `colcon test` across all of `ws/src/*` | Run `colcon build`/`colcon test` yourself per `docs/TESTING.md` before pushing |
+| Lint | `ament_lint_auto` (cpplint/cppcheck/uncrustify/xmllint), already wired into every package's `BUILD_TESTING` block | Run the same lint targets locally — see [Linting and formatting](#linting-and-formatting) above |
+| Nightly SITL | Placeholder no-op (`TEST-002`'s SITL harness didn't exist yet) | `TEST-002`'s SITL harness now exists (partial — see `docs/TESTING.md`'s TP-ST row); run it manually via `scripts/16-run-sitl-tests.sh` |
+| Release image build | `release.yml` built every `docker/*/Dockerfile` on a `v*` tag push | Run the numbered `scripts/NN-build-*-image.sh` chain by hand and push tags yourself — see `docs/DEPLOYMENT.md`'s "Cutting a release" section |
 
-See `INTEGRATION-AND-FLIGHT-TEST-PLAN.md` §2 for the design rationale
-(runner architecture, caching strategy) behind `ci.yml` specifically.
+Branch protection on `main` was never enabled either way — GitHub gates
+both classic branch protection and repository rulesets behind a paid plan
+for private repos, and this repo is intentionally private. So even while
+`ci.yml` existed, a failing run never actually blocked a merge; it was
+advisory only. That constraint is unrelated to the workflows' removal and
+still applies if they're ever restored.
 
-### Required manual setup: branch protection
-
-GitHub doesn't expose branch protection as YAML-in-repo, so this is a
-one-time manual step in repo settings, not something any workflow file can
-do:
-
-1. **Settings → Branches → Add branch protection rule** for `main`.
-2. Enable **"Require status checks to pass before merging"** and add
-   `ci.yml`'s job (`build-test-lint`) as a required check.
-3. Enable **"Require branches to be up to date before merging"** so a
-   stale PR can't merge on an outdated green run.
-
-Until this is done, `ci.yml` still runs and reports status, but a failing
-run does not actually block a merge — it's advisory only.
+See `INTEGRATION-AND-FLIGHT-TEST-PLAN.md` §2 for the original design
+rationale (runner architecture, caching strategy) behind `ci.yml`, kept as
+the target to restore rather than a description of current automation.
 
 ## Opening a PR
 
@@ -307,4 +307,4 @@ PR just because they touched nearby files.
 - Writing or running tests for your change: `docs/TESTING.md`.
 - Which topics/messages your change needs to wire up or update: `docs/API-REFERENCE.md`.
 - Ticket backlog and current delivery status: `PROJECT-PLAN-5-MONTH.md`.
-- Cutting a release / how the CI/CD pipeline works: [CI/CD (TEST-005)](#cicd-test-005) above and `docs/DEPLOYMENT.md`.
+- Cutting a release / the manual build-test-lint process that replaces the removed CI/CD pipeline: [CI/CD (TEST-005)](#cicd-test-005) above and `docs/DEPLOYMENT.md`.
