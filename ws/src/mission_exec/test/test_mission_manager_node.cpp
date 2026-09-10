@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <thread>
@@ -111,6 +112,22 @@ protected:
     context_ = std::make_shared<rclcpp::Context>();
     context_->init(0, nullptr, init_options);
 
+    // Separate from the DDS leak above: EXEC-004's disk persistence
+    // (mission_upload_path_, default /var/drone-mc/mission_upload.yaml) is
+    // real filesystem state, not DDS -- a domain-per-test does nothing to
+    // isolate it. Every test in this binary was writing/reloading the same
+    // real file, so a node from a later test would silently start with a
+    // previous test's persisted upload_id=42/arm_authorised=true already
+    // "received" (observed: InvalidTransitionRequestIsRejected,
+    // PhaseTransitionRejectedGetsAckWithReasonWithin500ms, and
+    // PreArmChecks_MultipleSimultaneousFailuresAllReported all failing from
+    // pre-satisfied guards). Point each test at its own temp path instead --
+    // same pattern as test_mission_manager_node_persistence.cpp's path_.
+    mission_upload_path_ = ::testing::TempDir() + "mission_manager_node_test_" +
+      ::testing::UnitTest::GetInstance()->current_test_info()->name() + ".yaml";
+    std::remove(mission_upload_path_.c_str());
+    std::remove((mission_upload_path_ + ".tmp").c_str());
+
     rclcpp::NodeOptions opts;
     opts.context(context_);
     opts.parameter_overrides(
@@ -123,6 +140,7 @@ protected:
       rclcpp::Parameter("takeoff_altitude_tolerance_m", 1.0),
       rclcpp::Parameter("waypoint_acceptance_radius_m", 3.0),
       rclcpp::Parameter("home_position_tolerance_m", 3.0),
+      rclcpp::Parameter("mission_upload_path", mission_upload_path_),
     });
     node_ = std::make_shared<mission_exec::MissionManagerNode>(opts);
     harness_ = std::make_shared<rclcpp::Node>(
@@ -180,6 +198,8 @@ protected:
     harness_.reset();
     context_->shutdown("test teardown");
     context_.reset();
+    std::remove(mission_upload_path_.c_str());
+    std::remove((mission_upload_path_ + ".tmp").c_str());
   }
 
   mc_msgs::msg::VehicleState good_vehicle_state() const
@@ -292,6 +312,7 @@ protected:
   rclcpp::Context::SharedPtr context_;
   std::shared_ptr<mission_exec::MissionManagerNode> node_;
   rclcpp::Node::SharedPtr harness_;
+  std::string mission_upload_path_;
 
   rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
   rclcpp::Publisher<mc_msgs::msg::MissionUpload>::SharedPtr pub_mission_upload_;
