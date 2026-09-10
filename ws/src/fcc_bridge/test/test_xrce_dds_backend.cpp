@@ -10,6 +10,12 @@
 
 #include <gtest/gtest.h>
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <mavlink/v2.0/common/mavlink.h>
+
 #include <chrono>
 #include <cmath>
 
@@ -75,6 +81,7 @@ protected:
     // needs to bind locally; nothing in this test suite sends to it.
     setenv("FCC_ETH_IP", "127.0.0.1", 1);
     setenv("FCC_MISSION_PORT", "14555", 1);
+    setenv("FCC_FLOW_PORT", "14655", 1);
 
     node_ = std::make_shared<rclcpp::Node>("xrce_dds_backend_test");
     backend_ = std::make_unique<fcc_bridge::XrceDdsBackend>(node_.get());
@@ -104,6 +111,7 @@ protected:
     backend_.reset();
     unsetenv("FCC_ETH_IP");
     unsetenv("FCC_MISSION_PORT");
+    unsetenv("FCC_FLOW_PORT");
   }
 
   rclcpp::Node::SharedPtr node_;
@@ -266,4 +274,41 @@ TEST_F(XrceDdsBackendTest, StreamOffboardSetpointPublishesControlModeAndTrajecto
   EXPECT_FLOAT_EQ(last_trajectory_setpoint_->yaw, 0.75F);
   EXPECT_TRUE(std::isnan(last_trajectory_setpoint_->velocity[0]));
   EXPECT_TRUE(std::isnan(last_trajectory_setpoint_->yawspeed));
+}
+
+// IGS-002: HIF-008 flow relay — a mock H-Flow-relay peer sends a raw MAVLink
+// datagram straight to FCC_FLOW_PORT (14655 here), independent of the DDS
+// subscriptions above. OpticalFlowRelay's own wire-decode/velocity math is
+// covered by test_optical_flow_relay.cpp; this only checks the socket/thread
+// plumbing that gets a real datagram into get_optical_flow().
+TEST_F(XrceDdsBackendTest, GetOpticalFlowReflectsFrameSentToDedicatedFlowPort)
+{
+  EXPECT_FALSE(backend_->get_optical_flow().valid) << "nothing sent yet";
+
+  const int peer_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+  sockaddr_in dest{};
+  dest.sin_family = AF_INET;
+  dest.sin_port = htons(14655);
+  ::inet_pton(AF_INET, "127.0.0.1", &dest.sin_addr);
+
+  mavlink_message_t msg;
+  mavlink_msg_optical_flow_rad_pack(
+    1, 1, &msg, 0, 0, /*integration_time_us=*/ 100000, /*integrated_x=*/ 0.0F,
+    /*integrated_y=*/ 0.0F, 0.0F, 0.0F, 0.0F, 0, /*quality=*/ 150, 0, /*distance=*/ 2.5F);
+  uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+  const uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+
+  ASSERT_TRUE(spin_until(
+    node_,
+      [&] {
+        ::sendto(peer_fd, buf, len, 0, reinterpret_cast<const sockaddr *>(&dest), sizeof(dest));
+        return backend_->get_optical_flow().valid;
+      },
+    std::chrono::seconds(3)));
+
+  ::close(peer_fd);
+
+  const auto sample = backend_->get_optical_flow();
+  EXPECT_FLOAT_EQ(sample.ground_distance, 2.5F);
+  EXPECT_EQ(sample.quality, 150);
 }

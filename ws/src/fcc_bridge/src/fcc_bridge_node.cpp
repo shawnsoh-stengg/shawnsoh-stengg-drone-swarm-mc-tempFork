@@ -34,6 +34,8 @@ FccBridgeNode::FccBridgeNode(
   pub_fault_ = create_publisher<mc_msgs::msg::FaultEvent>("/mc/fault", rclcpp::QoS(10));
   pub_mission_ack_ =
     create_publisher<mc_msgs::msg::FccMissionAck>("/mc/fcc/mission_ack", rclcpp::QoS(10));
+  pub_optical_flow_ =
+    create_publisher<mc_msgs::msg::OpticalFlow>("/mc/sensors/optical_flow", rclcpp::QoS(10));
 
   // Mutually-exclusive group: periodic publish stays serialized against
   // itself (threading model, SDD §2.1) even once other timers are added.
@@ -144,6 +146,11 @@ void FccBridgeNode::on_publish_timer()
 
   pub_vehicle_state_->publish(to_msg(state, link_alive));
 
+  const OpticalFlowSample flow = backend_->get_optical_flow();
+  if (flow.valid) {
+    pub_optical_flow_->publish(to_flow_msg(flow, now()));
+  }
+
   if (link_was_alive_ && !link_alive) {
     mc_msgs::msg::FaultEvent fault;
     fault.header.stamp = now();
@@ -187,6 +194,18 @@ mc_msgs::msg::VehicleState FccBridgeNode::to_msg(const VehicleState & state, boo
   // groundspeed and battery_v/battery_warning are still not aggregated by
   // FccBackend::VehicleState — left at zero/false pending a backend
   // enhancement, tracked separately from FCC-004.
+  return msg;
+}
+
+mc_msgs::msg::OpticalFlow FccBridgeNode::to_flow_msg(
+  const OpticalFlowSample & sample, rclcpp::Time stamp)
+{
+  mc_msgs::msg::OpticalFlow msg;
+  msg.header.stamp = stamp;
+  msg.vx = sample.vx;
+  msg.vy = sample.vy;
+  msg.ground_distance = sample.ground_distance;
+  msg.quality = sample.quality;
   return msg;
 }
 

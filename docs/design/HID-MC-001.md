@@ -24,9 +24,10 @@
 7. [HIF-005: Power and Electrical](#7-hif-005-power-and-electrical)
 8. [HIF-006: Debug and Maintenance Interfaces](#8-hif-006-debug-and-maintenance-interfaces)
 9. [HIF-007: MC ↔ Gimbal IP Camera (ETH Port 1)](#9-hif-007-mc--gimbal-ip-camera-eth-port-1)
-10. [Environmental and Mechanical](#10-environmental-and-mechanical)
-11. [Connector Quick Reference](#11-connector-quick-reference)
-12. [Configuration and Bring-Up Checklist](#12-configuration-and-bring-up-checklist)
+10. [HIF-008: FCC ↔ H-Flow Optical Flow / Rangefinder Sensor (CAN1)](#10-hif-008-fcc--h-flow-optical-flow--rangefinder-sensor-can1)
+11. [Environmental and Mechanical](#11-environmental-and-mechanical)
+12. [Connector Quick Reference](#12-connector-quick-reference)
+13. [Configuration and Bring-Up Checklist](#13-configuration-and-bring-up-checklist)
 
 ---
 
@@ -98,6 +99,12 @@ USB-C (debug) ─── USB-C port ──► Jetson USB-C (device / host)
 MicroSD ──────── slot on board ► Jetson SDMMC
 
 GPS, RC, ESC, telemetry ────────► Pixhawk JST-GH ports (see Pixhawk 6X docs)
+
+Optical flow + rangefinder ── CAN1 ──► Pixhawk FCC (DroneCAN, IGS-002/
+(Holybro H-Flow, downward-facing)       HIF-008 — existing Pixhawk CAN1
+                                         port, not a new Jetson connector;
+                                         MC-side relay: dedicated MAVLink
+                                         channel to fcc_bridge, see §10)
 ```
 
 ![Diagram 22 — Hardware Assembly and Connector Map](docs/diagrams/22-hid-board-assembly.png)
@@ -115,6 +122,7 @@ GPS, RC, ESC, telemetry ────────► Pixhawk JST-GH ports (see Pi
 | HIF-005 | DC power | XT60 battery connector → baseboard power input | Main power for entire assembly |
 | HIF-006 | USB-C | USB-C connector on baseboard → Jetson USB3.2 Gen2 | Debug, flashing, peripheral |
 | HIF-007 | Ethernet (switched) | JST-GH (ETH port 1) on baseboard's internal Ethernet switch: shared Jetson eth0 ↔ Gimbal IP camera | Gimbal RTSP/H.265 video ingest for AI perception |
+| HIF-008 | CAN (DroneCAN) | Pixhawk's existing CAN1 port ↔ Holybro H-Flow optical flow / rangefinder module | Downward optical-flow velocity + rangefinder input, relayed to `gnss_sim_node` (IGS-001) over a dedicated MAVLink channel (§10, ICD §3.3a) |
 
 ![Diagram 23 — Signal Interface Block Diagram](docs/diagrams/23-hid-signal-interfaces.png)
 
@@ -559,7 +567,7 @@ All ground signals (GND, DGND) are connected to a single star point on the baseb
 
 This is a one-time, host-side procedure per unit. It must complete — and the
 Jetson must boot to a login prompt — before running `scripts/01-install-os.sh`
-(§11.2), which configures Netplan and udev on top of a working JetPack image.
+(§13.2), which configures Netplan and udev on top of a working JetPack image.
 
 1. On an x86_64 Ubuntu 22.04 host, install NVIDIA SDK Manager
    (`sdkmanager`, matching the JetPack 6.2.2 release).
@@ -702,9 +710,106 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
 
 ---
 
-## 10. Environmental and Mechanical
+## 10. HIF-008: FCC ↔ H-Flow Optical Flow / Rangefinder Sensor (CAN1)
 
-### 10.1 Operating Limits
+**Revision note (2026-09-09):** this section originally (incorrectly) assumed a UART-connected PX4FLOW module read directly by the Jetson MC. **Corrected**: the actual selected/wired part is the **Holybro H-Flow**, a DroneCAN peripheral connected to the Pixhawk FCC's existing **CAN1** port — not a new Jetson connector at all. Consequently this is a **Pixhawk-side** interface (like the GPS/RC/TELEM ports already covered only as "Per Pixhawk 6X docs" in §12's J9–J14 row); it is called out with full detail here, as an exception to that usual brevity, because the data it carries is directly consumed by this project's own software (`gnss_sim_node`, IGS-001) — same rationale HIF-007 (gimbal camera) already established for going beyond a generic peripheral's usual one-line treatment.
+
+**Primary function:** Downward-facing optical-flow velocity and time-of-flight rangefinder input, intended for `gnss_sim_node` (`indoor_nav` package, IGS-001) — the dead-reckoning core that lets the drone hold MISSION mode indoors, ahead of `visual_localisation_node`'s (Track B) camera-based VO landing.
+
+> **Decision (2026-09-09): Option 1 — new dedicated MAVLink channel.** H-Flow is read by the **Pixhawk FCC** over DroneCAN, not by the Jetson MC directly. PX4's `uavcan_flow` driver ingests it into the `sensor_optical_flow` uORB topic, and the always-running `vehicle_optical_flow` module further derives `vehicle_optical_flow` (rotated by `SENS_FLOW_ROT`) and `vehicle_optical_flow_vel` (gyro-compensated, distance-scaled body-frame velocity, m/s — logging-only, not bridged anywhere) from it — confirmed against the real PX4 **v1.14.4 tag** source (`src/drivers/uavcan/sensors/flow.cpp`, `src/modules/sensors/vehicle_optical_flow/VehicleOpticalFlow.cpp`). **Neither topic is bridged out to the companion computer by uXRCE-DDS in stock PX4** — confirmed against the same tag's `src/modules/uxrce_dds_client/dds_topics.yaml`: `sensor_optical_flow` is listed only as `/fmu/in/*` (companion-computer-to-FCC); `distance_sensor` does not appear in the file at all (correcting this note's own first-pass claim that it, too, was `/fmu/in/*` — it simply isn't bridged either direction).
+>
+> Getting this data onto the MC needed one of:
+> 1. **A new dedicated MAVLink channel** (config-only, no firmware rebuild) — **chosen**. PX4 already has `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink stream implementations (`src/modules/mavlink/streams/OPTICAL_FLOW_RAD.hpp`, `.../DISTANCE_SENSOR.hpp`, confirmed unchanged at the v1.14.4 tag) that can be enabled on a new MAVLink instance/port, mirroring the existing mission-protocol channel precedent (`ICD-MC-001.md` §3.1, IR-007). This is now this repo's **second** MC↔FCC MAVLink exception — `ICD-MC-001.md` §3.3a, `SDD-MC-001.md` §3.2, and `CLAUDE.md`'s architecture summary have all been updated accordingly.
+> 2. A custom PX4 `dds_topics.yaml` addition (adds `/fmu/out/sensor_optical_flow` and/or `/fmu/out/vehicle_optical_flow_vel`) — rejected: requires a PX4 firmware rebuild/flash pipeline this repo does not currently have (all other sections in this document assume stock PX4 v1.14 plus documented parameter changes only).
+>
+> **Axis mapping confirmed safe, not just assumed:** `OPTICAL_FLOW_RAD.integrated_x/y` and `.integrated_xgyro/ygyro` are sourced from the `vehicle_optical_flow` topic, which PX4 rotates by `SENS_FLOW_ROT` (`rotate_3f(...)`, `VehicleOpticalFlow.cpp`) **before** publishing — i.e. before this MAVLink stream ever sees the values. The MC-side relay therefore does not need to re-apply any sensor-mount rotation itself, only the sign flip and gyro-compensation PX4's own `vehicle_optical_flow_vel` derivation performs on the same fields (replicated exactly — see `ICD-MC-001.md` §3.3a and `fcc_bridge/optical_flow_relay.cpp`'s doc comment for the formula and source citation).
+>
+> **Implemented:** `fcc_bridge`'s `OpticalFlowRelay` (shared by `XrceDdsBackend`'s dedicated port and `MavlinkUdpBackend`'s SITL socket) decodes both messages and publishes `mc_msgs/OpticalFlow` on `/mc/sensors/optical_flow`. See `ICD-MC-001.md` §3.3a for the wire format and velocity formula, and `INDOOR-GNSS-SIMULATION-BACKLOG.md` (Open Item 5) for the ticket-tracking side of this decision.
+
+### 10.1 Physical Layer
+
+| Parameter | Value |
+|---|---|
+| Interface type | CAN bus (DroneCAN protocol) |
+| Connector | Pixhawk 6X **CAN1** port — already exists on the baseboard/Pixhawk today, no new connector required (contrast this section's original, incorrect assumption) |
+| Connector type | JST-GH 4-pin, 1.25 mm pitch — "Pixhawk Standard CAN Connector" (Holybro H-Flow product documentation) |
+| Cable type | JST-GH 4-pin, per Pixhawk standard CAN cable | 
+| Bus | Shared with any other DroneCAN peripheral on CAN1 (none currently documented in this assembly) |
+| Termination | H-Flow supports software-controlled CAN termination (per Holybro documentation) — confirm whether it or the Pixhawk-end termination should be enabled for this bus segment during bring-up, not assumed here |
+
+### 10.2 Connector Pinout (4-pin JST-GH, Pixhawk CAN1)
+
+| Pin | Signal | Description |
+|---|---|---|
+| 1 | VCC | Bus power (Pixhawk standard DroneCAN connector convention) |
+| 2 | CAN_H | CAN bus, differential high |
+| 3 | CAN_L | CAN bus, differential low |
+| 4 | GND | Ground |
+
+> **Verify pin order against the current Holybro pinout diagram before fabrication** (`docs.holybro.com` H-Flow DroneCAN page's pinout figure) — this table reflects the standard Pixhawk CAN connector convention this document assumes elsewhere, not a pin-by-pin confirmation from that image.
+
+### 10.3 Electrical Characteristics
+
+| Parameter | Value |
+|---|---|
+| Optical flow sensor | PixArt PAA3905E1 — tracks down to > 5 lux, ≤ 42° FOV, 80 mm – 30 m working range, max angular rate 7.4 rad/s, built-in 40 mW/120° IR illumination LED for low-light operation |
+| Rangefinder | Broadcom AFBR-S50LV85D time-of-flight — up to 30 m typical, 12.4° × 6.2° FOV (32-pixel array), 850 nm laser, rated for ambient light up to 200k lux, "works on all surface conditions" per vendor documentation |
+| Onboard IMU | InvenSense ICM-42688-P, 6-axis (H-Flow's own, independent of the FCC's IMU) |
+| MCU | STM32F412CEU6 |
+| Weight | 15.2 g with case; 3.5 g PCB only |
+| Supply voltage / current | **Not published on Holybro's product/overview pages as of this section's writing** — confirm against the physical unit's silkscreen or a direct support inquiry before bring-up, rather than assume a value. |
+
+### 10.4 Configuration
+
+PX4-side DroneCAN + EKF2 fusion parameters (Holybro H-Flow PX4 setup guide, `docs.holybro.com`):
+
+```
+UAVCAN_SUB_FLOW = 1        # enable optical-flow DroneCAN subscription
+UAVCAN_SUB_RNG = 1         # enable rangefinder DroneCAN subscription
+EKF2_OF_CTRL = 1           # enable EKF2 optical-flow fusion
+UAVCAN_RNG_MIN = 0.08      # m — matches the sensor's 80 mm minimum range
+UAVCAN_RNG_MAX = 30        # m
+EKF2_RNG_A_HMAX = 10       # m — EKF2 rangefinder aiding altitude ceiling
+EKF2_RNG_QLTY_T = 0.2
+SENS_FLOW_MINHGT = 0.08    # m
+SENS_FLOW_MAXHGT = 30      # m
+SENS_FLOW_MAXR = 7.4       # rad/s, matches the sensor's max angular rate
+SENS_FLOW_ROT = 0          # default: connectors mounted toward the rear of the vehicle
+EKF2_OF_POS_X/Y/Z          # sensor offset from vehicle CG — measure and set per airframe
+EKF2_GPS_CTRL = 0          # only if intentionally disabling GPS aiding indoors — verify
+                           # this doesn't conflict with IGS's own GNSS-lockout design
+                           # (INDOOR-GNSS-SIMULATION-BACKLOG.md Safety Considerations §3)
+                           # before setting on a real airframe
+```
+
+**Mounting:** connectors toward the rear of the vehicle (matches `SENS_FLOW_ROT = 0`'s default assumption — a different mount orientation needs a different value), downward-facing, lens axis normal to the ground plane. Measure and set `EKF2_OF_POS_X/Y/Z` (offset from vehicle center of gravity) per airframe.
+
+**No Jetson-side udev rule or serial parameter is needed** — this section's original UART-based draft's `ttyTHS2`/`optical_flow_driver_node` parameters no longer apply.
+
+### 10.5 Link Verification
+
+**FCC-side (always possible, independent of the MC-relay decision above):**
+
+```
+# QGroundControl -> MAVLink Inspector -> DISTANCE_SENSOR
+# Confirm current_distance is non-zero and updating.
+```
+
+**MC-side (requires the FCC's flow MAVLink instance to be configured and streaming — a deployment step, not yet part of any smoke-test script):**
+
+```
+ros2 topic echo /mc/sensors/optical_flow
+# Confirm quality > 0 and ground_distance non-zero while the sensor has a
+# textured surface and valid range in view.
+```
+
+**Bench validation:** see `test-results/IGS-002-hif-008-bench-validation.md` for the current status — the wire-decode/velocity-math layer (`OpticalFlowRelay`) is unit- and integration-tested without hardware; physical bench validation is still blocked on procuring a real H-Flow unit and rig.
+
+---
+
+## 11. Environmental and Mechanical
+
+### 11.1 Operating Limits
 
 | Parameter | Specification |
 |---|---|
@@ -714,7 +819,7 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
 | Maximum altitude | 4500 m MSL (reduced air cooling above 3000 m — monitor Jetson GPU temp via tegrastats) |
 | IP rating | Not rated — open-frame PCB assembly requires weather shroud on airframe |
 
-### 10.2 Vibration and Shock
+### 11.2 Vibration and Shock
 
 | Parameter | Specification |
 |---|---|
@@ -724,7 +829,7 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
 
 > **Critical:** Vibration is the primary cause of FPC connector failure on the CSI-2 camera interface. Use the cable retainer clip or foam bracket as described in §5.5. After any hard landing, inspect the CSI-2 connector before the next flight.
 
-### 10.3 Mechanical Dimensions
+### 11.3 Mechanical Dimensions
 
 | Parameter | Value |
 |---|---|
@@ -737,7 +842,7 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
 
 > Use current Holybro datasheet for certified dimension values.
 
-### 10.4 Thermal Management
+### 11.4 Thermal Management
 
 The Jetson Orin NX SoM includes a heatspreader but no fan. The baseboard does not include an integrated fan. For sustained AI inference loads at ambient temperatures > 40 °C, attach an active cooling solution:
 
@@ -757,7 +862,7 @@ Trigger health_monitor_node alert at GPU > 85 °C (SDD §10.1). Switch to nvpmod
 
 ---
 
-## 11. Connector Quick Reference
+## 12. Connector Quick Reference
 
 | ID | Connector label | Type | Pitch | Pins | Function | Mating connector |
 |---|---|---|---|---|---|---|
@@ -772,11 +877,13 @@ Trigger health_monitor_node alert at GPU > 85 °C (SDD §10.1). Switch to nvpmod
 | J9–J14 | PX4 peripherals | JST-GH | 1.25 mm | 4–10 | GPS · RC · TELEM1 · TELEM2 · AUX · I²C | Per Pixhawk 6X docs |
 | J15 | ETH port 1 | JST-GH | 1.25 mm | 6 | Gimbal IP camera (shared internal switch port) | JST-GH 6-pin to RJ45 pigtail |
 
+> **HIF-008 (§10) note:** Holybro H-Flow connects to the Pixhawk's existing **CAN1** port (one of the J9–J14 PX4-peripheral connectors above) — no new baseboard connector, unlike this table's original (incorrect) J16 entry.
+
 > **Label positions:** Refer to the Holybro Pixhawk Jetson Baseboard silkscreen for the physical location of each connector. Connector designators (J1–J8) used in this document match the Holybro schematic reference designators.
 
 ---
 
-## 12. Configuration and Bring-Up Checklist
+## 13. Configuration and Bring-Up Checklist
 
 Use this checklist for initial lab bring-up and after any hardware change. Each item references the relevant HIF section.
 
@@ -784,7 +891,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 
 *Diagram 27 — Hardware Bring-Up and Pre-Flight Sequence: Ordered flow from first-time assembly through software configuration to pre-flight verification and post-flight inspection.*
 
-### 12.1 First-Time Assembly
+### 13.1 First-Time Assembly
 
 - [ ] **HIF-006** Flash the Jetson Orin NX module with JetPack 6.2.2 via NVIDIA SDK Manager (§8.1). Verify it boots to a login prompt before proceeding.
 - [ ] **HIF-005** Verify XT60 polarity before connecting battery. Apply power via bench PSU (current limit 5 A) on first connection.
@@ -792,8 +899,9 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 - [ ] **HIF-003** Insert MicroSD cards (Jetson and Pixhawk). Lock the CSI-2 FPC cable into the ZIF connector before applying power.
 - [ ] **HIF-006** Connect USB-C to host PC; verify Jetson appears as USB device. Boot to recovery mode if reflashing OS.
 - [ ] **HIF-007** Connect the gimbal IP camera's JST-GH-to-RJ45 pigtail to ETH port 1 (J15). Verify camera is powered per its own mounting/power documentation (out of scope here).
+- [ ] **HIF-008** Wire the Holybro H-Flow to the Pixhawk's existing CAN1 port (§10.1/§10.2) — no new baseboard connector needed. Mount per §10.4: connectors toward the rear of the vehicle (unless `SENS_FLOW_ROT` will be set differently), downward-facing, lens axis normal to the ground plane.
 
-### 12.2 Software Configuration (one-time, per drone)
+### 13.2 Software Configuration (one-time, per drone)
 
 - [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the dual-IP Netplan config (192.168.10.11/24 + 192.168.12.1/24 on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
 - [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600` via QGroundControl.
@@ -801,8 +909,9 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
 - [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.10.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.10.11/24`.
+- [ ] **HIF-008** Set the PX4 DroneCAN/EKF2 parameters listed in §10.4 (`UAVCAN_SUB_FLOW`, `UAVCAN_SUB_RNG`, `EKF2_OF_CTRL`, height/rate limits, `EKF2_OF_POS_X/Y/Z` offsets) via QGroundControl and reboot the FCC. Also start a second MAVLink instance on the FCC streaming `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` to the MC on `FCC_FLOW_PORT` (`:14556` by default, ICD §3.3a) — no MC-side config needed, `fcc_bridge` binds this port automatically.
 
-### 12.3 Pre-Flight Verification (each flight)
+### 13.3 Pre-Flight Verification (each flight)
 
 - [ ] **HIF-001** `ros2 topic hz /fmu/out/vehicle_status` — expect ≥ 5 Hz.
 - [ ] **HIF-002** (if Ethernet fallback active) `ping 192.168.12.31` from Jetson — expect < 1 ms RTT.
@@ -811,12 +920,14 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 - [ ] **HIF-007** `ping 192.168.10.200` from Jetson — gimbal camera reachable; confirm RTSP stream per §9.5.
 - [ ] **HIF-005** Check `battery_status.remaining` in QGroundControl — > 80% before flight.
 - [ ] **HIF-006** MicroSD (Pixhawk) seated — PX4 log recording active (green SD light on Pixhawk).
+- [ ] **HIF-008** QGroundControl → MAVLink Inspector → `DISTANCE_SENSOR.current_distance` non-zero and updating (§10.5). MC-side: `ros2 topic echo /mc/sensors/optical_flow` shows `quality` non-zero and updating (§10.5).
 - [ ] **ALL** Run `10b-smoke-test-networking.sh` — all checks pass.
 
-### 12.4 Post-Flight Inspection
+### 13.4 Post-Flight Inspection
 
 - [ ] **HIF-003** Inspect CSI-2 FPC cable and ZIF connector for signs of wear or displacement.
 - [ ] **HIF-007** Inspect the JST-GH-to-RJ45 pigtail and gimbal mount for connector wear or strain.
+- [ ] **HIF-008** Inspect the CAN1 JST-GH cable and H-Flow's optical/ToF windows for debris/scratches; re-seat the connector if loose.
 - [ ] **HIF-005** Measure battery voltage at XT60 with multimeter. Verify no cell imbalance > 100 mV.
 - [ ] **HIF-004** Copy PX4 flight log from Pixhawk MicroSD for archiving.
 - [ ] **HIF-006** Archive Jetson system log: `journalctl --since "1 hour ago" > flight_YYYYMMDDHHmm.log`.

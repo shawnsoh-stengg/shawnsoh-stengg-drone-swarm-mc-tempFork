@@ -20,6 +20,7 @@ add_library(fcc_backend
   src/xrce_dds_backend.cpp
   src/mavlink_udp_backend.cpp
   src/mission_protocol_client.cpp
+  src/optical_flow_relay.cpp
 )
 target_include_directories(fcc_backend PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -95,6 +96,13 @@ if(BUILD_TESTING)
   # (TP-NI style, SDD §3.2) — real px4_msgs types, no live FCC required.
   ament_add_gtest(test_xrce_dds_backend test/test_xrce_dds_backend.cpp)
   target_link_libraries(test_xrce_dds_backend fcc_backend)
+  target_include_directories(test_xrce_dds_backend PRIVATE ${mavlink_INCLUDE_DIRS})
+
+  # IGS-002: OpticalFlowRelay's OPTICAL_FLOW_RAD/DISTANCE_SENSOR decode and
+  # velocity-scaling math — pure logic, no socket, no PX4 hardware.
+  ament_add_gtest(test_optical_flow_relay test/test_optical_flow_relay.cpp)
+  target_link_libraries(test_optical_flow_relay fcc_backend)
+  target_include_directories(test_optical_flow_relay PRIVATE ${mavlink_INCLUDE_DIRS})
 
   # FCC-007: MavlinkUdpBackend state aggregation + mission protocol against
   # a mock PX4 SITL peer (plain UDP socket in the test, no live PX4).
