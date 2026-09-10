@@ -1,10 +1,49 @@
 // Copyright 2026 Jun Hong Lee. All rights reserved.
-// Proprietary — Swarm Search Drone Mission Computer (INDOOR-GNSS-SIMULATION-BACKLOG.md, IGS-001).
+// Proprietary — Swarm Search Drone Mission Computer (INDOOR-GNSS-SIMULATION-BACKLOG.md).
 
 #include "indoor_nav/gnss_sim_node.hpp"
 
+#include <cmath>
+#include <cstdio>
+
 namespace indoor_nav
 {
+
+namespace
+{
+// Mean Earth radius (m), matched to PX4 v1.14.4's own CONSTANTS_RADIUS_OF_
+// EARTH (src/lib/geo/geo.h) rather than the WGS-84 semi-major axis
+// (6378137 m) -- since IGS-004's GPS_INPUT ultimately feeds PX4's own EKF2,
+// using the same constant PX4's map_projection already uses avoids a second,
+// independently-wrong small discrepancy on top of this module's own
+// equirectangular approximation. That approximation (vs. PX4's azimuthal-
+// equidistant map_projection) is deliberately simpler: both agree to well
+// under 1% over the tens-of-meters displacements this indoor-cage-scoped
+// module ever sees (Safety Considerations #4), so the extra complexity of
+// matching PX4's exact projection isn't worth it here.
+constexpr double kEarthRadiusM = 6371000.0;
+
+// Local NED (north_m, east_m, down_m) -> WGS-84, anchored at
+// (origin_lat_deg, origin_lon_deg, origin_alt_msl). Small-displacement
+// equirectangular projection: exact at the origin, first-order accurate
+// away from it.
+GnssSimNode::WgsFix local_to_wgs84(
+  double origin_lat_deg, double origin_lon_deg, float origin_alt_msl,
+  float north_m, float east_m, float down_m)
+{
+  const double origin_lat_rad = origin_lat_deg * M_PI / 180.0;
+  const double dlat_rad = static_cast<double>(north_m) / kEarthRadiusM;
+  const double dlon_rad =
+    static_cast<double>(east_m) / (kEarthRadiusM * std::cos(origin_lat_rad));
+
+  GnssSimNode::WgsFix fix;
+  fix.valid = true;
+  fix.lat_deg = origin_lat_deg + dlat_rad * 180.0 / M_PI;
+  fix.lon_deg = origin_lon_deg + dlon_rad * 180.0 / M_PI;
+  fix.alt_msl = origin_alt_msl - down_m;
+  return fix;
+}
+}  // namespace
 
 namespace
 {
@@ -43,9 +82,19 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
 : Node("gnss_sim_node", options)
 {
   max_flow_dt_s_ = declare_parameter("max_flow_dt_s", max_flow_dt_s_);
+  eph_at_anchor_m_ = declare_parameter("eph_at_anchor_m", eph_at_anchor_m_);
+  epv_at_anchor_m_ = declare_parameter("epv_at_anchor_m", epv_at_anchor_m_);
+  eph_growth_rate_m_per_s_ =
+    declare_parameter("eph_growth_rate_m_per_s", eph_growth_rate_m_per_s_);
+  epv_growth_rate_m_per_s_ =
+    declare_parameter("epv_growth_rate_m_per_s", epv_growth_rate_m_per_s_);
 
   pub_local_estimate_ = create_publisher<nav_msgs::msg::Odometry>(
     "/mc/indoor/local_estimate", rclcpp::QoS(10));
+  pub_gnss_sim_status_ = create_publisher<mc_msgs::msg::IndoorGnssSimStatus>(
+    "/mc/indoor/gnss_sim_status", rclcpp::QoS(10));
+  pub_status_text_ =
+    create_publisher<mc_msgs::msg::StatusText>("/mc/status_text", rclcpp::QoS(10));
 
   sub_vehicle_state_ = create_subscription<mc_msgs::msg::VehicleState>(
     "/mc/fcc/vehicle_state", rclcpp::QoS(10),
@@ -53,6 +102,9 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
   sub_optical_flow_ = create_subscription<mc_msgs::msg::OpticalFlow>(
     "/mc/sensors/optical_flow", rclcpp::QoS(10),
     [this](mc_msgs::msg::OpticalFlow::SharedPtr msg) {on_optical_flow(*msg);});
+  sub_gcs_command_ = create_subscription<mc_msgs::msg::GcsCommand>(
+    "/mc/gcs/command", rclcpp::QoS(10),
+    [this](mc_msgs::msg::GcsCommand::SharedPtr msg) {on_gcs_command(*msg);});
 
   RCLCPP_INFO(get_logger(), "gnss_sim_node started");
 }
@@ -61,6 +113,7 @@ void GnssSimNode::on_vehicle_state(const mc_msgs::msg::VehicleState & msg)
 {
   attitude_q_ = msg.q;
   has_attitude_ = true;
+  last_alt_msl_ = msg.alt_msl;
 
   const rclcpp::Time stamp(msg.header.stamp);
 
@@ -83,6 +136,92 @@ void GnssSimNode::on_vehicle_state(const mc_msgs::msg::VehicleState & msg)
   last_vehicle_state_stamp_ = stamp;
 
   publish_estimate(stamp);
+}
+
+void GnssSimNode::on_gcs_command(const mc_msgs::msg::GcsCommand & msg)
+{
+  if (msg.command != kMcCmdIndoorGnssSimAnchor) {
+    return;
+  }
+  reanchor(
+    static_cast<double>(msg.params[0]), static_cast<double>(msg.params[1]), msg.params[2],
+    rclcpp::Time(msg.header.stamp));
+}
+
+void GnssSimNode::reanchor(
+  double lat_deg, double lon_deg, float alt_msl, const rclcpp::Time & stamp)
+{
+  mc_msgs::msg::StatusText status;
+  status.header.stamp = stamp;
+
+  if (std::abs(lat_deg) > 90.0 || std::abs(lon_deg) > 180.0) {
+    status.severity = mc_msgs::msg::StatusText::SEVERITY_ERROR;
+    status.text = "gnss_sim_node: rejected false-origin anchor, lat/lon out of range";
+    RCLCPP_ERROR(
+      get_logger(),
+      "reanchor: rejected out-of-range false origin (lat=%.7f, lon=%.7f) -- "
+      "previous anchor (if any) is unchanged",
+      lat_deg, lon_deg);
+    pub_status_text_->publish(status);
+    return;
+  }
+
+  // Re-zero the running local integrator so "local (0,0,0)" always means
+  // "the most recently declared false origin" -- otherwise a re-anchor
+  // mid-session would double-count whatever drift had already accumulated
+  // against the *previous* origin on top of the newly declared one.
+  x_ = 0.0F;
+  y_ = 0.0F;
+  z_ = 0.0F;
+  if (last_alt_msl_.has_value()) {
+    alt_msl_anchor_ = *last_alt_msl_;
+  }
+
+  const bool was_active = active_;
+  false_origin_lat_deg_ = lat_deg;
+  false_origin_lon_deg_ = lon_deg;
+  false_origin_alt_msl_ = alt_msl;
+  anchor_stamp_ = stamp;
+  active_ = true;
+
+  char text_buf[128];
+  std::snprintf(
+    text_buf, sizeof(text_buf), "gnss_sim_node: %s false origin lat=%.7f lon=%.7f alt_msl=%.2f",
+    (was_active ? "re-anchored" : "anchored"), lat_deg, lon_deg, static_cast<double>(alt_msl));
+  status.severity = mc_msgs::msg::StatusText::SEVERITY_INFO;
+  status.text = text_buf;
+  RCLCPP_INFO(get_logger(), "%s", status.text.c_str());
+  pub_status_text_->publish(status);
+
+  publish_gnss_sim_status(stamp);
+}
+
+GnssSimNode::WgsFix GnssSimNode::wgs84_fix() const
+{
+  if (!active_) {
+    return WgsFix{};
+  }
+  return local_to_wgs84(
+    false_origin_lat_deg_, false_origin_lon_deg_, false_origin_alt_msl_, x_, y_, z_);
+}
+
+void GnssSimNode::publish_gnss_sim_status(const rclcpp::Time & stamp)
+{
+  const double time_since_anchor_s =
+    active_ ? (stamp - *anchor_stamp_).seconds() : 0.0;
+
+  mc_msgs::msg::IndoorGnssSimStatus msg;
+  msg.header.stamp = stamp;
+  msg.active = active_;
+  msg.eph = static_cast<float>(eph_at_anchor_m_ + eph_growth_rate_m_per_s_ * time_since_anchor_s);
+  msg.epv = static_cast<float>(epv_at_anchor_m_ + epv_growth_rate_m_per_s_ * time_since_anchor_s);
+  msg.time_since_anchor_s = static_cast<float>(time_since_anchor_s);
+  // IGS-005's own concern (waypoint-deviation sanity bound) -- not
+  // implemented yet, see IndoorGnssSimStatus.msg's own header comment.
+  msg.waypoint_deviation_m = 0.0F;
+
+  latest_gnss_sim_status_ = msg;
+  pub_gnss_sim_status_->publish(msg);
 }
 
 void GnssSimNode::on_optical_flow(const mc_msgs::msg::OpticalFlow & msg)
@@ -139,6 +278,12 @@ void GnssSimNode::publish_estimate(const rclcpp::Time & stamp)
 
   latest_estimate_ = msg;
   pub_local_estimate_->publish(msg);
+
+  // Republished alongside the local estimate (same message-timestamp-driven
+  // cadence, no wall timer) so eph/epv's growth-with-time-since-anchor is
+  // observable on /mc/indoor/gnss_sim_status as new sensor samples arrive,
+  // not just at anchor time.
+  publish_gnss_sim_status(stamp);
 }
 
 }  // namespace indoor_nav

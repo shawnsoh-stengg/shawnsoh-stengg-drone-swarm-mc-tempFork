@@ -517,6 +517,7 @@ All MC-directed commands use `target_system = MC system_id` and `target_componen
 | `MC_ARM_AUTHORISE` | 50002¹ | Mission upload ID | — | — | Grant ARM authorisation for current mission |
 | `MC_END_MISSION` | 50003¹ | — | — | — | Command transition to RETURN phase |
 | `MC_GCS_OVERRIDE` | 50004¹ | 1=enable, 0=disable | Override type (§10.7) | — | Assert GCS authority override (e.g., suppress low-batt RTL) |
+| `MC_INDOOR_GNSS_SIM_ANCHOR` | 50005¹ | False-origin lat (deg) | False-origin lon (deg) | param3 = false-origin alt MSL (m) | Anchor/re-anchor `gnss_sim_node`'s indoor false origin (`INDOOR-GNSS-SIMULATION-BACKLOG.md` IGS-003) — logged via `/mc/status_text` each time, rejected if lat/lon are out of WGS-84 range |
 | `MAV_CMD_COMPONENT_ARM_DISARM` | 400 | 0=disarm | — | — | Emergency disarm from GCS |
 | `MAV_CMD_DO_SET_MODE` | 176 | — | — | — | Direct flight mode override (emergency) |
 
@@ -1516,6 +1517,7 @@ uint32  rx_drop_count
 | 50002 | `MC_CMD_ARM_AUTHORISE` (custom) |
 | 50003 | `MC_CMD_END_MISSION` (custom) |
 | 50004 | `MC_CMD_GCS_OVERRIDE` (custom) |
+| 50005 | `MC_CMD_INDOOR_GNSS_SIM_ANCHOR` (custom) |
 
 ### 10.6 Mission Phase IDs
 

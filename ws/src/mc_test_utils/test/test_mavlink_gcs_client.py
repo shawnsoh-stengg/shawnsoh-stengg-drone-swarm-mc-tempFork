@@ -60,12 +60,17 @@ class TestMavlinkGcsClient(unittest.TestCase):
         self.client.close()
         self.node.destroy_node()
 
-    def _wait_for_ready(self, sub):
+    def _wait_for_ready(self, topic_name):
         # Establish gcs_mavlink_node's reply-learning (handle_message()'s
         # last_gcs_endpoint_) before a mission upload can succeed -- a
         # MISSION_REQUEST_INT reply has somewhere to be sent.
+        #
+        # count_publishers(), not Subscription.get_publisher_count() -- the
+        # latter doesn't exist on rclpy's Subscription in ROS 2 Humble (only
+        # added in a later distro); Node.count_publishers() is the stable,
+        # cross-distro way to check discovery has matched.
         deadline = time.time() + 5.0
-        while time.time() < deadline and sub.get_publisher_count() == 0:
+        while time.time() < deadline and self.node.count_publishers(topic_name) == 0:
             self.client.send_heartbeat()
             rclpy.spin_once(self.node, timeout_sec=0.1)
 
@@ -73,7 +78,7 @@ class TestMavlinkGcsClient(unittest.TestCase):
         received = []
         sub = self.node.create_subscription(
             GcsCommand, '/mc/gcs/command', lambda m: received.append(m), 10)
-        self._wait_for_ready(sub)
+        self._wait_for_ready('/mc/gcs/command')
 
         deadline = time.time() + 5.0
         while time.time() < deadline and not received:
@@ -90,7 +95,7 @@ class TestMavlinkGcsClient(unittest.TestCase):
         received = []
         sub = self.node.create_subscription(
             MissionUpload, '/mc/gcs/mission_upload', lambda m: received.append(m), 10)
-        self._wait_for_ready(sub)
+        self._wait_for_ready('/mc/gcs/mission_upload')
 
         items = [
             gcs_client.ingress_or_muster_item(
