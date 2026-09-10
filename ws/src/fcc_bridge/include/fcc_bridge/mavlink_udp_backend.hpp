@@ -15,6 +15,7 @@
 
 #include "fcc_bridge/fcc_backend.hpp"
 #include "fcc_bridge/mission_protocol_client.hpp"
+#include "fcc_bridge/optical_flow_relay.hpp"
 
 // FCC-007: SITL/fallback FccBackend over a single MAVLink 2/UDP socket
 // (SDD §3.3). Used when SIMULATION_MODE=true.
@@ -43,6 +44,7 @@ public:
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override;
   void publish_visual_odometry(const VisualOdometry & vo) override;
   VehicleState get_vehicle_state() const override;
+  OpticalFlowSample get_optical_flow() const override;
   bool is_link_alive(double timeout_s = 1.0) const override;
 
 private:
@@ -113,6 +115,16 @@ private:
   sockaddr_in peer_addr_{};
 
   std::unique_ptr<MissionProtocolClient> mission_client_;
+
+  // HIF-008 flow relay, multiplexed over this backend's one shared socket
+  // (mirrors the mission-protocol precedent above) — only ever populated if
+  // PX4 SITL's own simulated flow sensor sends OPTICAL_FLOW_RAD/
+  // DISTANCE_SENSOR on this connection; nothing in this project's SITL
+  // launch configuration currently enables that (no real H-Flow exists in
+  // simulation), so get_optical_flow() reports invalid in practice today.
+  // OpticalFlowRelay is thread-safe (its own doc comment) — no additional
+  // lock needed here.
+  OpticalFlowRelay flow_relay_;
 
   mutable std::mutex state_mtx_;
   VehicleState state_{};

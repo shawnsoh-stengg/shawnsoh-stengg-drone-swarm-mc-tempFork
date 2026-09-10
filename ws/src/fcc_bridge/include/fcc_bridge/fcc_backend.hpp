@@ -12,6 +12,7 @@
 
 #include "fcc_bridge/mission_item.hpp"
 #include "fcc_bridge/offboard_setpoint.hpp"
+#include "fcc_bridge/optical_flow_sample.hpp"
 #include "fcc_bridge/vehicle_state.hpp"
 #include "fcc_bridge/visual_odometry.hpp"
 
@@ -53,6 +54,13 @@ public:
 
   // Latest aggregated vehicle state (thread-safe).
   virtual VehicleState get_vehicle_state() const = 0;
+
+  // Latest HIF-008 (Holybro H-Flow) downward optical-flow + rangefinder
+  // sample, relayed over the dedicated flow MAVLink channel (ICD §3.3a,
+  // HID-MC-001 §10). OpticalFlowSample::valid is false until at least one
+  // frame has been received -- MavlinkUdpBackend (SITL) has no simulated
+  // H-Flow and always reports invalid.
+  virtual OpticalFlowSample get_optical_flow() const = 0;
 
   // True if the FCC link has produced a message within the last
   // timeout_s seconds.

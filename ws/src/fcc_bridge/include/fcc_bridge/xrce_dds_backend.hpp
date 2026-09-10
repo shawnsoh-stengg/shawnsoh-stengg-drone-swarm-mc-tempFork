@@ -5,8 +5,12 @@
 
 #include <netinet/in.h>
 
+#include <mavlink/v2.0/common/mavlink.h>
+
+#include <atomic>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include <px4_msgs/msg/battery_status.hpp>
@@ -23,6 +27,7 @@
 
 #include "fcc_bridge/fcc_backend.hpp"
 #include "fcc_bridge/mission_protocol_client.hpp"
+#include "fcc_bridge/optical_flow_relay.hpp"
 
 // FCC-002: production FccBackend over uXRCE-DDS (SDD §3.2, ICD §3).
 namespace fcc_bridge
@@ -32,9 +37,9 @@ class XrceDdsBackend : public FccBackend
 {
 public:
   // Reads FCC_TRANSPORT (serial|ethernet), FCC_SERIAL_DEVICE, FCC_SERIAL_BAUD,
-  // FCC_ETH_IP, FCC_ETH_PORT, FCC_MISSION_PORT from the environment
-  // (ICD §9.4). Throws std::runtime_error if the mission-protocol socket
-  // cannot be created/bound.
+  // FCC_ETH_IP, FCC_ETH_PORT, FCC_MISSION_PORT, FCC_FLOW_PORT from the
+  // environment (ICD §9.4). Throws std::runtime_error if the mission-protocol
+  // or flow-relay socket cannot be created/bound.
   explicit XrceDdsBackend(rclcpp::Node * node);
   ~XrceDdsBackend() override;
 
@@ -44,6 +49,7 @@ public:
   void send_command(uint32_t cmd, const std::array<float, 7> & params) override;
   void publish_visual_odometry(const VisualOdometry & vo) override;
   VehicleState get_vehicle_state() const override;
+  OpticalFlowSample get_optical_flow() const override;
   bool is_link_alive(double timeout_s = 1.0) const override;
 
 private:
@@ -57,6 +63,9 @@ private:
 
   void touch_link_alive();
   int open_mission_socket();
+
+  int open_flow_socket();
+  void flow_recv_loop();
 
   rclcpp::Node * node_;
 
@@ -84,6 +93,20 @@ private:
   // independent of FCC_TRANSPORT (ICD §3.1, IR-007). Not DDS.
   int mission_sock_fd_{-1};
   std::unique_ptr<MissionProtocolClient> mission_client_;
+
+  // Optical-flow relay — a second, independent MAVLink 2/UDP channel, always
+  // 192.168.12.x:FCC_FLOW_PORT (ICD §3.3a, HID-MC-001 §10). Receive-only
+  // (FCC -> MC), so unlike the mission channel this has no request/response
+  // client and no socket contention to serialize against — its own thread,
+  // own socket, own MAVLINK_COMM_2 parser state (distinct from
+  // MissionProtocolClient's MAVLINK_COMM_0 and MavlinkUdpBackend's
+  // MAVLINK_COMM_1, mavlink_udp_backend.cpp's recv_loop() doc comment).
+  // OpticalFlowRelay itself is thread-safe (its own doc comment) — no
+  // additional lock needed around flow_relay_ here.
+  int flow_sock_fd_{-1};
+  std::thread flow_recv_thread_;
+  std::atomic<bool> flow_stop_{false};
+  OpticalFlowRelay flow_relay_;
 
   mutable std::mutex state_mtx_;
   VehicleState state_{};

@@ -20,6 +20,12 @@ FCC_ETH_PORT=8888
 # FCC_TRANSPORT above; stock PX4 has no DDS-writable mission topic, IR-007)
 FCC_MISSION_PORT=14555
 
+# HIF-008 optical-flow relay (MAVLink, always on 192.168.12.x — independent
+# of FCC_TRANSPORT above; stock PX4 doesn't bridge sensor_optical_flow/
+# distance_sensor to the companion computer over DDS, HID-MC-001 §10 /
+# ICD §3.3a)
+FCC_FLOW_PORT=14556
+
 # --- GCS (ICD §IFD-002) ---
 GCS_IP=192.168.10.10
 GCS_MAV_PORT_RECV=14551

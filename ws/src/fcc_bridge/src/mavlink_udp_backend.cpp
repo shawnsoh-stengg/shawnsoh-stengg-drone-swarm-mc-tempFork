@@ -138,6 +138,13 @@ void MavlinkUdpBackend::dispatch(const mavlink_message_t & msg)
     case MAVLINK_MSG_ID_GPS_RAW_INT:
       handle_gps_raw_int(msg);
       break;
+    case MAVLINK_MSG_ID_OPTICAL_FLOW_RAD:
+    case MAVLINK_MSG_ID_DISTANCE_SENSOR:
+      // HIF-008 flow relay (OpticalFlowRelay's own doc comment) — only ever
+      // populated if PX4 SITL's own simulated flow sensor sends these on
+      // this connection.
+      flow_relay_.handle_frame(msg);
+      break;
     default:
       // Includes mission-protocol replies arriving outside an active
       // handshake (nothing is waiting for them) — dropped, matching
@@ -391,6 +398,11 @@ VehicleState MavlinkUdpBackend::get_vehicle_state() const
 {
   std::scoped_lock lock(state_mtx_);
   return state_;
+}
+
+OpticalFlowSample MavlinkUdpBackend::get_optical_flow() const
+{
+  return flow_relay_.get_sample();
 }
 
 bool MavlinkUdpBackend::is_link_alive(double timeout_s) const

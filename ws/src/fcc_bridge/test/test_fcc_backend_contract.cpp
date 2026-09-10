@@ -48,8 +48,11 @@ public:
 
   fcc_bridge::VehicleState get_vehicle_state() const override {return state_;}
 
+  fcc_bridge::OpticalFlowSample get_optical_flow() const override {return flow_sample_;}
+
   bool is_link_alive(double /*timeout_s*/) const override {return link_alive_;}
 
+  fcc_bridge::OpticalFlowSample flow_sample_{};
   fcc_bridge::VehicleState state_{};
   bool link_alive_{true};
   bool upload_result_{true};
@@ -148,6 +151,18 @@ TEST(FccBackendContract, SendCommandForwardsAllSevenParams)
 
   EXPECT_EQ(fake.last_command_, 400U);
   EXPECT_EQ(fake.last_params_, params);
+}
+
+TEST(FccBackendContract, GetOpticalFlowReachesImplementationThroughBasePointer)
+{
+  FakeBackend fake;
+  fake.flow_sample_.vx = 1.5F;
+  fake.flow_sample_.valid = true;
+  fcc_bridge::FccBackend * backend = &fake;
+
+  const auto sample = backend->get_optical_flow();
+  EXPECT_TRUE(sample.valid);
+  EXPECT_FLOAT_EQ(sample.vx, 1.5F);
 }
 
 TEST(FccBackendContract, IsLinkAliveReflectsImplementation)

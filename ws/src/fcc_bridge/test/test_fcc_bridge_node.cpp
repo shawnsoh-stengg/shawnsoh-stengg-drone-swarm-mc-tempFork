@@ -22,10 +22,17 @@
 #include <mc_msgs/msg/fcc_mission_ack.hpp>
 #include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/fcc_offboard_setpoint.hpp>
+#include <mc_msgs/msg/optical_flow.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <rclcpp/rclcpp.hpp>
+
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <mavlink/v2.0/common/mavlink.h>
 
 #include "fcc_bridge/fcc_bridge_node.hpp"
 
@@ -78,6 +85,7 @@ protected:
     // socket for the mission-protocol channel; no live Pixhawk required.
     setenv("FCC_ETH_IP", "127.0.0.1", 1);
     setenv("FCC_MISSION_PORT", "15556", 1);
+    setenv("FCC_FLOW_PORT", "15656", 1);
     unsetenv("SIMULATION_MODE");
 
     node_ = std::make_shared<fcc_bridge::FccBridgeNode>();
@@ -94,14 +102,42 @@ protected:
     sub_fault_ = harness_->create_subscription<mc_msgs::msg::FaultEvent>(
       "/mc/fault", rclcpp::QoS(10),
       [this](mc_msgs::msg::FaultEvent::SharedPtr msg) {fault_msgs_.push_back(msg);});
+    sub_optical_flow_ = harness_->create_subscription<mc_msgs::msg::OpticalFlow>(
+      "/mc/sensors/optical_flow", rclcpp::QoS(10),
+      [this](mc_msgs::msg::OpticalFlow::SharedPtr msg) {optical_flow_msgs_.push_back(msg);});
+
+    flow_peer_fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+    flow_peer_addr_.sin_family = AF_INET;
+    flow_peer_addr_.sin_port = htons(15656);
+    ::inet_pton(AF_INET, "127.0.0.1", &flow_peer_addr_.sin_addr);
   }
 
   void TearDown() override
   {
     node_.reset();
     harness_.reset();
+    ::close(flow_peer_fd_);
     unsetenv("FCC_ETH_IP");
     unsetenv("FCC_MISSION_PORT");
+    unsetenv("FCC_FLOW_PORT");
+  }
+
+  // Sends one OPTICAL_FLOW_RAD frame from a mock H-Flow-relay peer directly
+  // to XrceDdsBackend's dedicated flow-relay socket (FCC_FLOW_PORT above) —
+  // OpticalFlowRelay's own wire-decode/velocity math is already covered by
+  // test_optical_flow_relay.cpp; this only checks that fcc_bridge_node
+  // republishes whatever the backend reports onto /mc/sensors/optical_flow.
+  void send_flow_frame()
+  {
+    mavlink_message_t msg;
+    mavlink_msg_optical_flow_rad_pack(
+      1, 1, &msg, 0, 0, /*integration_time_us=*/ 100000, /*integrated_x=*/ 0.0F,
+      /*integrated_y=*/ 0.0F, 0.0F, 0.0F, 0.0F, 0, /*quality=*/ 200, 0, /*distance=*/ 1.0F);
+    uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+    const uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    ::sendto(
+      flow_peer_fd_, buf, len, 0, reinterpret_cast<const sockaddr *>(&flow_peer_addr_),
+      sizeof(flow_peer_addr_));
   }
 
   std::shared_ptr<fcc_bridge::FccBridgeNode> node_;
@@ -110,8 +146,12 @@ protected:
   rclcpp::Publisher<px4_msgs::msg::VehicleGlobalPosition>::SharedPtr pub_global_pos_;
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
   rclcpp::Subscription<mc_msgs::msg::FaultEvent>::SharedPtr sub_fault_;
+  rclcpp::Subscription<mc_msgs::msg::OpticalFlow>::SharedPtr sub_optical_flow_;
   std::vector<mc_msgs::msg::VehicleState::SharedPtr> vehicle_state_msgs_;
   std::vector<mc_msgs::msg::FaultEvent::SharedPtr> fault_msgs_;
+  std::vector<mc_msgs::msg::OpticalFlow::SharedPtr> optical_flow_msgs_;
+  int flow_peer_fd_{-1};
+  sockaddr_in flow_peer_addr_{};
 };
 
 // TP-NI-001: msg_count / 5.0 >= 10.0 Hz. Framed as "does the stream reach
@@ -195,6 +235,22 @@ TEST_F(FccBridgeNodeTest, PublishesFccLinkLostFaultAfterLinkSilence)
   EXPECT_EQ(fault_msgs_.back()->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
 }
 
+// IGS-002: fcc_bridge_node republishes whatever XrceDdsBackend's flow relay
+// reports onto /mc/sensors/optical_flow, once a real frame has arrived.
+TEST_F(FccBridgeNodeTest, RepublishesOpticalFlowOnceFrameArrives)
+{
+  ASSERT_TRUE(optical_flow_msgs_.empty()) << "nothing should publish before any frame arrives";
+
+  ASSERT_TRUE(spin_until(
+      {node_, harness_}, [this] {
+        send_flow_frame();
+        return !optical_flow_msgs_.empty();
+      }, std::chrono::seconds(3)));
+
+  EXPECT_FLOAT_EQ(optical_flow_msgs_.back()->ground_distance, 1.0F);
+  EXPECT_EQ(optical_flow_msgs_.back()->quality, 200);
+}
+
 TEST_F(FccBridgeNodeTest, ConstructsWithExpectedName)
 {
   EXPECT_STREQ(node_->get_name(), "fcc_bridge_node");
@@ -250,7 +306,16 @@ public:
 
   fcc_bridge::VehicleState get_vehicle_state() const override {return fcc_bridge::VehicleState{};}
 
+  fcc_bridge::OpticalFlowSample get_optical_flow() const override
+  {
+    std::scoped_lock lock(mtx_);
+    return flow_sample_;
+  }
+
   bool is_link_alive(double /*timeout_s*/) const override {return true;}
+
+  // Set/read under mtx_ like the other mutable fields above.
+  fcc_bridge::OpticalFlowSample flow_sample_{};
 
   // Set before spinning starts, read only from update_mission_item() itself
   // — no synchronization needed for this field specifically.

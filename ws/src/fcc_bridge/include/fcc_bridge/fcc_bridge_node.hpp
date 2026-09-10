@@ -11,6 +11,7 @@
 #include "mc_msgs/msg/fcc_mission_item.hpp"
 #include "mc_msgs/msg/fcc_offboard_setpoint.hpp"
 #include "mc_msgs/msg/fault_event.hpp"
+#include "mc_msgs/msg/optical_flow.hpp"
 #include "mc_msgs/msg/vehicle_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -53,6 +54,7 @@ private:
   void on_offboard_setpoint(const mc_msgs::msg::FccOffboardSetpoint::SharedPtr msg);
   void on_send_command(const mc_msgs::msg::FccCommand::SharedPtr msg);
   mc_msgs::msg::VehicleState to_msg(const VehicleState & state, bool link_alive) const;
+  static mc_msgs::msg::OpticalFlow to_flow_msg(const OpticalFlowSample & sample, rclcpp::Time stamp);
   static MissionItem to_mission_item(const mc_msgs::msg::FccMissionItem & msg);
   void publish_mission_ack(uint8_t request_type, uint32_t upload_id, uint16_t seq, bool success);
 
@@ -62,6 +64,11 @@ private:
   rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
   rclcpp::Publisher<mc_msgs::msg::FaultEvent>::SharedPtr pub_fault_;
   rclcpp::Publisher<mc_msgs::msg::FccMissionAck>::SharedPtr pub_mission_ack_;
+  // HIF-008 relay (ICD §3.3a) — published only while the backend reports a
+  // valid sample (OpticalFlowSample::valid); nothing is published before
+  // the first frame arrives, rather than spamming an all-zero topic that
+  // would read as a real (stationary) velocity reading to gnss_sim_node.
+  rclcpp::Publisher<mc_msgs::msg::OpticalFlow>::SharedPtr pub_optical_flow_;
   rclcpp::CallbackGroup::SharedPtr timer_cb_group_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 

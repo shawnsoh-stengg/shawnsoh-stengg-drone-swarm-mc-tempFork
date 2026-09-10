@@ -114,7 +114,19 @@ The Micro XRCE-DDS Agent runs in the `fcc-bridge` container and bridges between 
 
 Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side dataman, reachable only through the standard MAVLink mission protocol. This sub-channel is therefore always active on 192.168.12.x regardless of whether `FCC_TRANSPORT` currently routes state/commands over serial or Ethernet (IR-007). It is distinct from the uXRCE-DDS Agent port (`:8888`) and the GCS↔FCC Channel A port (`:14550`, §11.2), and it is bidirectional MC↔FCC only — the MC does not use Channel A (§4).
 
-**`mavlink-router` is not involved in IFD-001** — the mission-protocol socket is owned directly by `XrceDdsBackend`/`MavlinkUdpBackend`, not routed.
+**Optical-flow relay sub-channel (always Ethernet, independent of `FCC_TRANSPORT`):**
+
+| Parameter | Value |
+|---|---|
+| Protocol | MAVLink 2 over UDP (`OPTICAL_FLOW_RAD`, `DISTANCE_SENSOR`) |
+| Address | `192.168.12.31:14556` (FCC) |
+| Carried over | The existing HIF-002 Ethernet link (same as the mission-protocol sub-channel above; no new hardware) |
+| Purpose | Relays HIF-008 (Holybro H-Flow) data to `get_optical_flow()` / `/mc/sensors/optical_flow` — see §3.3a |
+| Direction | FCC → MC only (receive-only from the MC's perspective) |
+
+H-Flow is a DroneCAN peripheral on the Pixhawk's CAN1 port (HID-MC-001 §10) — PX4's `uavcan_flow` driver ingests it into the FCC-internal `sensor_optical_flow`/`vehicle_optical_flow`/`vehicle_optical_flow_vel` uORB topics, none of which stock PX4 v1.14 bridges to the companion computer over uXRCE-DDS (confirmed against the real v1.14.4 tag's `src/modules/uxrce_dds_client/dds_topics.yaml` — `sensor_optical_flow` appears only as `/fmu/in/*`, and `distance_sensor` does not appear at all). This sub-channel is the chosen workaround: a second dedicated MAVLink instance on the FCC, configured (not compiled) to stream its existing `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink implementations to the MC — the same class of fix as the mission-protocol sub-channel above, and this repo's second (and, as of this writing, last) MC↔FCC MAVLink exception.
+
+**`mavlink-router` is not involved in IFD-001** — neither the mission-protocol nor the optical-flow-relay socket is routed; both are owned directly by `XrceDdsBackend`/`MavlinkUdpBackend`.
 
 ### 3.2 Topics Subscribed by MC (FCC → MC)
 
@@ -291,6 +303,41 @@ FCC → MC  : MISSION_ACK(MAV_MISSION_ACCEPTED)
 
 ---
 
+#### Optical Flow Relay (MAVLink 2/UDP `192.168.12.31:14556`) — §3.3a
+
+Received by: `fcc_bridge_node`'s `FccBackend` implementation (`XrceDdsBackend`'s dedicated flow-relay socket, or `MavlinkUdpBackend`'s shared SITL socket if PX4 SITL's own simulated flow sensor sends these), consumed by `gnss_sim_node` (`indoor_nav`, IGS-001) via `/mc/sensors/optical_flow`. FCC → MC only; the MC never sends on this channel.
+
+**`OPTICAL_FLOW_RAD` fields used:**
+
+| Field | Type | Unit | Description |
+|---|---|---|---|
+| `integration_time_us` | `uint32` | µs | Integration window this frame covers |
+| `integrated_x`, `integrated_y` | `float32` | rad | Flow angle integral, sensor-mount-rotated (PX4 applies `SENS_FLOW_ROT` before publishing `vehicle_optical_flow`, which this stream is sourced from) |
+| `integrated_xgyro`, `integrated_ygyro` | `float32` | rad | Gyro angle integral over the same window, same rotation applied |
+| `quality` | `uint8` | 0–255 | Sensor-reported confidence |
+| `distance` | `float32` | m | Paired rangefinder reading averaged over the same window; `-1` if unavailable |
+
+**`DISTANCE_SENSOR` fields used:** `current_distance` (`uint16`, cm) — a fallback height reference when `OPTICAL_FLOW_RAD.distance` is `-1`.
+
+**Velocity derivation** (`OpticalFlowRelay::handle_optical_flow_rad()`, `fcc_bridge/optical_flow_relay.cpp`) — replicated exactly from PX4 v1.14.4's own `VehicleOpticalFlow.cpp` (confirmed against the real v1.14.4 tag, the same formula that firmware uses internally to derive `vehicle_optical_flow_vel` for logging):
+
+```
+flow_dt        = integration_time_us * 1e-6
+flow_x, flow_y = -integrated_x, -integrated_y
+gyro_x, gyro_y = -integrated_xgyro, -integrated_ygyro
+comp_x, comp_y = flow_x - gyro_x, flow_y - gyro_y
+range          = distance (or the last DISTANCE_SENSOR reading if distance == -1)
+
+vx = -range * comp_y / flow_dt   # body FRD X (forward)
+vy =  range * comp_x / flow_dt   # body FRD Y (right)
+```
+
+Published as `mc_msgs/OpticalFlow` on `/mc/sensors/optical_flow` (`vx`, `vy`, `ground_distance = range`, `quality`) only once at least one frame has been decoded — nothing publishes before that, rather than asserting a spurious zero-velocity reading.
+
+**No PX4-imposed rate** — this is a passive relay of whatever rate the FCC's flow MAVLink instance is configured to stream at (a deployment/bring-up config choice, not fixed by this ICD); `gnss_sim_node`'s own staleness watchdog (`INDOOR-GNSS-SIMULATION-BACKLOG.md`, IGS-005) is what detects a stalled feed, the same way `formation_controller_node` self-supervises the mission protocol above.
+
+---
+
 #### `vehicle_command`
 
 Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_monitor_node`
@@ -353,6 +400,7 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | `/mc/fcc/mission_item_update` | MC → FCC | MAVLink mission protocol, partial update (§3.3 Mission Protocol) |
 | `/mc/fcc/send_command` | MC → FCC | uXRCE-DDS `vehicle_command` |
 | `/mc/fcc/mission_ack` | FCC → MC | `MISSION_ACK` result from the mission protocol handshake, one per upload/item-update |
+| `/mc/sensors/optical_flow` | FCC → MC | MAVLink optical-flow relay, `OPTICAL_FLOW_RAD` + `DISTANCE_SENSOR` (§3.3a) — HIF-008/IGS-002 |
 | `/mc/fcc/visual_odometry` | MC → FCC | uXRCE-DDS `vehicle_visual_odometry` |
 | `/mc/fcc/offboard_setpoint` | MC → FCC | uXRCE-DDS `offboard_control_mode` + `trajectory_setpoint`; published only while OFFBOARD is confirmed active (FR-027/028) |
 
@@ -1570,6 +1618,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `14560` | UDP | MAVLink — mavlink-router → gcs_mavlink_node | Internal (loopback) |
 | `8888` | UDP | uXRCE-DDS Agent | FCC → MC (ethernet fallback) |
 | `14555` | UDP | MAVLink mission protocol — MC ↔ FCC | Bidirectional, always on `192.168.12.x` (IR-007) |
+| `14556` | UDP | MAVLink optical-flow relay — FCC → MC | Receive-only, always on `192.168.12.x` (HIF-008, §3.3a) |
 | `14900` | UDP | Swarm heartbeat | Broadcast among peers |
 | `14901` | UDP | Swarm coordination | Unicast among peers |
 | `8554` | TCP/UDP | RTSP — Gimbal camera source stream | Gimbal camera → `perception_front_node`, on `192.168.10.200` (HIF-007, shared switch) |
@@ -1600,6 +1649,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `FCC_ETH_IP` | `192.168.12.31` | FCC IP (ethernet transport) |
 | `FCC_ETH_PORT` | `8888` | uXRCE-DDS UDP port |
 | `FCC_MISSION_PORT` | `14555` | MAVLink mission-protocol UDP port (always active on `192.168.12.x`, independent of `FCC_TRANSPORT`) |
+| `FCC_FLOW_PORT` | `14556` | MAVLink optical-flow relay UDP port, receive-only (always active on `192.168.12.x`, independent of `FCC_TRANSPORT`, HIF-008) |
 | `DRONE_ID` | `1` | This drone's ID (1-based) |
 | `GCS_IP` | `192.168.10.10` | GCS IP address |
 | `GCS_MAV_PORT_RECV` | `14551` | Confusingly named — this is actually the GCS's own receive port (MC→GCS), matching `GCS_CHANNEL_B`'s fixed remote address:port in §4.2; unused by any script/code today (`config/environment` sets it, nothing reads it) |

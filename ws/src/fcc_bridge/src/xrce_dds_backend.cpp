@@ -7,10 +7,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace fcc_bridge
 {
@@ -94,15 +96,27 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
   mission_client_ = std::make_unique<MissionProtocolClient>(
     mission_sock_fd_, target_addr, system_id, kCompIdOnboardComputer, node_->get_logger());
 
+  flow_sock_fd_ = open_flow_socket();
+  const int flow_port = std::stoi(env_or("FCC_FLOW_PORT", "14556"));
+  flow_recv_thread_ = std::thread([this] {flow_recv_loop();});
+
   const std::string transport = env_or("FCC_TRANSPORT", "serial");
   RCLCPP_INFO(
     node_->get_logger(),
-    "XrceDdsBackend: DDS transport=%s, mission protocol=%s:%d (always ethernet)",
-    transport.c_str(), fcc_ip.c_str(), mission_port);
+    "XrceDdsBackend: DDS transport=%s, mission protocol=%s:%d, flow relay=%s:%d (both always "
+    "ethernet)",
+    transport.c_str(), fcc_ip.c_str(), mission_port, fcc_ip.c_str(), flow_port);
 }
 
 XrceDdsBackend::~XrceDdsBackend()
 {
+  flow_stop_.store(true);
+  if (flow_recv_thread_.joinable()) {
+    flow_recv_thread_.join();
+  }
+  if (flow_sock_fd_ >= 0) {
+    ::close(flow_sock_fd_);
+  }
   // mission_client_ does not own the socket (header comment,
   // MissionProtocolClient ctor) — closing it here is our responsibility.
   if (mission_sock_fd_ >= 0) {
@@ -132,6 +146,56 @@ int XrceDdsBackend::open_mission_socket()
     throw std::runtime_error("XrceDdsBackend: failed to bind mission-protocol UDP socket");
   }
   return fd;
+}
+
+int XrceDdsBackend::open_flow_socket()
+{
+  const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd < 0) {
+    throw std::runtime_error("XrceDdsBackend: failed to create flow-relay UDP socket");
+  }
+  constexpr int kReuseAddr = 1;
+  ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &kReuseAddr, sizeof(kReuseAddr));
+
+  // Receive-only, so unlike open_mission_socket() this never needs to send —
+  // still binds locally (192.168.12.1-side, HIF-002) so the FCC's flow
+  // MAVLink instance has a fixed destination to stream to.
+  sockaddr_in local_addr{};
+  local_addr.sin_family = AF_INET;
+  local_addr.sin_port = htons(static_cast<uint16_t>(std::stoi(env_or("FCC_FLOW_PORT", "14556"))));
+  local_addr.sin_addr.s_addr = INADDR_ANY;
+  if (::bind(fd, reinterpret_cast<const sockaddr *>(&local_addr), sizeof(local_addr)) != 0) {
+    ::close(fd);
+    throw std::runtime_error("XrceDdsBackend: failed to bind flow-relay UDP socket");
+  }
+  return fd;
+}
+
+void XrceDdsBackend::flow_recv_loop()
+{
+  while (!flow_stop_.load()) {
+    uint8_t raw[512];
+    ssize_t n;
+    // Distinct parser channel (MAVLINK_COMM_2) from MissionProtocolClient's
+    // MAVLINK_COMM_0 and MavlinkUdpBackend's MAVLINK_COMM_1 (mavlink_udp_
+    // backend.cpp's recv_loop() doc comment) — each channel keeps its own
+    // parse state machine, and this socket is never shared with either of
+    // those, so no lock is needed here (contrast open_mission_socket()'s
+    // socket_use_mtx_ equivalent, which does not exist on this backend —
+    // that locking only appears on MavlinkUdpBackend, which multiplexes
+    // mission-protocol and state traffic over one shared socket).
+    while ((n = ::recvfrom(flow_sock_fd_, raw, sizeof(raw), MSG_DONTWAIT, nullptr, nullptr)) > 0) {
+      mavlink_message_t msg;
+      mavlink_status_t status;
+      for (ssize_t i = 0; i < n; ++i) {
+        if (mavlink_parse_char(MAVLINK_COMM_2, raw[i], &msg, &status)) {
+          flow_relay_.handle_frame(msg);
+          touch_link_alive();
+        }
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
 }
 
 void XrceDdsBackend::touch_link_alive()
@@ -300,6 +364,11 @@ VehicleState XrceDdsBackend::get_vehicle_state() const
 {
   std::scoped_lock lock(state_mtx_);
   return state_;
+}
+
+OpticalFlowSample XrceDdsBackend::get_optical_flow() const
+{
+  return flow_relay_.get_sample();
 }
 
 bool XrceDdsBackend::is_link_alive(double timeout_s) const
