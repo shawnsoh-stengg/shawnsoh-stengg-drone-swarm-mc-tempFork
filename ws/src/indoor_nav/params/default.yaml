@@ -18,3 +18,13 @@ gnss_sim_node:
     # fixed placeholder. See send_hil_gps()'s own doc comment.
     hil_gps_sats_at_anchor: 10.0
     hil_gps_min_sats: 4.0
+
+    # IGS-005: real-GPS lockout, staleness/drift watchdog, waypoint-
+    # deviation sanity bound. gnss_ok_hdop_threshold matches VIS-002/SDD
+    # §8.3's own gnss_ok() threshold exactly (fix_type >= 3 is hardcoded,
+    # not parameterized, since it's not a tunable -- it's the MAVLink GPS
+    # fix-quality convention).
+    gnss_ok_hdop_threshold: 2.0
+    input_staleness_timeout_s: 1.0
+    max_eph_before_fault_m: 5.0
+    max_waypoint_deviation_m: 50.0
