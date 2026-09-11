@@ -74,7 +74,9 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
   pub_visual_odometry_ =
     node_->create_publisher<px4_msgs::msg::VehicleOdometry>("/fmu/in/vehicle_visual_odometry", qos);
   pub_offboard_control_mode_ =
-    node_->create_publisher<px4_msgs::msg::OffboardControlMode>("/fmu/in/offboard_control_mode", qos);
+    node_->create_publisher<px4_msgs::msg::OffboardControlMode>(
+    "/fmu/in/offboard_control_mode",
+    qos);
   pub_trajectory_setpoint_ =
     node_->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", qos);
 
@@ -138,8 +140,11 @@ int XrceDdsBackend::open_mission_socket()
   // interface currently carries the DDS primary/secondary transport.
   sockaddr_in local_addr{};
   local_addr.sin_family = AF_INET;
-  local_addr.sin_port = htons(static_cast<uint16_t>(std::stoi(env_or("FCC_MISSION_PORT",
-      "14555"))));
+  local_addr.sin_port = htons(
+    static_cast<uint16_t>(std::stoi(
+      env_or(
+        "FCC_MISSION_PORT",
+        "14555"))));
   local_addr.sin_addr.s_addr = INADDR_ANY;
   if (::bind(fd, reinterpret_cast<const sockaddr *>(&local_addr), sizeof(local_addr)) != 0) {
     ::close(fd);
@@ -274,8 +279,9 @@ bool XrceDdsBackend::upload_mission(const std::vector<MissionItem> & items)
 {
   const bool accepted = mission_client_->upload_mission(items);
   if (!accepted) {
-    RCLCPP_ERROR(node_->get_logger(),
-        "upload_mission: FCC rejected or did not ACK the mission upload");
+    RCLCPP_ERROR(
+      node_->get_logger(),
+      "upload_mission: FCC rejected or did not ACK the mission upload");
   }
   return accepted;
 }
@@ -286,7 +292,7 @@ bool XrceDdsBackend::update_mission_item(uint16_t seq, const MissionItem & item)
   if (!accepted) {
     RCLCPP_WARN(
       node_->get_logger(),
-        "update_mission_item(seq=%u): no ACK within timeout — will retry next cycle",
+      "update_mission_item(seq=%u): no ACK within timeout — will retry next cycle",
       seq);
   }
   return accepted;

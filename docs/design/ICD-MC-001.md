@@ -124,9 +124,22 @@ Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side d
 | Purpose | Relays HIF-008 (Holybro H-Flow) data to `get_optical_flow()` / `/mc/sensors/optical_flow` — see §3.3a |
 | Direction | FCC → MC only (receive-only from the MC's perspective) |
 
-H-Flow is a DroneCAN peripheral on the Pixhawk's CAN1 port (HID-MC-001 §10) — PX4's `uavcan_flow` driver ingests it into the FCC-internal `sensor_optical_flow`/`vehicle_optical_flow`/`vehicle_optical_flow_vel` uORB topics, none of which stock PX4 v1.14 bridges to the companion computer over uXRCE-DDS (confirmed against the real v1.14.4 tag's `src/modules/uxrce_dds_client/dds_topics.yaml` — `sensor_optical_flow` appears only as `/fmu/in/*`, and `distance_sensor` does not appear at all). This sub-channel is the chosen workaround: a second dedicated MAVLink instance on the FCC, configured (not compiled) to stream its existing `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink implementations to the MC — the same class of fix as the mission-protocol sub-channel above, and this repo's second (and, as of this writing, last) MC↔FCC MAVLink exception.
+H-Flow is a DroneCAN peripheral on the Pixhawk's CAN1 port (HID-MC-001 §10) — PX4's `uavcan_flow` driver ingests it into the FCC-internal `sensor_optical_flow`/`vehicle_optical_flow`/`vehicle_optical_flow_vel` uORB topics, none of which stock PX4 v1.17 bridges to the companion computer over uXRCE-DDS (confirmed against the real v1.17.0 tag's `src/modules/uxrce_dds_client/dds_topics.yaml` — `sensor_optical_flow` appears only as `/fmu/in/*`, and `distance_sensor` does not appear at all; both findings re-confirmed 2026-09-11 against v1.17.0, originally checked against v1.14.4). This sub-channel is the chosen workaround: a second dedicated MAVLink instance on the FCC, configured (not compiled) to stream its existing `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink implementations to the MC — the same class of fix as the mission-protocol sub-channel above.
 
-**`mavlink-router` is not involved in IFD-001** — neither the mission-protocol nor the optical-flow-relay socket is routed; both are owned directly by `XrceDdsBackend`/`MavlinkUdpBackend`.
+**HIL_GPS sub-channel (always Ethernet, independent of `FCC_TRANSPORT`):**
+
+| Parameter | Value |
+|---|---|
+| Protocol | MAVLink 2 over UDP (`HIL_GPS`) |
+| Address | `192.168.12.31:14557` (FCC) |
+| Carried over | The existing HIF-002 Ethernet link (same as the other two sub-channels above; no new hardware) |
+| Purpose | Streams `gnss_sim_node`'s synthetic WGS-84 fix to the FCC so PX4 accepts it as its GPS receiver, indoors — see §3.3b |
+| Direction | MC → FCC only (send-only from the MC's perspective) |
+| Owner | `gnss_sim_node` (`indoor_nav` package, IGS-004) — **not** `fcc_bridge_node`/`FccBackend`; see §3.3b |
+
+This is `INDOOR-GNSS-SIMULATION-BACKLOG.md`'s IGS-004. Its own proposal text (and this ICD's prior "Interface deltas" entry) assumed the standard MAVLink `GPS_INPUT` message — checked against the real PX4 firmware while implementing IGS-004 (originally v1.14.4, re-confirmed against v1.17.0 once this project's target firmware moved), and wrong: `GPS_INPUT` has no handler anywhere in either tag's `src/modules/mavlink/mavlink_receiver.cpp`. The message PX4 actually accepts as a fake GPS receiver over MAVLink is `HIL_GPS` — see §3.3b for the full firmware citation and the resulting PX4-side parameter findings (Open Item 2, closed by IGS-004).
+
+`mavlink-router` is not involved in IFD-001 — none of the mission-protocol, optical-flow-relay, or HIL_GPS sockets are routed; the first two are owned directly by `XrceDdsBackend`/`MavlinkUdpBackend`, the third by `gnss_sim_node` itself.
 
 ### 3.2 Topics Subscribed by MC (FCC → MC)
 
@@ -319,7 +332,7 @@ Received by: `fcc_bridge_node`'s `FccBackend` implementation (`XrceDdsBackend`'s
 
 **`DISTANCE_SENSOR` fields used:** `current_distance` (`uint16`, cm) — a fallback height reference when `OPTICAL_FLOW_RAD.distance` is `-1`.
 
-**Velocity derivation** (`OpticalFlowRelay::handle_optical_flow_rad()`, `fcc_bridge/optical_flow_relay.cpp`) — replicated exactly from PX4 v1.14.4's own `VehicleOpticalFlow.cpp` (confirmed against the real v1.14.4 tag, the same formula that firmware uses internally to derive `vehicle_optical_flow_vel` for logging):
+**Velocity derivation** (`OpticalFlowRelay::handle_optical_flow_rad()`, `fcc_bridge/optical_flow_relay.cpp`) — replicated exactly from PX4's own `VehicleOpticalFlow.cpp` (confirmed against the real v1.14.4 tag originally, re-confirmed byte-for-byte against v1.17.0, the same formula that firmware uses internally to derive `vehicle_optical_flow_vel` for logging):
 
 ```
 flow_dt        = integration_time_us * 1e-6
@@ -335,6 +348,48 @@ vy =  range * comp_x / flow_dt   # body FRD Y (right)
 Published as `mc_msgs/OpticalFlow` on `/mc/sensors/optical_flow` (`vx`, `vy`, `ground_distance = range`, `quality`) only once at least one frame has been decoded — nothing publishes before that, rather than asserting a spurious zero-velocity reading.
 
 **No PX4-imposed rate** — this is a passive relay of whatever rate the FCC's flow MAVLink instance is configured to stream at (a deployment/bring-up config choice, not fixed by this ICD); `gnss_sim_node`'s own staleness watchdog (`INDOOR-GNSS-SIMULATION-BACKLOG.md`, IGS-005) is what detects a stalled feed, the same way `formation_controller_node` self-supervises the mission protocol above.
+
+---
+
+#### HIL_GPS Sender (MAVLink 2/UDP `192.168.12.31:14557`) — §3.3b
+
+Sent by: `gnss_sim_node` (`indoor_nav` package, IGS-004) — **not** `fcc_bridge_node`/`FccBackend`. This is the only MC↔FCC MAVLink exception not owned by `fcc_bridge`: `gnss_sim_node` is the sole producer and this is a one-way stream, so it opens its own send-only UDP socket directly rather than routing through the `FccBackend` abstraction (§3.4). MC → FCC only; the FCC never replies on this channel.
+
+**Firmware correction (Open Item 2, `INDOOR-GNSS-SIMULATION-BACKLOG.md`, closed by IGS-004).** This channel's own design proposal — and this ICD's prior "Interface deltas" draft — assumed the standard MAVLink `GPS_INPUT` message. Confirmed against the real PX4 firmware while implementing IGS-004 (v1.14.4 originally, re-confirmed against v1.17.0 — see this project's firmware-version note): `GPS_INPUT` (`MAVLINK_MSG_ID_GPS_INPUT`) has no handler anywhere in `src/modules/mavlink/mavlink_receiver.cpp`, at either tag — grepping the full `src/` tree for it turns up nothing in either case. The message PX4 actually accepts as a fake GPS receiver over MAVLink is **`HIL_GPS`**, decoded by `handle_message_hil_gps()` and published straight to a `uORB::PublicationMulti<sensor_gps_s>` instance — the same topic a real GPS driver publishes to, bypassing EKF2's own driver-side ingestion path entirely. (At v1.17.0, the internal `sensor_gps_s` fields this handler populates were renamed to pre-converted physical units — e.g. `lat`/`lon`/`alt` → `latitude_deg`/`longitude_deg`/`altitude_msl_m` — a PX4-internal uORB change this project's own code never touches, since `send_hil_gps()` only ever constructs the MAVLink wire message, not that struct.)
+
+`handle_message_hil_gps()` only runs when (confirmed against `mavlink_receiver.cpp`'s message-dispatch switch):
+
+```
+_mavlink->get_hil_enabled()                                       // full HIL mode -- NOT used here
+  || (_mavlink->get_use_hil_gps() && msg->sysid == mavlink_system.sysid)
+```
+
+So this channel relies on the second arm, not full HIL mode (which would disable far more than GPS). Two PX4-side preconditions follow directly from this, both operational (not code) requirements:
+
+| Precondition | PX4 parameter | Default | Required value |
+|---|---|---|---|
+| Accept `HIL_GPS` outside full HIL mode | `MAV_USEHILGPS` | `0` | `1` |
+| Message `sysid` must equal the FCC's own system ID | `MAV_SYS_ID` | `1` | Must match `mav_system_id_` below (this project's existing `DRONE_ID` convention, same value `MissionProtocolClient` already uses — not merely internally consistent, but a real firmware-enforced gate) |
+
+**PX4-side parameter verification (Open Item 2's other half — `GPS_1_CONFIG`).** `HIL_GPS`'s target `sensor_gps` publication is a *separate* multi-instance (`PublicationMulti`, up to `GPS_MAX_RECEIVERS = 2`), independent of whichever instance a physical `GPS_1_CONFIG`-configured receiver publishes to. `SENS_GPS_MASK` (default `7`, confirmed against `src/modules/sensors/vehicle_gps_position/params.c`) subscribes to and blends *all* live `sensor_gps` instances by default — PX4's own `GpsBlending` selects/weights by reported accuracy, so a real receiver reporting no/poor fix (as it would indoors) is naturally out-weighed by `gnss_sim_node`'s injected fix without any `GPS_1_CONFIG` change. **Finding: `GPS_1_CONFIG` does not need to change for `HIL_GPS` injection to work.** Recommendation, not a requirement: set `GPS_1_CONFIG=NONE` for indoor bench/cage sessions specifically, as defense-in-depth determinism (one live `sensor_gps` instance, no blending ambiguity to reason about) — `IGS-005`'s real-GPS lockout interlock (MC-side) remains the actual enforced safety mechanism either way.
+
+**Rate (the other half of Open Item 2).** Sent at `hil_gps_rate_hz` (default 5 Hz), confirmed against PX4 v1.17.0 EKF2's own GNSS timing bounds (`src/modules/ekf2/EKF/common.h`, unchanged path/value from v1.14.4): `GNSS_MAX_INTERVAL = 500 ms` (≥ 2 Hz avoids the "intermittent" classification in `gps_control.cpp` — at v1.17.0 this file moved to `src/modules/ekf2/EKF/aid_sources/gnss/gps_control.cpp`, same logic) and twice that (1 s) before EKF2 calls the feed stale outright. 5 Hz was this proposal's own typical-GPS-rate guess — now verified compatible against the actual firmware bound, not assumed.
+
+**`HIL_GPS` fields sent:**
+
+| Field | Type | Unit | Source |
+|---|---|---|---|
+| `time_usec` | `uint64` | µs | MC monotonic clock at send time |
+| `fix_type` | `uint8` | — | Always `3` (3D fix) — only ever sent while `wgs84_fix().valid` (IGS-003) |
+| `lat`, `lon` | `int32` | 1e7 deg | IGS-003's `wgs84_fix()` |
+| `alt` | `int32` | mm MSL | IGS-003's `wgs84_fix().alt_msl` |
+| `eph`, `epv` | `uint16` | cm | IGS-003's growing uncertainty model (`IndoorGnssSimStatus.eph`/`.epv`) — never a fixed value |
+| `vel`, `vn`, `ve`, `vd` | `uint16`/`int16` | cm/s | `gnss_sim_node`'s local NED velocity estimate (IGS-001) |
+| `cog` | `uint16` | 1e2 deg | Derived from `vn`/`ve` |
+| `satellites_visible` | `uint8` | — | Degrades linearly from 10 to 4 as `eph` grows from its at-anchor floor toward PX4's own `EKF2_REQ_EPH` default (3.0 m, confirmed against v1.17.0's `src/modules/ekf2/params_gnss.yaml` — at v1.14.4 the same default lived in `src/modules/ekf2/ekf2_params.c`, before PX4 migrated EKF2 params to YAML) — this ticket's own AC: never a fixed "great accuracy" placeholder. `EKF2_REQ_NSATS` defaults to 6 (same file, unchanged value), so this also ties satellite-count and accuracy-gate rejection to the same honest timescale |
+| `id`, `yaw` | `uint8`, `uint16` | — | `0` (single GPS instance; heading unknown) |
+
+**No acknowledgement, no retry** — this is a best-effort periodic stream, same as the optical-flow relay above; `gnss_sim_node` never blocks waiting on a reply because none exists. `IGS-005`'s staleness/drift watchdog is what detects a stalled or diverging estimate on the MC side.
 
 ---
 
@@ -368,12 +423,17 @@ Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_m
 | Mode | param1 | param2 (custom_main) | param3 (custom_sub) |
 |---|---|---|---|
 | HOLD | 1 | 4 | 3 |
-| MISSION | 1 | 4 | 0 |
-| RTL | 1 | 5 | 0 |
-| TAKEOFF | 1 | 2 | 6 |
-| OFFBOARD ⚠ | 1 | 6 | 0 |
+| MISSION | 1 | 4 | 4 |
+| RTL | 1 | 4 | 5 |
+| TAKEOFF | 1 | 4 | 2 |
+| OFFBOARD | 1 | 6 | 0 |
 
-> ⚠ **Pending firmware verification.** `custom_main = 6` is `PX4_CUSTOM_MAIN_MODE_OFFBOARD` per PX4's `px4_custom_mode.h`; verify against the actual v1.14 firmware source before relying on this row operationally (the existing HOLD/MISSION/RTL/TAKEOFF rows are unverified against firmware too — TAKEOFF's `custom_main=2` looks inconsistent with the AUTO-submode pattern the other three use, a pre-existing discrepancy noted here, not introduced by this row).
+> **Verified against the real PX4 v1.17.0 `px4_custom_mode.h`** (`PX4_CUSTOM_MAIN_MODE_AUTO = 4`, `PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6`; `PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF = 2`, `_LOITER = 3`, `_MISSION = 4`, `_RTL = 5`) — these enum values are stable across PX4 releases (confirmed identical at v1.14.4 too), so this correction isn't a v1.17-specific change. This table previously had three wrong rows, carried unverified from this doc's original proposal and never checked against firmware until now:
+> - **MISSION** was `(1, 4, 0)` — `custom_sub` should be `4` (`AUTO_MISSION`), not `0`.
+> - **RTL** was `(1, 5, 0)` — `custom_main = 5` is `PX4_CUSTOM_MAIN_MODE_ACRO`, not AUTO; the correct pair is `(4, 5)`.
+> - **TAKEOFF** was `(1, 2, 6)` — `custom_main = 2` is `PX4_CUSTOM_MAIN_MODE_ALTCTL` and `custom_sub = 6` is `AUTO_LAND`, neither correct; the right pair is `(4, 2)`. This is the exact discrepancy this doc's own prior footnote had already flagged as "looks inconsistent" without resolving.
+>
+> HOLD and OFFBOARD were already correct. No code in this repo currently constructs a `MAV_CMD_DO_SET_MODE` command using these values (`mission_exec/command_arbiter.cpp` only classifies GCS-originated commands by tier — it never sends one), so this was a pure documentation-table bug with no live flight-code consequence, caught before anything consumed it.
 >
 > The MC commands `OFFBOARD` only for a phase/leg the active mission plan explicitly flags via `offboard_phase_mask` (§9.2, `mc_msgs/MissionUpload`); `mission_manager_node` is the sole node authorised to issue the mode command (FR-012, FR-026). Formation keeping (FR-020/023) stays in `MISSION` mode by default and tracks the leader via the mission protocol's `FORMATION_SLOT` item (§3.3 above) — `OFFBOARD` is only used where a leg opts in, via `formation_controller_node` streaming `mc_msgs/FccOffboardSetpoint` (§9.1/§9.2) instead. See `OFFBOARD-MODE-SWITCHING-BACKLOG.md` for the full entry/exit sequencing and fallback design (FR-026–029, SFR-009).
 
@@ -406,6 +466,8 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 
 `FccBackend::stream_offboard_setpoint(const OffboardSetpoint &)` is the corresponding abstract method (mirrors `update_mission_item()`'s contract: the backend does not buffer or extrapolate between calls — the caller, `formation_controller_node`, is responsible for sustaining ≥ 2 Hz while OFFBOARD is the commanded mode). It does not itself send `DO_SET_MODE OFFBOARD` — mode commands stay in `send_command()`, called exclusively by `mission_manager_node` (FR-012, FR-026).
 
+**Not in this table:** IGS-004's HIL_GPS sender (§3.3b). `gnss_sim_node` sends it directly over its own socket — it is not exposed as a `FccBackend` ROS 2 topic, unlike every row above.
+
 ---
 
 ### 3.5 Timing and Error Handling
@@ -416,6 +478,7 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | Formation `mission_item_update` gap | > 2 s (leader state stale, FR-024) | `formation_controller_node` commands HOLD itself — PX4 does **not** exit `MISSION` mode on a stale item, so the MC must self-supervise (SDD §5.3) | FR-024 |
 | Mission protocol handshake (no `MISSION_REQUEST_INT`/`MISSION_ACK`) | 500 ms | Abort the transaction; retry on the next control-loop tick rather than blocking | IR-007 |
 | vehicle_command → actuation | — | Must complete ≤ 100 ms | IR-006 |
+| `HIL_GPS` send cadence | — | `gnss_sim_node` streams at 5 Hz (well inside PX4 EKF2's own `GNSS_MAX_INTERVAL` = 500 ms bound, §3.3b) whenever `wgs84_fix().valid`; sends nothing otherwise — no PX4-facing timeout of its own, `IGS-005`'s watchdog owns MC-side staleness detection | IGS-004 |
 
 ---
 

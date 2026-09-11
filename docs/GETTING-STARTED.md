@@ -11,7 +11,7 @@ first, read `docs/ARCHITECTURE.md`.
 - Jetson Orin NX 16GB already flashed with **JetPack 6.2.2** via NVIDIA SDK
   Manager (HID-MC-001 §8.1), booted to a login prompt. Steps 0+ below run
   directly on that Jetson.
-- A Pixhawk 6X (PX4 v1.14) wired per `HID-MC-001.md`, reachable over
+- A Pixhawk 6X (PX4 v1.17) wired per `HID-MC-001.md`, reachable over
   `ttyTHS1` (921600 baud) or the `192.168.12.x` ethernet fallback.
 - `sudo` access on the Jetson (the numbered scripts install udev rules,
   netplan config, sysctl floors, and systemd units).

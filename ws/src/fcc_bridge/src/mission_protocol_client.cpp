@@ -50,9 +50,9 @@ void MissionProtocolClient::send_mission_item_int(const MissionItem & item)
   // (mission_manager_node, SDD §7.2). autocontinue=1: proceed to next item.
   mavlink_msg_mission_item_int_pack(
     system_id_, component_id_, &msg, kTargetSystem, kTargetComponent, item.seq, item.frame,
-    item.command, /*current=*/0, /*autocontinue=*/1, /*param1 hold_time=*/0.0F,
-    /*param2 acceptance_radius=*/item.acceptance_radius, /*param3 pass_radius=*/0.0F,
-    /*param4 yaw=*/NAN, item.lat, item.lon, item.alt, MAV_MISSION_TYPE_MISSION);
+    item.command, /*current=*/ 0, /*autocontinue=*/ 1, /*param1 hold_time=*/ 0.0F,
+    /*param2 acceptance_radius=*/ item.acceptance_radius, /*param3 pass_radius=*/ 0.0F,
+    /*param4 yaw=*/ NAN, item.lat, item.lon, item.alt, MAV_MISSION_TYPE_MISSION);
 
   uint8_t buf[MAVLINK_MAX_PACKET_LEN];
   const uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
@@ -106,8 +106,9 @@ bool MissionProtocolClient::upload_mission(const std::vector<MissionItem> & item
 
   while (next_expected < items.size()) {
     if (std::chrono::steady_clock::now() > deadline) {
-      RCLCPP_WARN(logger_, "mission upload timed out waiting for MISSION_REQUEST_INT(seq=%u)",
-          next_expected);
+      RCLCPP_WARN(
+        logger_, "mission upload timed out waiting for MISSION_REQUEST_INT(seq=%u)",
+        next_expected);
       return false;
     }
 
@@ -120,8 +121,9 @@ bool MissionProtocolClient::upload_mission(const std::vector<MissionItem> & item
     mavlink_msg_mission_request_int_decode(&msg, &req);
 
     if (req.seq != next_expected) {
-      RCLCPP_WARN(logger_, "FCC requested out-of-order seq %u, expected %u", req.seq,
-          next_expected);
+      RCLCPP_WARN(
+        logger_, "FCC requested out-of-order seq %u, expected %u", req.seq,
+        next_expected);
       continue;
     }
     send_mission_item_int(items[req.seq]);
