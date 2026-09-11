@@ -8,9 +8,12 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 
+#include <mc_msgs/msg/fault_event.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
+#include <mc_msgs/msg/mission_upload.hpp>
 #include <mc_msgs/msg/optical_flow.hpp>
 #include <mc_msgs/msg/status_text.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
@@ -87,6 +90,39 @@ constexpr uint32_t kMcCmdIndoorGnssSimAnchor = 50005;
 // FCC's own `MAV_SYS_ID` -- full-HIL mode is deliberately not used here
 // (see send_hil_gps()'s own .cpp doc comment). Every "GPS_INPUT" in this
 // ticket's own AC/deliverables text refers to this HIL_GPS mechanism.
+//
+// IGS-005 extends this same class a final time with self-supervision, so
+// this module fails safely instead of compounding a bad estimate into a
+// worse one (Safety Considerations, INDOOR-GNSS-SIMULATION-BACKLOG.md):
+//   - Real-GPS lockout (real_gps_ok_): continuously re-evaluated from every
+//     /mc/fcc/vehicle_state sample using the same gnss_ok() threshold
+//     VIS-002/SDD §8.3 defines (fix_type >= 3, hdop < 2.0) -- auto-clears
+//     the moment a real fix goes away again, since this isn't a fault of
+//     this module, just "doesn't apply right now."
+//   - Staleness/drift/waypoint-deviation watchdog (gps_sim_lost_): checked
+//     every hil_gps_timer_ tick (check_self_supervision()) so a total input
+//     stall is still caught even though nothing message-driven would fire
+//     otherwise. Unlike real_gps_ok_, this LATCHES -- once tripped, only an
+//     explicit reanchor() clears it (Safety Considerations #1/#2: a
+//     compromised estimate must never silently resume streaming on its
+//     own). Publishes /mc/fault (INDOOR_GNSS_SIM_LOST) -- health_monitor_
+//     node does not own this fault (this module publishes it directly,
+//     same non-duplication precedent OFFBOARD_STREAM_STALE already sets,
+//     OFFBOARD-MODE-SWITCHING-BACKLOG.md) -- mission_manager_node's
+//     existing generic on_fault()/guard_any_fault() (severity-keyed, not a
+//     fault_id allowlist) is what actually reacts.
+//   - Waypoint-deviation (compute_waypoint_deviation()) is read-only by
+//     construction -- a const method that only ever reads x_/y_/z_ and
+//     latest_mission_upload_, never writes them (Safety Considerations #2:
+//     a sanity-bound fault trigger, never a position correction). Compares
+//     against the nearest /mc/gcs/mission_upload ingress_waypoints entry,
+//     not real leg-progress tracking (no such signal reaches this node) --
+//     a coarse "is the estimate anywhere near the planned route" bound,
+//     not track-following; documented simplification, not silently
+//     assumed. Also assumes the operator's false-origin anchor is placed
+//     at/near the FCC's own local-position origin, since ingress_waypoints
+//     are local Cartesian, not WGS-84 -- unverified elsewhere in this
+//     repo, flagged here rather than silently relied upon.
 class GnssSimNode : public rclcpp::Node
 {
 public:
@@ -115,6 +151,9 @@ public:
   void on_vehicle_state(const mc_msgs::msg::VehicleState & msg);
   void on_optical_flow(const mc_msgs::msg::OpticalFlow & msg);
   void on_gcs_command(const mc_msgs::msg::GcsCommand & msg);
+  // IGS-005: caches the latest uploaded mission for
+  // compute_waypoint_deviation() -- see this class's own doc comment.
+  void on_mission_upload(const mc_msgs::msg::MissionUpload & msg);
 
   // Test seam: the last message this node published on
   // /mc/indoor/local_estimate, without needing a subscriber of its own.
@@ -137,10 +176,41 @@ public:
   // .cpp for the full field-by-field derivation and firmware citations.
   void send_hil_gps();
 
+  // IGS-005 test seam: runs the staleness/drift/waypoint-deviation watchdog
+  // once, as of `stamp`, bypassing hil_gps_timer_ so a test can assert
+  // deterministically. Production code reaches this from the same timer
+  // callback that drives send_hil_gps(), immediately before it -- see this
+  // class's own doc comment for the full design.
+  void check_self_supervision(const rclcpp::Time & stamp);
+
+  // Test seam: true once check_self_supervision() has latched the
+  // staleness/drift/waypoint-deviation fault (cleared only by reanchor()).
+  bool gps_sim_lost() const {return gps_sim_lost_;}
+
+  // Test seam: true when the last /mc/fcc/vehicle_state sample reported a
+  // usable real GPS fix (gnss_ok() threshold) -- the real-GPS lockout gate.
+  bool real_gps_ok() const {return real_gps_ok_;}
+
+  // Test seam: the last FaultEvent this node published on /mc/fault, if
+  // any -- avoids requiring a test to spin a real subscription, same
+  // rationale as local_estimate()/gnss_sim_status() above.
+  std::optional<mc_msgs::msg::FaultEvent> latest_fault() const {return latest_fault_;}
+
 private:
   void publish_estimate(const rclcpp::Time & stamp);
   void publish_gnss_sim_status(const rclcpp::Time & stamp);
   int open_hil_gps_socket();
+
+  // IGS-005: read-only by construction -- only ever reads x_/y_/z_ and
+  // latest_mission_upload_, never writes them (Safety Considerations #2).
+  // Returns 0.0 if no mission (or no ingress_waypoints) has been uploaded
+  // yet -- nothing to compare against, not a fabricated "zero deviation".
+  float compute_waypoint_deviation() const;
+
+  // IGS-005: publishes INDOOR_GNSS_SIM_LOST on /mc/fault (edge-triggered --
+  // check_self_supervision() only calls this once per latch, matching
+  // HEALTH-003's own "does not repeatedly re-fire" precedent).
+  void publish_gps_sim_lost_fault(const rclcpp::Time & stamp, const std::string & reason);
 
   // Re-anchors the false origin at (lat_deg, lon_deg, alt_msl) as of
   // `stamp`: resets time_since_anchor_s (and therefore eph/epv) to their
@@ -149,15 +219,25 @@ private:
   // origin", never a stale earlier one plus whatever drift accumulated on
   // top of it. Logged via /mc/status_text either way (SFR-006's command-
   // logging precedent) -- rejects (logged as an error, no state change) if
-  // lat/lon are outside valid WGS-84 ranges.
+  // lat/lon are outside valid WGS-84 ranges, or (IGS-005) if a real GPS fix
+  // is currently present (indoor-only interlock, Safety Considerations #3).
+  // On success, also clears gps_sim_lost_ -- re-anchoring is this module's
+  // only recovery path from a latched staleness/drift/deviation fault.
   void reanchor(double lat_deg, double lon_deg, float alt_msl, const rclcpp::Time & stamp);
+
+  // IGS-005: updates real_gps_ok_ from a fresh /mc/fcc/vehicle_state
+  // sample, logging (edge-triggered, not every sample) via /mc/status_text
+  // when it changes -- "logged, not silent" (this ticket's own AC).
+  void update_real_gps_lockout(const mc_msgs::msg::VehicleState & msg, const rclcpp::Time & stamp);
 
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
   rclcpp::Subscription<mc_msgs::msg::OpticalFlow>::SharedPtr sub_optical_flow_;
   rclcpp::Subscription<mc_msgs::msg::GcsCommand>::SharedPtr sub_gcs_command_;
+  rclcpp::Subscription<mc_msgs::msg::MissionUpload>::SharedPtr sub_mission_upload_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_local_estimate_;
   rclcpp::Publisher<mc_msgs::msg::IndoorGnssSimStatus>::SharedPtr pub_gnss_sim_status_;
   rclcpp::Publisher<mc_msgs::msg::StatusText>::SharedPtr pub_status_text_;
+  rclcpp::Publisher<mc_msgs::msg::FaultEvent>::SharedPtr pub_fault_;
 
   // A flow sample that arrives more than this many seconds after the
   // previous one is dropped from integration (still updates
@@ -247,6 +327,26 @@ private:
   // YAML) -- never a fixed "great fix" count.
   double hil_gps_sats_at_anchor_{10.0};
   double hil_gps_min_sats_{4.0};
+
+  // IGS-005: real-GPS lockout (Safety Considerations #3). Matches VIS-002/
+  // SDD §8.3's own gnss_ok() threshold exactly, not an independently-tuned
+  // number. Starts true (fail-safe default: assume a real fix may be
+  // present/unknown until the first /mc/fcc/vehicle_state sample proves
+  // otherwise) -- same "no safe default, prove it first" philosophy as
+  // WgsFix::valid starting false.
+  double gnss_ok_hdop_threshold_{2.0};
+  bool real_gps_ok_{true};
+
+  // IGS-005: staleness/drift/waypoint-deviation watchdog. gps_sim_lost_
+  // latches (see check_self_supervision()'s own .cpp doc comment for why);
+  // cleared only by a successful reanchor().
+  double input_staleness_timeout_s_{1.0};
+  double max_eph_before_fault_m_{5.0};
+  double max_waypoint_deviation_m_{50.0};
+  bool gps_sim_lost_{false};
+
+  mc_msgs::msg::MissionUpload::SharedPtr latest_mission_upload_;
+  std::optional<mc_msgs::msg::FaultEvent> latest_fault_;
 };
 
 }  // namespace indoor_nav
