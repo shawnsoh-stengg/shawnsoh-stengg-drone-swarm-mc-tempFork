@@ -9,7 +9,7 @@
 | Parent SRS | MC-SRS-001 v0.1-DRAFT |
 | Parent ICD | MC-ICD-001 v0.1-DRAFT |
 | Platform | Jetson Orin NX 16GB on Holybro Pixhawk Jetson Baseboard |
-| FCC | Pixhawk 6X · PX4 v1.14 · NuttX |
+| FCC | Pixhawk 6X · PX4 v1.17 · NuttX |
 
 ---
 
@@ -71,7 +71,7 @@ The MC assembly is a single PCB stack consisting of:
 
 1. **Holybro Pixhawk Jetson Baseboard** — the carrier PCB providing power regulation, connector routing, and inter-module connections.
 2. **Jetson Orin NX 16GB module** — mounted on the baseboard via the 260-pin SO-DIMM edge connector (Jetson Orin NX System-on-Module). Runs Ubuntu 22.04 aarch64, JetPack 6.2.2.
-3. **Pixhawk 6X** — mounted on the baseboard via the standard Pixhawk autoPilot Module (PAM) connector. Runs PX4 v1.14 on NuttX.
+3. **Pixhawk 6X** — mounted on the baseboard via the standard Pixhawk autoPilot Module (PAM) connector. Runs PX4 v1.17 on NuttX.
 
 The baseboard bridges power, serial, and Ethernet signals between the two compute modules and exposes external connectors for peripherals.
 
@@ -716,11 +716,11 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
 
 **Primary function:** Downward-facing optical-flow velocity and time-of-flight rangefinder input, intended for `gnss_sim_node` (`indoor_nav` package, IGS-001) — the dead-reckoning core that lets the drone hold MISSION mode indoors, ahead of `visual_localisation_node`'s (Track B) camera-based VO landing.
 
-> **Decision (2026-09-09): Option 1 — new dedicated MAVLink channel.** H-Flow is read by the **Pixhawk FCC** over DroneCAN, not by the Jetson MC directly. PX4's `uavcan_flow` driver ingests it into the `sensor_optical_flow` uORB topic, and the always-running `vehicle_optical_flow` module further derives `vehicle_optical_flow` (rotated by `SENS_FLOW_ROT`) and `vehicle_optical_flow_vel` (gyro-compensated, distance-scaled body-frame velocity, m/s — logging-only, not bridged anywhere) from it — confirmed against the real PX4 **v1.14.4 tag** source (`src/drivers/uavcan/sensors/flow.cpp`, `src/modules/sensors/vehicle_optical_flow/VehicleOpticalFlow.cpp`). **Neither topic is bridged out to the companion computer by uXRCE-DDS in stock PX4** — confirmed against the same tag's `src/modules/uxrce_dds_client/dds_topics.yaml`: `sensor_optical_flow` is listed only as `/fmu/in/*` (companion-computer-to-FCC); `distance_sensor` does not appear in the file at all (correcting this note's own first-pass claim that it, too, was `/fmu/in/*` — it simply isn't bridged either direction).
+> **Decision (2026-09-09): Option 1 — new dedicated MAVLink channel.** H-Flow is read by the **Pixhawk FCC** over DroneCAN, not by the Jetson MC directly. PX4's `uavcan_flow` driver ingests it into the `sensor_optical_flow` uORB topic, and the always-running `vehicle_optical_flow` module further derives `vehicle_optical_flow` (rotated by `SENS_FLOW_ROT`) and `vehicle_optical_flow_vel` (gyro-compensated, distance-scaled body-frame velocity, m/s — logging-only, not bridged anywhere) from it — confirmed against the real PX4 **v1.14.4 tag** source originally (`src/drivers/uavcan/sensors/flow.cpp`, `src/modules/sensors/vehicle_optical_flow/VehicleOpticalFlow.cpp`), re-confirmed unchanged (same paths, same behavior) against **v1.17.0** once this project's target firmware moved (2026-09-11). **Neither topic is bridged out to the companion computer by uXRCE-DDS in stock PX4** — confirmed against the same tag's `src/modules/uxrce_dds_client/dds_topics.yaml`: `sensor_optical_flow` is listed only as `/fmu/in/*` (companion-computer-to-FCC); `distance_sensor` does not appear in the file at all (correcting this note's own first-pass claim that it, too, was `/fmu/in/*` — it simply isn't bridged either direction).
 >
 > Getting this data onto the MC needed one of:
-> 1. **A new dedicated MAVLink channel** (config-only, no firmware rebuild) — **chosen**. PX4 already has `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink stream implementations (`src/modules/mavlink/streams/OPTICAL_FLOW_RAD.hpp`, `.../DISTANCE_SENSOR.hpp`, confirmed unchanged at the v1.14.4 tag) that can be enabled on a new MAVLink instance/port, mirroring the existing mission-protocol channel precedent (`ICD-MC-001.md` §3.1, IR-007). This is now this repo's **second** MC↔FCC MAVLink exception — `ICD-MC-001.md` §3.3a, `SDD-MC-001.md` §3.2, and `CLAUDE.md`'s architecture summary have all been updated accordingly.
-> 2. A custom PX4 `dds_topics.yaml` addition (adds `/fmu/out/sensor_optical_flow` and/or `/fmu/out/vehicle_optical_flow_vel`) — rejected: requires a PX4 firmware rebuild/flash pipeline this repo does not currently have (all other sections in this document assume stock PX4 v1.14 plus documented parameter changes only).
+> 1. **A new dedicated MAVLink channel** (config-only, no firmware rebuild) — **chosen**. PX4 already has `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink stream implementations (`src/modules/mavlink/streams/OPTICAL_FLOW_RAD.hpp`, `.../DISTANCE_SENSOR.hpp`, confirmed unchanged at the v1.14.4 tag, re-confirmed unchanged at v1.17.0) that can be enabled on a new MAVLink instance/port, mirroring the existing mission-protocol channel precedent (`ICD-MC-001.md` §3.1, IR-007). This is this repo's second MC↔FCC MAVLink exception (a third, IGS-004's HIL_GPS sender, landed later — `ICD-MC-001.md` §3.3b) — `ICD-MC-001.md` §3.3a, `SDD-MC-001.md` §3.2, and `CLAUDE.md`'s architecture summary have all been updated accordingly.
+> 2. A custom PX4 `dds_topics.yaml` addition (adds `/fmu/out/sensor_optical_flow` and/or `/fmu/out/vehicle_optical_flow_vel`) — rejected: requires a PX4 firmware rebuild/flash pipeline this repo does not currently have (all other sections in this document assume stock PX4 v1.17 plus documented parameter changes only).
 >
 > **Axis mapping confirmed safe, not just assumed:** `OPTICAL_FLOW_RAD.integrated_x/y` and `.integrated_xgyro/ygyro` are sourced from the `vehicle_optical_flow` topic, which PX4 rotates by `SENS_FLOW_ROT` (`rotate_3f(...)`, `VehicleOpticalFlow.cpp`) **before** publishing — i.e. before this MAVLink stream ever sees the values. The MC-side relay therefore does not need to re-apply any sensor-mount rotation itself, only the sign flip and gyro-compensation PX4's own `vehicle_optical_flow_vel` derivation performs on the same fields (replicated exactly — see `ICD-MC-001.md` §3.3a and `fcc_bridge/optical_flow_relay.cpp`'s doc comment for the formula and source citation).
 >

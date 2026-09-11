@@ -6,9 +6,12 @@
   <description>
     Indoor GNSS simulation: gnss_sim_node fuses FCC-relayed attitude/baro
     altitude with a downward optical-flow sensor into a local dead-reckoned
-    position/velocity estimate (INDOOR-GNSS-SIMULATION-BACKLOG.md, IGS-001).
-    Local-&gt;WGS-84 conversion (IGS-003) and GPS_INPUT injection (IGS-004)
-    land in later tickets.
+    position/velocity estimate (INDOOR-GNSS-SIMULATION-BACKLOG.md, IGS-001),
+    converts it to a WGS-84 fix anchored at an operator-declared false
+    origin with a growing eph/epv uncertainty model (IGS-003), and streams
+    it to the FCC as a MAVLink HIL_GPS frame over a new dedicated MC-&gt;FCC
+    UDP channel (IGS-004; see that ticket's own firmware-verification note
+    for why HIL_GPS, not this proposal's original "GPS_INPUT" guess).
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>
@@ -18,6 +21,7 @@
   <depend>rclcpp</depend>
   <depend>mc_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>mavlink</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

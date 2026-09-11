@@ -54,7 +54,9 @@ private:
   void on_offboard_setpoint(const mc_msgs::msg::FccOffboardSetpoint::SharedPtr msg);
   void on_send_command(const mc_msgs::msg::FccCommand::SharedPtr msg);
   mc_msgs::msg::VehicleState to_msg(const VehicleState & state, bool link_alive) const;
-  static mc_msgs::msg::OpticalFlow to_flow_msg(const OpticalFlowSample & sample, rclcpp::Time stamp);
+  static mc_msgs::msg::OpticalFlow to_flow_msg(
+    const OpticalFlowSample & sample,
+    rclcpp::Time stamp);
   static MissionItem to_mission_item(const mc_msgs::msg::FccMissionItem & msg);
   void publish_mission_ack(uint8_t request_type, uint32_t upload_id, uint16_t seq, bool success);
 

@@ -99,16 +99,16 @@ HealthMonitorNode::HealthMonitorNode(const rclcpp::NodeOptions & options)
     declare_parameter("watchdog_timeout_ms", static_cast<int64_t>(watchdog_timeout_ms_)));
 
   restart_trigger_ = [this](const std::string & service) {
-      const auto result = request_systemd_restart(
-        watchdog_socket_path_, service, watchdog_timeout_ms_);
-      if (result.ok) {
-        RCLCPP_INFO(get_logger(), "systemd restart requested for '%s'", service.c_str());
-      } else {
-        RCLCPP_ERROR(
-          get_logger(), "systemd restart request for '%s' failed: %s",
-          service.c_str(), result.reason.c_str());
-      }
-    };
+    const auto result = request_systemd_restart(
+      watchdog_socket_path_, service, watchdog_timeout_ms_);
+    if (result.ok) {
+      RCLCPP_INFO(get_logger(), "systemd restart requested for '%s'", service.c_str());
+    } else {
+      RCLCPP_ERROR(
+        get_logger(), "systemd restart request for '%s' failed: %s",
+        service.c_str(), result.reason.c_str());
+    }
+  };
 
   sub_mission_phase_ = create_subscription<mc_msgs::msg::MissionPhase>(
     "/mc/mission_phase", rclcpp::QoS(10),
@@ -516,8 +516,9 @@ void HealthMonitorNode::check_gpu_overtemp(uint8_t gpu_temp_c)
     publish_status_text(
       mc_msgs::msg::StatusText::SEVERITY_WARNING,
       "GPU temperature " + std::to_string(gpu_temp_c) + "C exceeds threshold -- "
-      "inference_rate_limit_fps reduced to " + std::to_string(static_cast<int>(
-        kThrottledInferenceFps)) + " FPS");
+      "inference_rate_limit_fps reduced to " + std::to_string(
+        static_cast<int>(
+          kThrottledInferenceFps)) + " FPS");
     publish_fault(
       mc_msgs::msg::FaultEvent::GPU_OVERTEMP, kSeverityWarning,
       "GPU temperature exceeds threshold -- inference rate throttled",

@@ -3,16 +3,37 @@
 
 #include "indoor_nav/gnss_sim_node.hpp"
 
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <mavlink/v2.0/common/mavlink.h>
+
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <stdexcept>
+#include <string>
 
 namespace indoor_nav
 {
 
 namespace
 {
-// Mean Earth radius (m), matched to PX4 v1.14.4's own CONSTANTS_RADIUS_OF_
-// EARTH (src/lib/geo/geo.h) rather than the WGS-84 semi-major axis
+std::string env_or(const char * name, const std::string & fallback)
+{
+  const char * v = std::getenv(name);
+  return v != nullptr ? std::string(v) : fallback;
+}
+}  // namespace
+
+namespace
+{
+// Mean Earth radius (m), matched to PX4's own CONSTANTS_RADIUS_OF_
+// EARTH (src/lib/geo/geo.h, confirmed unchanged at v1.14.4 and v1.17.0)
+// rather than the WGS-84 semi-major axis
 // (6378137 m) -- since IGS-004's GPS_INPUT ultimately feeds PX4's own EKF2,
 // using the same constant PX4's map_projection already uses avoids a second,
 // independently-wrong small discrepancy on top of this module's own
@@ -88,6 +109,10 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
     declare_parameter("eph_growth_rate_m_per_s", eph_growth_rate_m_per_s_);
   epv_growth_rate_m_per_s_ =
     declare_parameter("epv_growth_rate_m_per_s", epv_growth_rate_m_per_s_);
+  hil_gps_rate_hz_ = declare_parameter("hil_gps_rate_hz", hil_gps_rate_hz_);
+  hil_gps_sats_at_anchor_ =
+    declare_parameter("hil_gps_sats_at_anchor", hil_gps_sats_at_anchor_);
+  hil_gps_min_sats_ = declare_parameter("hil_gps_min_sats", hil_gps_min_sats_);
 
   pub_local_estimate_ = create_publisher<nav_msgs::msg::Odometry>(
     "/mc/indoor/local_estimate", rclcpp::QoS(10));
@@ -106,7 +131,56 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
     "/mc/gcs/command", rclcpp::QoS(10),
     [this](mc_msgs::msg::GcsCommand::SharedPtr msg) {on_gcs_command(*msg);});
 
-  RCLCPP_INFO(get_logger(), "gnss_sim_node started");
+  // IGS-004: HIL_GPS sender (ICD-MC-001.md §3.3b). Same env-var convention
+  // as fcc_bridge's XrceDdsBackend (FCC_ETH_IP, DRONE_ID) -- this is the
+  // same physical MC<->FCC ethernet link (HIF-002), just a fourth MC<->FCC
+  // MAVLink exception on top of the mission-protocol/optical-flow-relay
+  // pair fcc_bridge already owns. Deliberately not routed through
+  // fcc_bridge_node/FccBackend -- gnss_sim_node (indoor_nav) owns this
+  // socket directly, since it is the only producer and this is a one-way
+  // stream (this ticket's own AC: "a direct point-to-point UDP send if
+  // routing isn't needed").
+  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.12.31");
+  const int hil_gps_port = std::stoi(env_or("FCC_GPS_INPUT_PORT", "14557"));
+  hil_gps_target_addr_.sin_family = AF_INET;
+  hil_gps_target_addr_.sin_port = htons(static_cast<uint16_t>(hil_gps_port));
+  if (::inet_pton(AF_INET, fcc_ip.c_str(), &hil_gps_target_addr_.sin_addr) != 1) {
+    throw std::runtime_error("GnssSimNode: invalid FCC_ETH_IP '" + fcc_ip + "'");
+  }
+  // mav_system_id_ must equal the FCC's own MAV_SYS_ID (see this member's
+  // own .hpp doc comment) -- DRONE_ID is this project's existing convention
+  // for that value (MissionProtocolClient's system_id_, same env var).
+  mav_system_id_ = static_cast<uint8_t>(std::stoi(env_or("DRONE_ID", "1")));
+  hil_gps_sock_fd_ = open_hil_gps_socket();
+
+  const auto hil_gps_period =
+    std::chrono::duration<double>(1.0 / std::max(hil_gps_rate_hz_, 0.1));
+  hil_gps_timer_ = create_wall_timer(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(hil_gps_period),
+    [this] {send_hil_gps();});
+
+  RCLCPP_INFO(
+    get_logger(), "gnss_sim_node started, HIL_GPS -> %s:%d @ %.1f Hz (sysid=%u)",
+    fcc_ip.c_str(), hil_gps_port, hil_gps_rate_hz_, static_cast<unsigned>(mav_system_id_));
+}
+
+GnssSimNode::~GnssSimNode()
+{
+  if (hil_gps_sock_fd_ >= 0) {
+    ::close(hil_gps_sock_fd_);
+  }
+}
+
+int GnssSimNode::open_hil_gps_socket()
+{
+  const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (fd < 0) {
+    throw std::runtime_error("GnssSimNode: failed to create HIL_GPS UDP socket");
+  }
+  // Send-only: no bind() -- there is nothing for the FCC to reply to on
+  // this channel (contrast XrceDdsBackend::open_mission_socket(), which
+  // binds so MISSION_REQUEST_INT replies have somewhere fixed to land).
+  return fd;
 }
 
 void GnssSimNode::on_vehicle_state(const mc_msgs::msg::VehicleState & msg)
@@ -284,6 +358,86 @@ void GnssSimNode::publish_estimate(const rclcpp::Time & stamp)
   // observable on /mc/indoor/gnss_sim_status as new sensor samples arrive,
   // not just at anchor time.
   publish_gnss_sim_status(stamp);
+}
+
+// IGS-004. Sent at hil_gps_rate_hz_ (default 5 Hz) via hil_gps_timer_ --
+// comfortably inside both of PX4 EKF2's own GNSS timing bounds, confirmed
+// against the real v1.17.0 src/modules/ekf2/EKF/common.h (unchanged path
+// and value from v1.14.4): GNSS_MAX_INTERVAL = 500 ms (>=2 Hz avoids the
+// "intermittent" classification in gps_control.cpp -- at v1.17.0 this
+// file moved to src/modules/ekf2/EKF/aid_sources/gnss/gps_control.cpp,
+// same logic) and 2x that (1 s) before EKF2 calls the feed stale outright.
+// 5 Hz is not this ticket's own invention -- it is exactly the PX4-typical
+// GPS receiver rate this proposal's own text guessed, now verified
+// compatible against the actual firmware bound rather than assumed.
+void GnssSimNode::send_hil_gps()
+{
+  const WgsFix fix = wgs84_fix();
+  if (!fix.valid) {
+    // No false origin anchored yet -- there is no honest fix to report
+    // (Safety Considerations #5, INDOOR-GNSS-SIMULATION-BACKLOG.md).
+    // reanchor() already logs anchor state via /mc/status_text, so this
+    // silence is not itself un-observable.
+    return;
+  }
+
+  const mc_msgs::msg::IndoorGnssSimStatus status = gnss_sim_status();
+
+  // eph/epv: HIL_GPS's wire units are centimeters -- PX4's own
+  // handle_message_hil_gps() decodes `hil_gps.eph * 1e-2f` -> meters
+  // (confirmed against the real mavlink_receiver.cpp at both v1.14.4 and
+  // v1.17.0), so this is the exact inverse of that conversion, not an
+  // assumed unit.
+  const uint16_t eph_cm =
+    static_cast<uint16_t>(std::clamp(status.eph * 100.0F, 0.0F, 65535.0F));
+  const uint16_t epv_cm =
+    static_cast<uint16_t>(std::clamp(status.epv * 100.0F, 0.0F, 65535.0F));
+
+  // satellites_visible: an honest, degrading value (this ticket's own AC:
+  // "never a fixed 'great accuracy' placeholder"), tied to the same eph
+  // PX4's own EKF2 GPS-quality gate uses -- degrades linearly from
+  // hil_gps_sats_at_anchor_ down to hil_gps_min_sats_ as eph grows from
+  // eph_at_anchor_m_ toward EKF2_REQ_EPH's default (3.0 m, confirmed
+  // against the real v1.17.0 src/modules/ekf2/params_gnss.yaml --
+  // v1.14.4's equivalent was src/modules/ekf2/ekf2_params.c, before PX4
+  // migrated EKF2 params to YAML) -- satellite count and EKF2's own
+  // accuracy-gate rejection degrade on the same honest timescale, not two
+  // independently-tuned numbers.
+  constexpr double kEkf2ReqEphDefaultM = 3.0;
+  const double eph_span = std::max(kEkf2ReqEphDefaultM - eph_at_anchor_m_, 1e-3);
+  const double eph_frac =
+    std::clamp((static_cast<double>(status.eph) - eph_at_anchor_m_) / eph_span, 0.0, 1.0);
+  const uint8_t satellites_visible = static_cast<uint8_t>(std::lround(
+      hil_gps_sats_at_anchor_ - eph_frac * (hil_gps_sats_at_anchor_ - hil_gps_min_sats_)));
+
+  // vn/ve/vd: x_/y_/z_ and their derivatives are already this node's local
+  // NED frame (this file's own IGS-001 comments) -- no rotation needed.
+  const int16_t vn_cms = static_cast<int16_t>(std::clamp(vx_ * 100.0F, -32768.0F, 32767.0F));
+  const int16_t ve_cms = static_cast<int16_t>(std::clamp(vy_ * 100.0F, -32768.0F, 32767.0F));
+  const int16_t vd_cms = static_cast<int16_t>(std::clamp(vz_ * 100.0F, -32768.0F, 32767.0F));
+  const float ground_speed_m_s = std::sqrt(vx_ * vx_ + vy_ * vy_);
+  const uint16_t vel_cms =
+    static_cast<uint16_t>(std::clamp(ground_speed_m_s * 100.0F, 0.0F, 65535.0F));
+  const double cog_deg = std::fmod(
+    std::atan2(static_cast<double>(vy_), static_cast<double>(vx_)) * 180.0 / M_PI + 360.0, 360.0);
+  const uint16_t cog_cdeg = static_cast<uint16_t>(std::lround(cog_deg * 100.0));
+
+  mavlink_message_t msg;
+  mavlink_msg_hil_gps_pack(
+    mav_system_id_, mav_component_id_, &msg,
+    static_cast<uint64_t>(now().nanoseconds() / 1000),
+    /*fix_type=*/ 3,  // 3D fix -- only ever sent once wgs84_fix() is valid
+    /*lat=*/ static_cast<int32_t>(std::llround(fix.lat_deg * 1e7)),
+    /*lon=*/ static_cast<int32_t>(std::llround(fix.lon_deg * 1e7)),
+    /*alt=*/ static_cast<int32_t>(std::llround(static_cast<double>(fix.alt_msl) * 1000.0)),
+    eph_cm, epv_cm, vel_cms, vn_cms, ve_cms, vd_cms, cog_cdeg, satellites_visible,
+    /*id=*/ 0, /*yaw=*/ 0);
+
+  uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+  const uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+  ::sendto(
+    hil_gps_sock_fd_, buf, len, 0,
+    reinterpret_cast<const sockaddr *>(&hil_gps_target_addr_), sizeof(hil_gps_target_addr_));
 }
 
 }  // namespace indoor_nav

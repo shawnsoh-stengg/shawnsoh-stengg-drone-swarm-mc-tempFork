@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <netinet/in.h>
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -31,8 +33,9 @@ constexpr uint32_t kMcCmdIndoorGnssSimAnchor = 50005;
 // body-frame horizontal velocity (rotated into a local nav frame using FCC
 // attitude), corrects the vertical axis directly from FCC baro-derived
 // altitude, and publishes the result on /mc/indoor/local_estimate for bench
-// validation. No camera dependency; no WGS-84 conversion (IGS-003) or
-// GPS_INPUT injection (IGS-004) here.
+// validation. No camera dependency. WGS-84 conversion (IGS-003) and
+// HIL_GPS injection (IGS-004) are later extensions of this same class,
+// documented further down.
 //
 // Open Item 3 resolution (attitude/baro source, INDOOR-GNSS-SIMULATION-
 // BACKLOG.md): /mc/fcc/vehicle_state already carries both signals this
@@ -68,6 +71,22 @@ constexpr uint32_t kMcCmdIndoorGnssSimAnchor = 50005;
 // x_/y_/z_ are NED (see z_'s own "NED down" comment below); flagged rather
 // than silently reconciled, same as this project's other doc-vs-code
 // corrections (e.g. HIF-008's).
+//
+// IGS-004 extends this same class again with a periodic sender that
+// streams wgs84_fix() to the FCC over a new dedicated MC->FCC UDP channel
+// (ICD-MC-001.md §3.3b) so PX4 accepts it as a live GPS receiver. Firmware
+// correction (Open Item 2, confirmed against the real PX4 v1.14.4 tag
+// originally, re-confirmed against v1.17.0 once this project's target
+// firmware moved, same verification discipline HIF-008 and the mission
+// protocol already used): `mavlink_receiver.cpp` has no handler at all
+// for `GPS_INPUT` (`MAVLINK_MSG_ID_GPS_INPUT` does not appear anywhere in
+// `src/`, at either tag) -- this proposal's own wording was never checked
+// against firmware. The message PX4 actually accepts as a fake GPS receiver over
+// MAVLink is `HIL_GPS`, gated by `handle_message_hil_gps()` running only
+// when `MAV_USEHILGPS=1` (default 0) *and* the frame's `sysid` equals the
+// FCC's own `MAV_SYS_ID` -- full-HIL mode is deliberately not used here
+// (see send_hil_gps()'s own .cpp doc comment). Every "GPS_INPUT" in this
+// ticket's own AC/deliverables text refers to this HIL_GPS mechanism.
 class GnssSimNode : public rclcpp::Node
 {
 public:
@@ -75,9 +94,9 @@ public:
   // origin. `valid` is false until at least one anchor command has been
   // accepted -- there is no safe default false origin (Safety
   // Considerations #5: bootstrapping the origin is an operator action, not
-  // automatic). This is IGS-004's own consumption point (GPS_INPUT sender,
-  // not built yet) as well as this ticket's test seam -- deliberately not a
-  // ROS topic itself, see IndoorGnssSimStatus.msg's own header comment.
+  // automatic). This is IGS-004's own consumption point (send_hil_gps(),
+  // below) as well as this ticket's test seam -- deliberately not a ROS
+  // topic itself, see IndoorGnssSimStatus.msg's own header comment.
   struct WgsFix
   {
     bool valid{false};
@@ -87,6 +106,7 @@ public:
   };
 
   explicit GnssSimNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  ~GnssSimNode() override;
 
   // Test seams: drive the fusion core directly with a known message,
   // bypassing pub/sub timing so a test can assert on a specific sequence
@@ -108,9 +128,19 @@ public:
   // from the local estimate + false origin. See WgsFix's own doc comment.
   WgsFix wgs84_fix() const;
 
+  // IGS-004 test seam: builds one HIL_GPS frame (ICD-MC-001.md §3.3b) from
+  // the current wgs84_fix() + gnss_sim_status() and sends it to the FCC,
+  // bypassing hil_gps_timer_ so a test can assert on a specific,
+  // deterministic frame. No-op (sends nothing) while wgs84_fix().valid is
+  // false -- there is no honest fix to report before the first anchor
+  // (Safety Considerations #5, INDOOR-GNSS-SIMULATION-BACKLOG.md). See the
+  // .cpp for the full field-by-field derivation and firmware citations.
+  void send_hil_gps();
+
 private:
   void publish_estimate(const rclcpp::Time & stamp);
   void publish_gnss_sim_status(const rclcpp::Time & stamp);
+  int open_hil_gps_socket();
 
   // Re-anchors the false origin at (lat_deg, lon_deg, alt_msl) as of
   // `stamp`: resets time_since_anchor_s (and therefore eph/epv) to their
@@ -186,6 +216,37 @@ private:
   double epv_growth_rate_m_per_s_{0.005};
 
   mc_msgs::msg::IndoorGnssSimStatus latest_gnss_sim_status_;
+
+  // IGS-004: HIL_GPS sender (ICD-MC-001.md §3.3b). Send-only, unbound UDP
+  // socket -- this is a one-way MC->FCC stream, so unlike
+  // XrceDdsBackend::open_mission_socket() (fcc_bridge/xrce_dds_backend.cpp)
+  // there is no reply to bind a local port for.
+  int hil_gps_sock_fd_{-1};
+  sockaddr_in hil_gps_target_addr_{};
+
+  // This MC's MAVLink identity on the HIL_GPS channel. mav_system_id_ is
+  // not just an addressing label here (contrast MissionProtocolClient's
+  // system_id_, fcc_bridge/mission_protocol_client.hpp) -- PX4's
+  // handle_message_hil_gps() gate additionally requires it to equal the
+  // FCC's own configured MAV_SYS_ID (mavlink_receiver.cpp's
+  // `msg->sysid == mavlink_system.sysid` check), so this must track
+  // whatever DRONE_ID/MAV_SYS_ID this drone is actually configured with,
+  // not merely be internally consistent.
+  uint8_t mav_system_id_{1};
+  uint8_t mav_component_id_{191};  // MAV_COMP_ID_ONBOARD_COMPUTER
+
+  rclcpp::TimerBase::SharedPtr hil_gps_timer_;
+  double hil_gps_rate_hz_{5.0};
+
+  // Honest satellites_visible model (send_hil_gps()'s own doc comment has
+  // the full derivation): degrades linearly from hil_gps_sats_at_anchor_ to
+  // hil_gps_min_sats_ as eph grows from eph_at_anchor_m_ toward PX4's own
+  // EKF2_REQ_EPH default (3.0 m, confirmed against the real v1.17.0
+  // src/modules/ekf2/params_gnss.yaml -- v1.14.4's equivalent was
+  // src/modules/ekf2/ekf2_params.c, before PX4 migrated EKF2 params to
+  // YAML) -- never a fixed "great fix" count.
+  double hil_gps_sats_at_anchor_{10.0};
+  double hil_gps_min_sats_{4.0};
 };
 
 }  // namespace indoor_nav

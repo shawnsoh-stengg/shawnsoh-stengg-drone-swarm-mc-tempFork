@@ -37,10 +37,12 @@ void OpticalFlowRelay::handle_optical_flow_rad(const mavlink_message_t & msg)
     return;  // no height reference yet -- can't scale angle to velocity
   }
 
-  // Angle-rate -> body-frame velocity, replicated exactly from PX4 v1.14.4's
-  // own VehicleOpticalFlow.cpp (src/modules/sensors/vehicle_optical_flow/
+  // Angle-rate -> body-frame velocity, replicated exactly from PX4's own
+  // VehicleOpticalFlow.cpp (src/modules/sensors/vehicle_optical_flow/
   // VehicleOpticalFlow.cpp lines ~281-291, confirmed against the real
-  // v1.14.4 tag): PX4 already applies SENS_FLOW_ROT to integrated_x/y and
+  // v1.14.4 tag originally, re-confirmed byte-for-byte at v1.17.0 once
+  // this project's target firmware moved): PX4 already applies
+  // SENS_FLOW_ROT to integrated_x/y and
   // integrated_xgyro/ygyro before this MAVLink stream ever sees them
   // (OPTICAL_FLOW_RAD.hpp publishes straight from the post-rotation
   // `vehicle_optical_flow` uORB topic), so no additional rotation is needed

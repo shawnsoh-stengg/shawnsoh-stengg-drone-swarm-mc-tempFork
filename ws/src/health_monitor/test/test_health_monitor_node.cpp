@@ -214,7 +214,7 @@ TEST(HealthMonitorNode, NodeAliveMaskFlipsOnTopicSilence)
       {node, harness},
       [&] {
         return latest_health &&
-               !(latest_health->node_alive_mask & mc_msgs::msg::SystemHealth::GCS_MAVLINK_ALIVE);
+        !(latest_health->node_alive_mask & mc_msgs::msg::SystemHealth::GCS_MAVLINK_ALIVE);
       },
       std::chrono::seconds(2)));
 }
@@ -499,7 +499,7 @@ TEST(HealthMonitorNode, LowBatterySuppressedByGcsOverride)
     spin_until(
       {node, harness->node}, [&] {
         return harness->vehicle_state_pub->get_subscription_count() > 0 &&
-               harness->gcs_command_pub->get_subscription_count() > 0 && harness->ready();
+        harness->gcs_command_pub->get_subscription_count() > 0 && harness->ready();
       }, std::chrono::seconds(2)));
 
   mc_msgs::msg::GcsCommand override_cmd;
@@ -551,7 +551,7 @@ TEST(HealthMonitorNode, GcsLinkLostPublishesHoldFaultWithoutCommandingFcc)
     spin_until(
       {node, harness->node}, [&] {
         return harness->link_status_pub->get_subscription_count() > 0 &&
-               harness->mission_phase_pub->get_subscription_count() > 0 && harness->ready();
+        harness->mission_phase_pub->get_subscription_count() > 0 && harness->ready();
       }, std::chrono::seconds(2)));
 
   mc_msgs::msg::MissionPhase phase;

@@ -151,7 +151,8 @@ protected:
     mavlink_global_position_int_t pos{};
     mavlink_msg_global_position_int_encode(1, 1, &msg, &pos);
     send_frame(fcc_.fd(), backend_addr_, msg);
-    ASSERT_TRUE(wait_until(
+    ASSERT_TRUE(
+      wait_until(
         [&] {return backend_->get_vehicle_state().xy_valid;}, std::chrono::seconds(3)));
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
   }
@@ -175,7 +176,8 @@ TEST_F(MavlinkUdpBackendTest, AggregatesGlobalPositionIntIntoVehicleState)
   pos.hdg = 9000;               // 90 deg, cdeg
   mavlink_msg_global_position_int_encode(1, 1, &msg, &pos);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().xy_valid;
@@ -199,7 +201,8 @@ TEST_F(MavlinkUdpBackendTest, AggregatesAttitudeEulerAsQuaternion)
   att.yaw = static_cast<float>(M_PI / 2.0);  // 90 deg about Z
   mavlink_msg_attitude_encode(1, 1, &msg, &att);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         const auto q = backend_->get_vehicle_state().q;
@@ -221,7 +224,8 @@ TEST_F(MavlinkUdpBackendTest, AggregatesBatteryRemainingAsFraction)
   batt.battery_remaining = 42;  // percent
   mavlink_msg_battery_status_encode(1, 1, &msg, &batt);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().battery_remaining > 0.0F;
@@ -244,7 +248,8 @@ TEST_F(MavlinkUdpBackendTest, AggregatesLocalPositionNedIntoVehicleState)
   pos.z = -30.0F;  // NED: negative = above origin
   mavlink_msg_local_position_ned_encode(1, 1, &msg, &pos);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().z_valid && backend_->get_vehicle_state().z != 0.0F;
@@ -264,7 +269,8 @@ TEST_F(MavlinkUdpBackendTest, AggregatesArmingStateFromHeartbeatSafetyArmedBit)
   hb.base_mode = MAV_MODE_FLAG_SAFETY_ARMED | MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;
   mavlink_msg_heartbeat_encode(1, 1, &msg, &hb);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().arming_state == 2;  // ARMED, ICD §10.2
@@ -280,7 +286,8 @@ TEST_F(MavlinkUdpBackendTest, ReportsStandbyWhenHeartbeatSafetyArmedBitClear)
   hb.base_mode = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED;  // armed bit clear
   mavlink_msg_heartbeat_encode(1, 1, &msg, &hb);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().arming_state == 1;  // STANDBY, ICD §10.2
@@ -303,7 +310,8 @@ TEST_F(MavlinkUdpBackendTest, AggregatesGnssOkFromGpsRawIntWhenFixGoodAndHdopLow
   gps.epv = 200;
   mavlink_msg_gps_raw_int_encode(1, 1, &msg, &gps);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().gnss_ok;
@@ -324,7 +332,8 @@ TEST_F(MavlinkUdpBackendTest, ReportsGnssNotOkWhenHdopAboveThreshold)
   gps.epv = 200;
   mavlink_msg_gps_raw_int_encode(1, 1, &msg, &gps);
 
-  ASSERT_TRUE(wait_until(
+  ASSERT_TRUE(
+    wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
         return backend_->get_vehicle_state().fix_type == 3;
@@ -445,8 +454,9 @@ TEST_F(MavlinkUdpBackendTest, UploadMissionCompletesFullHandshakeOverSharedSocke
         send_frame(fcc_.fd(), backend_addr_, req_msg);
 
         mavlink_message_t item_msg;
-        if (!recv_frame(fcc_.fd(), 2.0,
-        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+        if (!recv_frame(
+          fcc_.fd(), 2.0,
+          item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
         {
           return;
         }
@@ -471,13 +481,13 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
   establish_peer();
 
   const auto item = [] {
-      fcc_bridge::MissionItem i;
-      i.seq = fcc_bridge::FORMATION_SLOT;
-      i.lat = 10000000;
-      i.lon = 20000000;
-      i.alt = 50.0F;
-      return i;
-    } ();
+    fcc_bridge::MissionItem i;
+    i.seq = fcc_bridge::FORMATION_SLOT;
+    i.lat = 10000000;
+    i.lon = 20000000;
+    i.alt = 50.0F;
+    return i;
+  } ();
 
   // update_mission_item()'s window for the FCC's MISSION_REQUEST_INT reply
   // is a tight 0.5s (MissionProtocolClient's production default — not
@@ -493,8 +503,9 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
   std::thread mock_fcc([&] {
       mock_ready = true;
       mavlink_message_t msg;
-      if (!recv_frame(fcc_.fd(), 2.0,
-      msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
+      if (!recv_frame(
+        fcc_.fd(), 2.0,
+        msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
       {
         return;
       }
@@ -505,8 +516,9 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
       send_frame(fcc_.fd(), backend_addr_, req_msg);
 
       mavlink_message_t item_msg;
-      if (!recv_frame(fcc_.fd(), 2.0,
-      item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+      if (!recv_frame(
+        fcc_.fd(), 2.0,
+        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
       {
         return;
       }

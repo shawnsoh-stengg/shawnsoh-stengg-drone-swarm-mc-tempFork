@@ -10,6 +10,11 @@
 
 #include <gtest/gtest.h>
 
+#include <arpa/inet.h>
+#include <mavlink/v2.0/common/mavlink.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -27,12 +32,6 @@
 #include <px4_msgs/msg/vehicle_global_position.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
 #include <rclcpp/rclcpp.hpp>
-
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include <mavlink/v2.0/common/mavlink.h>
 
 #include "fcc_bridge/fcc_bridge_node.hpp"
 
@@ -168,9 +167,10 @@ TEST_F(FccBridgeNodeTest, PublishesVehicleStateAtTenHertzOrMore)
     std::chrono::milliseconds(20),
     [this] {pub_local_pos_->publish(px4_msgs::msg::VehicleLocalPosition{});});
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_}, [this] {return vehicle_state_msgs_.size() >= 51U;},
-    std::chrono::seconds(6)));
+      std::chrono::seconds(6)));
 }
 
 // TP-NI-002: content accuracy against a known local/global position.
@@ -195,10 +195,11 @@ TEST_F(FccBridgeNodeTest, VehicleStateContentMatchesLocalAndGlobalPosition)
       pub_global_pos_->publish(global);
     });
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [this] {return !vehicle_state_msgs_.empty() && vehicle_state_msgs_.back()->lat != 0.0;},
-    std::chrono::seconds(3)));
+      std::chrono::seconds(3)));
 
   const auto & msg = *vehicle_state_msgs_.back();
   EXPECT_NEAR(msg.x, 10.0, 0.001);
@@ -220,16 +221,18 @@ TEST_F(FccBridgeNodeTest, PublishesFccLinkLostFaultAfterLinkSilence)
     std::chrono::milliseconds(20),
     [this] {pub_local_pos_->publish(px4_msgs::msg::VehicleLocalPosition{});});
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_}, [this] {return !vehicle_state_msgs_.empty();},
-    std::chrono::milliseconds(500)));
+      std::chrono::milliseconds(500)));
   ASSERT_TRUE(fault_msgs_.empty()) << "no fault expected while the link is alive";
 
   mock_timer->cancel();
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_}, [this] {return !fault_msgs_.empty();},
-    std::chrono::milliseconds(2500)));
+      std::chrono::milliseconds(2500)));
 
   EXPECT_EQ(fault_msgs_.back()->fault_id, mc_msgs::msg::FaultEvent::FCC_LINK_LOST);
   EXPECT_EQ(fault_msgs_.back()->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
@@ -241,7 +244,8 @@ TEST_F(FccBridgeNodeTest, RepublishesOpticalFlowOnceFrameArrives)
 {
   ASSERT_TRUE(optical_flow_msgs_.empty()) << "nothing should publish before any frame arrives";
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_}, [this] {
         send_flow_frame();
         return !optical_flow_msgs_.empty();
@@ -407,7 +411,8 @@ TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadForwardsAllItemsToBacken
     msg.items.push_back(item);
   }
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [&] {
         pub_mission_upload_->publish(msg);
@@ -431,7 +436,8 @@ TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadPublishesSuccessAckWithU
   mc_msgs::msg::FccMission msg;
   msg.upload_id = 77;
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [&] {
         pub_mission_upload_->publish(msg);
@@ -456,7 +462,8 @@ TEST_F(FccBridgeNodeMissionForwardingTest, MissionUploadPublishesFailureAckWhenB
   mc_msgs::msg::FccMission msg;
   msg.upload_id = 78;
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [&] {
         pub_mission_upload_->publish(msg);
@@ -476,7 +483,8 @@ TEST_F(FccBridgeNodeMissionForwardingTest, MissionItemUpdatePublishesAckWithSeq)
   mc_msgs::msg::FccMissionItem item;
   item.seq = 5;
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [&] {
         pub_mission_item_update_->publish(item);
@@ -498,7 +506,8 @@ TEST_F(FccBridgeNodeMissionForwardingTest, SendCommandForwardsCmdAndAllParams)
   msg.cmd = 400;
   msg.params = {1, 2, 3, 4, 5, 6, 7};
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [&] {
         pub_send_command_->publish(msg);
@@ -522,7 +531,8 @@ TEST_F(FccBridgeNodeMissionForwardingTest, OffboardSetpointForwardsAllFieldsToBa
   msg.z = -10.0F;
   msg.yaw = 0.75F;
 
-  ASSERT_TRUE(spin_until(
+  ASSERT_TRUE(
+    spin_until(
       {node_, harness_},
       [&] {
         pub_offboard_setpoint_->publish(msg);

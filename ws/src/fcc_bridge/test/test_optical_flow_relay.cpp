@@ -4,7 +4,8 @@
 // IGS-002: OpticalFlowRelay's OPTICAL_FLOW_RAD/DISTANCE_SENSOR decode and
 // velocity-scaling math, exercised directly against packed mavlink_message_t
 // frames — no socket, no PX4 hardware. The velocity formula itself is
-// replicated from PX4 v1.14.4's real VehicleOpticalFlow.cpp (see
+// replicated from PX4's real VehicleOpticalFlow.cpp (confirmed against
+// v1.14.4 originally, re-confirmed against v1.17.0 — see
 // optical_flow_relay.cpp's handle_optical_flow_rad() doc comment); these
 // test values are hand-computed against that same formula, not against a
 // real H-Flow unit (no physical sensor exists in this environment — see
@@ -49,8 +50,9 @@ TEST(OpticalFlowRelay, InvalidBeforeAnyFrame)
   EXPECT_FALSE(relay.get_sample().valid);
 }
 
-// Hand-computed against the exact PX4 v1.14.4 formula (optical_flow_relay.cpp
-// doc comment): flow_dt=0.1s, range=2.0m, no gyro rotation (delta angle 0).
+// Hand-computed against the exact PX4 formula (unchanged v1.14.4/v1.17.0,
+// see optical_flow_relay.cpp's doc comment): flow_dt=0.1s, range=2.0m, no
+// gyro rotation (delta angle 0).
 // flow_x_rad=-integrated_x=-0.05, flow_y_rad=-integrated_y=0.02 (no gyro to
 // subtract) -> vx = -range*flow_comp_y/dt = -2*0.02/0.1 = -0.4,
 // vy = range*flow_comp_x/dt = 2*(-0.05)/0.1 = -1.0.

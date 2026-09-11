@@ -7,7 +7,7 @@
 | Version | 0.1-DRAFT |
 | Date | 2026-06-19 |
 | Platform | Jetson Orin NX 16GB · JetPack 6.2.2 · Ubuntu 22.04 aarch64 |
-| FCC | Pixhawk 6X · PX4 v1.14 |
+| FCC | Pixhawk 6X · PX4 v1.17 |
 | Stack | ROS 2 Humble · CycloneDDS (same-host) · zenoh-bridge-dds (cross-host) · uXRCE-DDS · MAVLink 2 |
 
 ---
@@ -56,7 +56,7 @@ Requirements apply to:
 | Term | Definition |
 |---|---|
 | MC | Mission Computer — Jetson Orin NX 16GB running the drone AI software stack |
-| FCC | Flight Control Computer — Pixhawk 6X running PX4 v1.14 |
+| FCC | Flight Control Computer — Pixhawk 6X running PX4 v1.17 |
 | GCS | Ground Control Station — QGroundControl laptop at 192.168.10.10 |
 | AU | Air Unit — MANET mesh datalink radio |
 | MANET | Mobile Ad-hoc Network — mesh radio linking GCS and all drones |
@@ -75,7 +75,7 @@ Requirements apply to:
 
 ### 1.4 Applicable Documents
 
-- PX4 Autopilot v1.14 documentation and uORB topic reference
+- PX4 Autopilot v1.17 documentation and uORB topic reference
 - Micro XRCE-DDS Agent configuration reference
 - MAVLink v2 message definition (mavlink.io)
 - ROS 2 Humble API documentation
@@ -102,7 +102,7 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 │                                                              │
 │  ┌──────────────────────────────┐   ┌────────────────────┐  │
 │  │  Mission Computer (MC)       │   │  Pixhawk 6X (FCC)  │  │
-│  │  Jetson Orin NX 16GB         │◄──►  PX4 v1.14 / NuttX │  │
+│  │  Jetson Orin NX 16GB         │◄──►  PX4 v1.17 / NuttX │  │
 │  │  JetPack 6.2.2 / Ubuntu 22   │   │  uORB topics       │  │
 │  │  192.168.10.11               │   │  192.168.10.31     │  │
 │  │                              │   └────────────────────┘  │
@@ -198,7 +198,7 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 |---|---|---|---|
 | FR-010 | MUST | Test | The MC shall arm the FCC only after receiving explicit GCS ARM authorisation as part of the current mission upload, and only after all MC pre-arm checks pass. |
 | FR-011 | MUST | Test | The MC shall command FCC disarm immediately upon receipt of a GCS DISARM command or upon triggering of a safety failsafe condition defined in §4.4. |
-| FR-012 | MUST | Test | The MC shall command FCC flight mode changes (HOLD, RTL, MISSION, TAKEOFF, OFFBOARD) via uXRCE-DDS `vehicle_command` topic using the PX4 v1.14 command set. `mission_manager_node` is the sole node authorised to issue a flight-mode command (§4.1.3, FR-026); OFFBOARD is commanded only for a phase/leg the active mission plan explicitly flags for it. |
+| FR-012 | MUST | Test | The MC shall command FCC flight mode changes (HOLD, RTL, MISSION, TAKEOFF, OFFBOARD) via uXRCE-DDS `vehicle_command` topic using the PX4 v1.17 command set. `mission_manager_node` is the sole node authorised to issue a flight-mode command (§4.1.3, FR-026); OFFBOARD is commanded only for a phase/leg the active mission plan explicitly flags for it. |
 | FR-013 | MUST | Test | The MC shall upload waypoints to the FCC for autonomous execution during INGRESS and MUSTER phases via the PX4 mission upload mechanism. |
 | FR-014 | MUST | Test | The MC shall subscribe to and process FCC telemetry at ≥ 10 Hz: vehicle local position, vehicle global position, vehicle velocity, vehicle attitude, armed state, flight mode, battery voltage, and battery remaining percentage. |
 | FR-015 | MUST | Test | The MC shall detect FCC communication loss (silence > 1 s on the uXRCE-DDS bridge), declare a critical fault, attempt to command HOLD if link recovers within 3 s, and notify the GCS. |
@@ -376,7 +376,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
 | SFR-001 | MUST | Test | The MC shall not command FCC ARM without explicit GCS ARM authorisation present in the current uploaded mission. Unauthorised arm attempts shall be rejected and logged. |
-| SFR-002 | MUST | Test | The MC shall not disable, suppress, or override any PX4 failsafe configuration. All MC-commanded actions shall remain within the safety envelope defined by the PX4 v1.14 failsafe configuration. |
+| SFR-002 | MUST | Test | The MC shall not disable, suppress, or override any PX4 failsafe configuration. All MC-commanded actions shall remain within the safety envelope defined by the PX4 v1.17 failsafe configuration. |
 | SFR-003 | MUST | Test | The `mission_manager_node` watchdog shall trigger FCC HOLD and notify the GCS if the manager's heartbeat is silent for > 5 s. |
 | SFR-004 | MUST | Test | After 3 consecutive failed systemd restart attempts on any node declared critical, the health monitor shall command FCC RTL via the FccBackend and set mission phase to FAULT. |
 | SFR-005 | MUST | Inspection | The MC shall validate the schema and parameter ranges of all incoming MAVLink messages and swarm protocol messages before acting on their content. Malformed messages shall be discarded and logged. |
@@ -572,7 +572,7 @@ Monitors CPU, memory, disk, GPU temperature, and node liveness via ROS 2 alive c
 ### 6.1 Platform Constraints
 
 - Target platform is Jetson Orin NX 16GB, JetPack 6.2.2, Ubuntu 22.04 LTS aarch64. Requirements are validated on this platform only.
-- FCC is Pixhawk 6X running PX4 v1.14. uORB topic names, types, and MAVLink message IDs are fixed to this version.
+- FCC is Pixhawk 6X running PX4 v1.17. uORB topic names, types, and MAVLink message IDs are fixed to this version. Note: the vendored `px4_msgs` ROS 2 package (the DDS-side mirror of these uORB types) is currently still pinned to PX4 `release/1.14` pending `PROJECT-PLAN-5-MONTH.md`'s `DEP-009` — this is a tracked gap, not a second target version.
 - Network topology (IP addresses) is fixed as defined in §2.3 and is not configurable at runtime.
 - The MANET mesh radio is assumed to provide UDP transport with maximum link latency ≤ 500 ms and loss rate < 5% within the operating area.
 
