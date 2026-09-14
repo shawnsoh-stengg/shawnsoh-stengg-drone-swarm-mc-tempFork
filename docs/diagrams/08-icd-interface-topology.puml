@@ -122,8 +122,9 @@ note on link #FFF0E0
   <b>one MAVLink exception on this link, IR-007)</b>
   full upload: MISSION_COUNT/ITEM_INT/ACK
     (on change — search paths, ingress/muster)
-  single-item replace: MISSION_WRITE_PARTIAL_LIST
-    (≥5 Hz during INGRESS — FORMATION_SLOT)
+  single-item replace: same full handshake again,
+  one item changed (≥2 Hz during INGRESS — FORMATION_SLOT;
+    FCC-010 — PX4 has no MISSION_WRITE_PARTIAL_LIST handler)
   Mission protocol itself is MISSION-mode only;
   OFFBOARD legs use the DDS setpoint stream above
   instead, not this protocol  [FR-020/026-029]

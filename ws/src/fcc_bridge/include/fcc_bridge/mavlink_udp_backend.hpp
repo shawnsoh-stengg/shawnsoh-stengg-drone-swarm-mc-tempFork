@@ -97,13 +97,14 @@ private:
   std::atomic<bool> stop_{false};
 
   // Excludes recv_loop_'s socket reads while a mission-protocol handshake
-  // (upload_mission/update_mission_item) is in progress. MissionProtocolClient
+  // (upload_mission/update_mission_item — the latter now itself a full
+  // upload_mission() re-run, FCC-010) is in progress. MissionProtocolClient
   // does its own raw recv() on this same fd and is reused unmodified (SDD
   // §3.3) — it has no built-in tolerance for a state-telemetry datagram
-  // landing in the exact slot it expects a MISSION_ACK/MISSION_REQUEST_INT
-  // reply (see upload_mission()'s single-shot ack read and
-  // serve_single_item_request()), so recv_loop_ must not be pulling
-  // datagrams off the same socket concurrently with a handshake. This
+  // landing in the exact slot it expects a MISSION_REQUEST_INT/MISSION_ACK
+  // reply (see upload_mission()'s recv_frame() calls), so recv_loop_ must
+  // not be pulling datagrams off the same socket concurrently with a
+  // handshake. This
   // narrows the race to "PX4 keeps streaming telemetry mid-handshake and
   // outraces the reply in the queue" — a real but low-probability hazard
   // that only a genuine PX4 SITL/Gazebo run could trigger, which is

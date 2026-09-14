@@ -5,7 +5,7 @@
 ' MC-SRS-001  FR-030 to FR-046
 ' ─────────────────────────────────────────────────────────────
 
-title "06 — Swarm Coordination Sequence\nMUSTER → ISR Selection → Voronoi Partition → SEARCH"
+title "06 — Swarm Coordination Sequence\nMUSTER → ISR Selection → Voronoi Partition → SEARCH\n<color:#C02020>Mostly design/not-yet-implemented — see status note below</color>"
 
 skinparam BackgroundColor #FAFBFC
 skinparam DefaultFontColor #1C2334
@@ -49,6 +49,22 @@ participant "MC #1\n(This Drone)" as MC1 #A8CCEE
 participant "MC #2\n(Peer)" as MC2 #D8C0F0
 participant "MC #3\n(Peer)" as MC3 #D8C0F0
 participant "FCC #1\n(Pixhawk)" as FCC1 #FFD4A8
+
+note over GCS, FCC1 #FFE0E0
+  <b>Implementation status (verified 2026-09-08):</b> the mission-upload
+  handshake and ARM command below are real (gcs_mavlink_node,
+  mission_manager_node, and fcc_bridge_node are all fully implemented).
+  Everything from "Peer Discovery" onward — swarm heartbeat, formation
+  keeping, MUSTER quorum, ISR election, Voronoi partitioning, and the
+  SEARCH phase's boustrophedon planning + AI detection — depicts the
+  TARGET DESIGN only. swarm_coordinator_node, formation_controller_node,
+  search_planner_node, and perception_down_node are all still code
+  scaffolds today (a bare Node() constructor + one log line, zero
+  publishers/subscribers/timers implemented). mission_manager_node's own
+  state-machine guards for these transitions are real (diagram 04), but
+  nothing currently publishes the /mc/swarm/* or /mc/search/* topics
+  those guards wait on, so a real drone stalls at MUSTER.
+end note
 
 ' ═══════════════════════════════════════════════════
 ' PREFLIGHT: Mission Upload
@@ -95,7 +111,7 @@ MC1 -> FCC1 : vehicle_command: SET_MODE MISSION\nupload FORMATION_SLOT (seq 0)
 MC1 -> MC2 : heartbeat (phase=INGRESS, pos, vel)
 MC1 -> MC3 : heartbeat (phase=INGRESS, pos, vel)
 
-loop Formation keeping  ≥5 Hz  [FR-020 to FR-024]
+loop Formation keeping  ≥2 Hz (FCC-010)  [FR-020 to FR-024]
   MC1 -> MC2 : peer state (pos, vel)
   MC1 -> MC3 : peer state (pos, vel)
   MC2 -> MC1 : peer state (leader pos, vel)

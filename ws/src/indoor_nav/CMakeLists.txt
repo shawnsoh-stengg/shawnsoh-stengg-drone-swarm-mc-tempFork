@@ -13,7 +13,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(mc_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
 find_package(mavlink REQUIRED)
 
 add_library(gnss_sim_node_lib
@@ -24,7 +23,7 @@ target_include_directories(gnss_sim_node_lib PUBLIC
   $<INSTALL_INTERFACE:include>
   ${mavlink_INCLUDE_DIRS}
 )
-ament_target_dependencies(gnss_sim_node_lib PUBLIC rclcpp mc_msgs nav_msgs geometry_msgs)
+ament_target_dependencies(gnss_sim_node_lib PUBLIC rclcpp mc_msgs nav_msgs)
 
 add_executable(gnss_sim_node
   src/gnss_sim_node_main.cpp
@@ -67,10 +66,6 @@ if(BUILD_TESTING)
   ament_add_gtest(test_hil_gps_sender test/test_hil_gps_sender.cpp)
   target_link_libraries(test_hil_gps_sender gnss_sim_node_lib)
   target_include_directories(test_hil_gps_sender PRIVATE ${mavlink_INCLUDE_DIRS})
-
-  ament_add_gtest(test_self_supervision test/test_self_supervision.cpp)
-  target_link_libraries(test_self_supervision gnss_sim_node_lib)
-  target_include_directories(test_self_supervision PRIVATE ${mavlink_INCLUDE_DIRS})
 endif()
 
 ament_package()

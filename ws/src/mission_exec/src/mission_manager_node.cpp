@@ -84,8 +84,6 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
     rclcpp::QoS(10));
   pub_send_command_ =
     create_publisher<mc_msgs::msg::FccCommand>("/mc/fcc/send_command", rclcpp::QoS(10));
-  pub_mission_item_update_ = create_publisher<mc_msgs::msg::FccMissionItem>(
-    "/mc/fcc/mission_item_update", rclcpp::QoS(10));
   pub_mission_upload_ =
     create_publisher<mc_msgs::msg::FccMission>("/mc/fcc/mission_upload", rclcpp::QoS(10));
   pub_status_text_ =
@@ -384,11 +382,24 @@ void MissionManagerNode::send_formation_slot_item()
   // Reserves PX4 dataman seq 0 (FORMATION_SLOT) at the drone's own current
   // position — a placeholder so a valid item exists before formation_
   // controller_node (SC-001, out of scope here) takes over with the real
-  // computed target via its own continuous >=5 Hz mission_item_update
+  // computed target via its own continuous >=2 Hz mission_item_update
   // stream (SDD §5.2/§5.3). Deriving the actual formation-slot geodetic
   // target here would require the NED->WGS-84 home-anchored transform
   // FR-024's owner (formation_controller_node) is responsible for, not
   // this node.
+  //
+  // FCC-010: this reservation is a full (one-item) mission upload, not a
+  // mission-item *update* — fcc_bridge's update_mission_item() requires an
+  // already-uploaded base mission to patch an item into (PX4 has no
+  // MISSION_WRITE_PARTIAL_LIST handler at any known version, so it can't
+  // create dataman content from nothing either), and nothing has uploaded
+  // one yet at this point in the phase sequence. formation_controller_node's
+  // later per-tick replacements are real update_mission_item() calls against
+  // the single-item mission this establishes.
+  mc_msgs::msg::FccMission mission;
+  mission.header.stamp = now();
+  mission.upload_id = pending_upload_id_;
+
   mc_msgs::msg::FccMissionItem item;
   item.header.stamp = now();
   item.seq = 0;
@@ -398,10 +409,10 @@ void MissionManagerNode::send_formation_slot_item()
   item.lon = vehicle_state_ ? static_cast<int32_t>(vehicle_state_->lon * 1e7) : 0;
   item.alt = vehicle_state_ ? vehicle_state_->alt_msl : 0.F;
   item.acceptance_radius = static_cast<float>(waypoint_acceptance_radius_m_);
-  pub_mission_item_update_->publish(item);
+  mission.items.push_back(item);
+  pub_mission_upload_->publish(mission);
 
-  pending_ack_kind_ = AckKind::ITEM_UPDATE;
-  pending_seq_ = 0;
+  pending_ack_kind_ = AckKind::FORMATION_SLOT_UPLOAD;
   pending_ack_sent_at_ = now();
 }
 
@@ -410,6 +421,7 @@ void MissionManagerNode::action_begin_formation_slot_reservation()
   pending_target_phase_ = Phase::INGRESS;
   pending_source_ = mc_msgs::msg::MissionPhase::SOURCE_GCS_COMMAND;
   pending_ack_retries_ = 0;
+  pending_upload_id_ = next_upload_id_++;
   send_formation_slot_item();
 }
 
@@ -451,7 +463,7 @@ void MissionManagerNode::send_coverage_path_upload()
   }
   pub_mission_upload_->publish(mission);
 
-  pending_ack_kind_ = AckKind::UPLOAD;
+  pending_ack_kind_ = AckKind::COVERAGE_PATH_UPLOAD;
   pending_ack_sent_at_ = now();
 }
 
@@ -677,9 +689,9 @@ void MissionManagerNode::on_mission_channel_ack_failure()
   RCLCPP_WARN(
     get_logger(), "mission-channel request failed, retry %d/%d", pending_ack_retries_,
     mission_ack_max_retries_);
-  if (pending_ack_kind_ == AckKind::ITEM_UPDATE) {
+  if (pending_ack_kind_ == AckKind::FORMATION_SLOT_UPLOAD) {
     send_formation_slot_item();
-  } else if (pending_ack_kind_ == AckKind::UPLOAD) {
+  } else if (pending_ack_kind_ == AckKind::COVERAGE_PATH_UPLOAD) {
     send_coverage_path_upload();
   }
 }
@@ -709,18 +721,14 @@ void MissionManagerNode::on_mission_ack(mc_msgs::msg::FccMissionAck::SharedPtr m
   if (pending_ack_kind_ == AckKind::NONE) {
     return;
   }
-  if (pending_ack_kind_ == AckKind::ITEM_UPDATE) {
-    if (msg->request_type != mc_msgs::msg::FccMissionAck::ITEM_UPDATE ||
-      msg->seq != pending_seq_)
-    {
-      return;
-    }
-  } else {
-    if (msg->request_type != mc_msgs::msg::FccMissionAck::UPLOAD ||
-      msg->upload_id != pending_upload_id_)
-    {
-      return;
-    }
+  // FCC-010: both AckKind values this node tracks are full mission uploads
+  // at the wire level (see the enum's own comment) — pending_ack_kind_ only
+  // picks which local send_*()/retry function to call on failure, not which
+  // wire-level ack shape to expect.
+  if (msg->request_type != mc_msgs::msg::FccMissionAck::UPLOAD ||
+    msg->upload_id != pending_upload_id_)
+  {
+    return;
   }
 
   if (msg->success) {

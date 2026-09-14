@@ -29,7 +29,6 @@
 #include <mc_msgs/msg/fcc_command.hpp>
 #include <mc_msgs/msg/fcc_mission.hpp>
 #include <mc_msgs/msg/fcc_mission_ack.hpp>
-#include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/formation_offset.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/gcs_command_ack.hpp>
@@ -173,9 +172,6 @@ protected:
     sub_send_command_ = harness_->create_subscription<mc_msgs::msg::FccCommand>(
       "/mc/fcc/send_command", rclcpp::QoS(10),
       [this](mc_msgs::msg::FccCommand::SharedPtr msg) {send_commands_.push_back(msg);});
-    sub_mission_item_update_ = harness_->create_subscription<mc_msgs::msg::FccMissionItem>(
-      "/mc/fcc/mission_item_update", rclcpp::QoS(10),
-      [this](mc_msgs::msg::FccMissionItem::SharedPtr msg) {mission_item_updates_.push_back(msg);});
     sub_fcc_mission_upload_ = harness_->create_subscription<mc_msgs::msg::FccMission>(
       "/mc/fcc/mission_upload", rclcpp::QoS(10),
       [this](mc_msgs::msg::FccMission::SharedPtr msg) {fcc_mission_uploads_.push_back(msg);});
@@ -254,7 +250,8 @@ protected:
   }
 
   // Drives the node from PREFLIGHT through ARMING, TAKEOFF, and INGRESS
-  // (acking the FORMATION_SLOT item-update along the way) so later-phase
+  // (acking the FORMATION_SLOT reservation along the way — a full one-item
+  // mission upload, not a mission-item update; FCC-010) so later-phase
   // tests can start from a realistic precondition instead of re-deriving
   // every earlier phase's setup — mirrors TP-ST-001's own full-mission
   // structure.
@@ -281,11 +278,11 @@ protected:
     send_gcs_command(50001 /*MC_CMD_PHASE_TRANSITION*/, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
     ASSERT_TRUE(
       spin_until(
-        {node_, harness_}, [this] {return !mission_item_updates_.empty();},
+        {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
         std::chrono::seconds(2)));
     mc_msgs::msg::FccMissionAck ack;
-    ack.request_type = mc_msgs::msg::FccMissionAck::ITEM_UPDATE;
-    ack.seq = 0;
+    ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+    ack.upload_id = fcc_mission_uploads_.back()->upload_id;
     ack.success = true;
     pub_mission_ack_->publish(ack);
     ASSERT_TRUE(
@@ -332,7 +329,6 @@ protected:
   rclcpp::Subscription<mc_msgs::msg::MissionPhase>::SharedPtr sub_phase_;
   rclcpp::Subscription<std_msgs::msg::Header>::SharedPtr sub_heartbeat_;
   rclcpp::Subscription<mc_msgs::msg::FccCommand>::SharedPtr sub_send_command_;
-  rclcpp::Subscription<mc_msgs::msg::FccMissionItem>::SharedPtr sub_mission_item_update_;
   rclcpp::Subscription<mc_msgs::msg::FccMission>::SharedPtr sub_fcc_mission_upload_;
   rclcpp::Subscription<mc_msgs::msg::StatusText>::SharedPtr sub_status_text_;
   rclcpp::Subscription<mc_msgs::msg::GcsCommandAck>::SharedPtr sub_command_ack_;
@@ -340,7 +336,6 @@ protected:
   std::vector<mc_msgs::msg::MissionPhase::SharedPtr> phases_;
   std::vector<std_msgs::msg::Header::SharedPtr> heartbeats_;
   std::vector<mc_msgs::msg::FccCommand::SharedPtr> send_commands_;
-  std::vector<mc_msgs::msg::FccMissionItem::SharedPtr> mission_item_updates_;
   std::vector<mc_msgs::msg::FccMission::SharedPtr> fcc_mission_uploads_;
   std::vector<mc_msgs::msg::StatusText::SharedPtr> status_texts_;
   std::vector<mc_msgs::msg::GcsCommandAck::SharedPtr> command_acks_;
@@ -448,7 +443,7 @@ TEST_F(MissionManagerNodeTest, TakeoffToIngress_StaysAtTakeoffWithoutGcsIngressC
   // Altitude reached but no GCS PHASE_TRANSITION(INGRESS) yet -> guard false.
   spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::TAKEOFF);
-  EXPECT_TRUE(mission_item_updates_.empty());
+  EXPECT_TRUE(fcc_mission_uploads_.empty());
 }
 
 TEST_F(MissionManagerNodeTest, TakeoffToIngress_BlocksOnAckThenCommitsOnSuccess)
@@ -469,19 +464,22 @@ TEST_F(MissionManagerNodeTest, TakeoffToIngress_BlocksOnAckThenCommitsOnSuccess)
       std::chrono::seconds(2)));
 
   send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // PHASE_TRANSITION(INGRESS)
+  // FCC-010: the FORMATION_SLOT reservation is now a full (one-item)
+  // mission upload, not a mission-item update.
   ASSERT_TRUE(
     spin_until(
-      {node_, harness_}, [this] {return !mission_item_updates_.empty();},
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
       std::chrono::seconds(2)));
-  EXPECT_EQ(mission_item_updates_.back()->seq, 0);
+  ASSERT_EQ(fcc_mission_uploads_.back()->items.size(), 1U);
+  EXPECT_EQ(fcc_mission_uploads_.back()->items.back().seq, 0);
 
   // No ack yet -> the state machine must not have optimistically advanced.
   spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::TAKEOFF);
 
   mc_msgs::msg::FccMissionAck ack;
-  ack.request_type = mc_msgs::msg::FccMissionAck::ITEM_UPDATE;
-  ack.seq = 0;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
   ack.success = true;
   pub_mission_ack_->publish(ack);
   ASSERT_TRUE(
@@ -510,19 +508,20 @@ TEST_F(MissionManagerNodeTest, TakeoffToIngress_FailedAckRetriesThenEscalatesToF
   send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
   ASSERT_TRUE(
     spin_until(
-      {node_, harness_}, [this] {return !mission_item_updates_.empty();},
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
       std::chrono::seconds(2)));
 
   mc_msgs::msg::FccMissionAck ack;
-  ack.request_type = mc_msgs::msg::FccMissionAck::ITEM_UPDATE;
-  ack.seq = 0;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
   ack.success = false;
   pub_mission_ack_->publish(ack);
   ASSERT_TRUE(
     spin_until(
-      {node_, harness_}, [this] {return mission_item_updates_.size() >= 2U;},
+      {node_, harness_}, [this] {return fcc_mission_uploads_.size() >= 2U;},
       std::chrono::seconds(2)))
     << "expected a retry resend after the first failed ack";
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
   pub_mission_ack_->publish(ack);  // mission_ack_max_retries_ == 1 -> this 2nd failure escalates
 
   ASSERT_TRUE(
@@ -649,7 +648,9 @@ TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardFalseUntilCellAndPa
 
   spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::VORONOI_PARTITION);
-  EXPECT_TRUE(fcc_mission_uploads_.empty());
+  // advance_to_ingress() already produced exactly one upload (the
+  // FORMATION_SLOT reservation, FCC-010) — no coverage-path upload yet.
+  EXPECT_EQ(fcc_mission_uploads_.size(), 1U);
 }
 
 TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardTrueUploadsCoveragePath)
@@ -672,6 +673,11 @@ TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardTrueUploadsCoverage
   cell.upload_id = 42;  // matches full_mission_upload()'s upload_id
   pub_voronoi_cell_->publish(cell);
 
+  // advance_to_ingress() already produced one upload (FORMATION_SLOT
+  // reservation, FCC-010) — wait for a *new* one past that baseline rather
+  // than just "non-empty", so `.back()` below is really the coverage path.
+  const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
+
   nav_msgs::msg::Path path;
   geometry_msgs::msg::PoseStamped p1;
   p1.pose.position.x = 103.8;  // lon
@@ -682,7 +688,10 @@ TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardTrueUploadsCoverage
 
   ASSERT_TRUE(
     spin_until(
-      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
+      {node_, harness_},
+      [this, uploads_before_coverage_path] {
+        return fcc_mission_uploads_.size() > uploads_before_coverage_path;
+      },
       std::chrono::seconds(2)));
   ASSERT_EQ(fcc_mission_uploads_.back()->items.size(), 1U);
 
@@ -719,13 +728,19 @@ TEST_F(MissionManagerNodeTest, SearchToReturn_GuardTrueOnFccMissionComplete)
   mc_msgs::msg::VoronoiCell cell;
   cell.upload_id = 42;
   pub_voronoi_cell_->publish(cell);
+  // advance_to_ingress() already produced one upload (FORMATION_SLOT
+  // reservation, FCC-010) — wait for a *new* one past that baseline.
+  const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
   nav_msgs::msg::Path path;
   geometry_msgs::msg::PoseStamped p1;
   path.poses = {p1};
   pub_coverage_path_->publish(path);
   ASSERT_TRUE(
     spin_until(
-      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
+      {node_, harness_},
+      [this, uploads_before_coverage_path] {
+        return fcc_mission_uploads_.size() > uploads_before_coverage_path;
+      },
       std::chrono::seconds(2)));
   mc_msgs::msg::FccMissionAck ack;
   ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
@@ -888,12 +903,19 @@ TEST_F(MissionManagerNodeTest, EmergencyCommandDuringAutonomousSearchPhasePreemp
   mc_msgs::msg::VoronoiCell cell;
   cell.upload_id = 42;
   pub_voronoi_cell_->publish(cell);
+  // advance_to_ingress() already produced one upload (FORMATION_SLOT
+  // reservation, FCC-010) — wait for a *new* one past that baseline.
+  const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
   nav_msgs::msg::Path path;
   path.poses = {geometry_msgs::msg::PoseStamped()};
   pub_coverage_path_->publish(path);
   ASSERT_TRUE(
     spin_until(
-      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();}, std::chrono::seconds(2)));
+      {node_, harness_},
+      [this, uploads_before_coverage_path] {
+        return fcc_mission_uploads_.size() > uploads_before_coverage_path;
+      },
+      std::chrono::seconds(2)));
   mc_msgs::msg::FccMissionAck ack;
   ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
   ack.upload_id = fcc_mission_uploads_.back()->upload_id;

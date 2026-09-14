@@ -17,6 +17,8 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <rclcpp/logging.hpp>
 
@@ -156,58 +158,108 @@ TEST_F(MissionProtocolClientTest, UploadMissionCompletesFullHandshake)
   EXPECT_TRUE(result);
 }
 
-TEST_F(MissionProtocolClientTest, UpdateMissionItemUsesPartialListNotFullUpload)
+namespace
+{
+// Plays the FCC's side of a full MISSION_COUNT -> MISSION_ITEM_INT x N ->
+// MISSION_ACK handshake, recording each item's (lat, lon) it was sent.
+// Shared by the upload and FCC-010 re-upload tests below.
+bool run_mock_fcc_full_handshake(
+  int fcc_fd, const sockaddr_in & mc_addr, uint16_t expected_count,
+  std::vector<std::pair<int32_t, int32_t>> & received_items)
+{
+  mavlink_message_t msg;
+  if (!recv_frame(fcc_fd, 2.0, msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_COUNT) {
+    return false;
+  }
+  mavlink_mission_count_t count_msg{};
+  mavlink_msg_mission_count_decode(&msg, &count_msg);
+  if (count_msg.count != expected_count) {
+    return false;
+  }
+
+  for (uint16_t seq = 0; seq < count_msg.count; ++seq) {
+    mavlink_message_t req_msg;
+    mavlink_msg_mission_request_int_pack(1, 1, &req_msg, 1, 191, seq, MAV_MISSION_TYPE_MISSION);
+    send_frame(fcc_fd, mc_addr, req_msg);
+
+    mavlink_message_t item_msg;
+    if (!recv_frame(fcc_fd, 2.0, item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT) {
+      return false;
+    }
+    mavlink_mission_item_int_t item{};
+    mavlink_msg_mission_item_int_decode(&item_msg, &item);
+    if (item.seq != seq) {
+      return false;
+    }
+    received_items.emplace_back(item.x, item.y);
+  }
+
+  mavlink_message_t ack_msg;
+  mavlink_msg_mission_ack_pack(
+    1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION, 0);
+  send_frame(fcc_fd, mc_addr, ack_msg);
+  return true;
+}
+}  // namespace
+
+// FCC-010: PX4 has no handler for MISSION_WRITE_PARTIAL_LIST at any known
+// version — update_mission_item() must re-run the full upload handshake
+// instead of a partial write, patching only the requested seq.
+TEST_F(MissionProtocolClientTest, UpdateMissionItemReUploadsFullMissionAfterInitialUpload)
 {
   fcc_bridge::MissionProtocolClient client(
     mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
 
-  const auto item = make_item(fcc_bridge::FORMATION_SLOT);
+  const std::vector<fcc_bridge::MissionItem> items = {make_item(0), make_item(1), make_item(2)};
 
+  // 1. Seed current_mission_ via a normal initial upload.
+  {
+    std::vector<std::pair<int32_t, int32_t>> received;
+    std::thread mock_fcc(
+      [&] {run_mock_fcc_full_handshake(fcc_.fd(), mc_.addr(), 3, received);});
+    ASSERT_TRUE(client.upload_mission(items));
+    mock_fcc.join();
+  }
+
+  // 2. Replace seq=1 — expect a full re-upload (MISSION_COUNT(3) again), not
+  // MISSION_WRITE_PARTIAL_LIST, with item 1's payload changed and 0/2 intact.
+  auto replacement = make_item(1);
+  replacement.lat = 99000001;
+  replacement.lon = 99000002;
+
+  std::vector<std::pair<int32_t, int32_t>> received;
   std::atomic<bool> mock_fcc_ok{false};
   std::thread mock_fcc([&] {
-      mavlink_message_t msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
-      {
-        return;
-      }
-      mavlink_mission_write_partial_list_t partial{};
-      mavlink_msg_mission_write_partial_list_decode(&msg, &partial);
-      if (partial.start_index != fcc_bridge::FORMATION_SLOT ||
-      partial.end_index != fcc_bridge::FORMATION_SLOT)
-      {
-        return;
-      }
-
-      mavlink_message_t req_msg;
-      mavlink_msg_mission_request_int_pack(
-        1, 1, &req_msg, 1, 191, fcc_bridge::FORMATION_SLOT, MAV_MISSION_TYPE_MISSION);
-      send_frame(fcc_.fd(), mc_.addr(), req_msg);
-
-      mavlink_message_t item_msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
-      {
-        return;
-      }
-
-      mavlink_message_t ack_msg;
-      mavlink_msg_mission_ack_pack(
-        1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED,
-        MAV_MISSION_TYPE_MISSION, 0);
-      send_frame(fcc_.fd(), mc_.addr(), ack_msg);
-      mock_fcc_ok = true;
+      mock_fcc_ok = run_mock_fcc_full_handshake(fcc_.fd(), mc_.addr(), 3, received);
     });
 
-  const bool result =
-    client.update_mission_item(fcc_bridge::FORMATION_SLOT, item, /*timeout_s=*/ 2.0);
+  const bool result = client.update_mission_item(1, replacement, /*timeout_s=*/ 2.0);
   mock_fcc.join();
 
-  EXPECT_TRUE(mock_fcc_ok) <<
-    "mock FCC did not see MISSION_WRITE_PARTIAL_LIST (client fell back to full upload?)";
+  ASSERT_TRUE(mock_fcc_ok) <<
+    "mock FCC did not see a full 3-item re-upload (client sent MISSION_WRITE_PARTIAL_LIST?)";
   EXPECT_TRUE(result);
+  ASSERT_EQ(received.size(), 3U);
+  EXPECT_EQ(received[0].first, items[0].lat);
+  EXPECT_EQ(received[1].first, replacement.lat);
+  EXPECT_EQ(received[1].second, replacement.lon);
+  EXPECT_EQ(received[2].first, items[2].lat);
+}
+
+TEST_F(MissionProtocolClientTest, UpdateMissionItemFailsFastWithoutAPriorUpload)
+{
+  fcc_bridge::MissionProtocolClient client(
+    mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
+
+  // No upload_mission() call at all — current_mission_ is empty, so seq 0
+  // is out of range and this must fail without ever touching the network
+  // (no mock FCC thread here; a stray datagram would fail the test below).
+  const bool result = client.update_mission_item(fcc_bridge::FORMATION_SLOT, make_item(0), 0.3);
+  EXPECT_FALSE(result);
+
+  mavlink_message_t stray;
+  EXPECT_FALSE(recv_frame(fcc_.fd(), 0.1, stray)) <<
+    "update_mission_item() sent something despite no prior upload_mission()";
 }
 
 TEST_F(MissionProtocolClientTest, UpdateMissionItemAbortsOnTimeoutRatherThanBlocking)
@@ -215,14 +267,24 @@ TEST_F(MissionProtocolClientTest, UpdateMissionItemAbortsOnTimeoutRatherThanBloc
   fcc_bridge::MissionProtocolClient client(
     mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
 
-  // No mock FCC thread at all — nothing ever replies.
+  // Seed current_mission_ first so seq=0 is in range and the timeout below
+  // is exercised by the re-upload's own handshake, not the range guard.
+  {
+    std::vector<std::pair<int32_t, int32_t>> received;
+    std::thread mock_fcc(
+      [&] {run_mock_fcc_full_handshake(fcc_.fd(), mc_.addr(), 1, received);});
+    ASSERT_TRUE(client.upload_mission({make_item(0)}));
+    mock_fcc.join();
+  }
+
+  // No mock FCC thread this time — nothing ever replies to the re-upload.
   const auto start = std::chrono::steady_clock::now();
   const bool result =
     client.update_mission_item(fcc_bridge::FORMATION_SLOT, make_item(0), /*timeout_s=*/ 0.3);
   const auto elapsed = std::chrono::steady_clock::now() - start;
 
   EXPECT_FALSE(result);
-  // SDD §5.3: must abort near the requested timeout, not hang the ≥5 Hz
+  // SDD §5.3: must abort near the requested timeout, not hang the ≥2 Hz
   // control loop indefinitely.
   EXPECT_LT(elapsed, std::chrono::seconds(2));
 }

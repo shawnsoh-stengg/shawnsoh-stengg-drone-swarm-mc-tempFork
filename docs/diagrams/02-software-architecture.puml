@@ -123,7 +123,7 @@ package "mission-orchestrator" as C_ORCH #E0F0E8 {
 ' ═══════════════════════════════════════════════════
 package "swarm-coord  [SCAFFOLD — not implemented]" as C_SWARM #E8E0F0;line.dashed {
   component "swarm_coordinator_node  [SCAFFOLD]\nDesign: peer discovery · heartbeat\nISR selection · Voronoi consensus\n(none of this exists in code yet)" as SWARM #D8C8E8;line.dashed
-  component "formation_controller_node  [SCAFFOLD]\nDesign: PD position controller\nNED setpoints ≥5 Hz\n(none of this exists in code yet)" as FORM #E0D0F0;line.dashed
+  component "formation_controller_node  [SCAFFOLD]\nDesign: PD position controller\nNED setpoints ≥2 Hz (FCC-010)\n(none of this exists in code yet)" as FORM #E0D0F0;line.dashed
 }
 
 ' ═══════════════════════════════════════════════════

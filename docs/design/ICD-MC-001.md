@@ -303,16 +303,21 @@ MC  → FCC : MISSION_ITEM_INT(seq = count-1, ...)
 FCC → MC  : MISSION_ACK(MAV_MISSION_ACCEPTED)
 ```
 
-**`update_mission_item(seq, item)` — partial update microservice** (`formation_controller_node`, FR-020/FR-023; ≥ 5 Hz on `FORMATION_SLOT` during INGRESS — a full handshake at this rate would be far too heavyweight):
+**`update_mission_item(seq, item)` — full re-upload with one item replaced** (`formation_controller_node`, FR-020/FR-023; ≥ 2 Hz on `FORMATION_SLOT` during INGRESS):
 
 ```
-MC  → FCC : MISSION_WRITE_PARTIAL_LIST(start = seq, end = seq)
-FCC → MC  : MISSION_REQUEST_INT(seq)
-MC  → FCC : MISSION_ITEM_INT(seq, ...)
+MC  → FCC : MISSION_COUNT(count = current_mission.size())
+FCC → MC  : MISSION_REQUEST_INT(seq = 0)
+MC  → FCC : MISSION_ITEM_INT(seq = 0, ...)
+              ⋮  (repeats for each seq, item `seq` carrying the new value)
+FCC → MC  : MISSION_REQUEST_INT(seq = count-1)
+MC  → FCC : MISSION_ITEM_INT(seq = count-1, ...)
 FCC → MC  : MISSION_ACK(MAV_MISSION_ACCEPTED)
 ```
 
-**Timeout:** no response to `MISSION_REQUEST_INT`/`MISSION_ACK` within 500 ms aborts the transaction; `formation_controller_node` retries on its next 5 Hz tick rather than blocking (SDD §5.3 — mission-mode has no PX4-side staleness safety net, so the MC must not stall its control loop waiting on this handshake).
+**FCC-010 (2026-09-14):** the original design instead sent `MISSION_WRITE_PARTIAL_LIST(start = seq, end = seq)` and expected just a single `MISSION_REQUEST_INT(seq)`/`MISSION_ITEM_INT(seq)`/`MISSION_ACK` exchange — cheaper per cycle, but PX4 has no handler for `MISSION_WRITE_PARTIAL_LIST` at any known firmware version (confirmed against real PX4 source, v1.14.4 through v1.17.0), so it can never be ACKed by real firmware. `update_mission_item()` now re-runs the same full handshake `upload_mission()` uses instead, against the last mission it successfully uploaded, with only item `seq` replaced — requires at least one prior successful `upload_mission()` call. The rate dropped from the original ≥ 5 Hz design to ≥ 2 Hz accordingly, to keep the heavier full handshake within one control-loop period.
+
+**Timeout:** no response to `MISSION_REQUEST_INT`/`MISSION_ACK` within 500 ms aborts the transaction; `formation_controller_node` retries on its next 2 Hz tick rather than blocking (SDD §5.3 — mission-mode has no PX4-side staleness safety net, so the MC must not stall its control loop waiting on this handshake).
 
 ---
 
@@ -1112,7 +1117,7 @@ All internal topics use the `/mc/` namespace. All custom message types are defin
 | `/mc/fcc/odometry` | `nav_msgs/Odometry` | `fcc_bridge_node` | `visual_localisation` | ≥ 20 Hz |
 | `/mc/fcc/imu` | `sensor_msgs/Imu` | `fcc_bridge_node` | `visual_localisation` | ≥ 100 Hz |
 | `/mc/fcc/mission_upload` | `mc_msgs/FccMission` | `mission_manager` | `fcc_bridge_node` | On change (path replace) |
-| `/mc/fcc/mission_item_update` | `mc_msgs/FccMissionItem` | `formation_controller` | `fcc_bridge_node` | ≥ 5 Hz (MISSION, INGRESS) |
+| `/mc/fcc/mission_item_update` | `mc_msgs/FccMissionItem` | `formation_controller` | `fcc_bridge_node` | ≥ 2 Hz (MISSION, INGRESS; FCC-010) |
 | `/mc/fcc/send_command` | `mc_msgs/FccCommand` | `mission_manager`, `health_monitor` | `fcc_bridge_node` | Event-driven |
 | `/mc/fcc/mission_ack` | `mc_msgs/FccMissionAck` | `fcc_bridge_node` | `mission_manager`, `formation_controller` | Event-driven (one per forwarded upload/item-update) |
 | `/mc/fcc/visual_odometry` | `mc_msgs/VisualOdometry` | `visual_localisation` | `fcc_bridge_node` | ≥ 10 Hz (GNSS-denied) |
@@ -1179,7 +1184,7 @@ bool    fcc_link_ok     # uXRCE-DDS bridge alive
 ```
 # Single PX4 mission item — mirrors fcc_bridge::MissionItem. Published
 # standalone on /mc/fcc/mission_item_update (FORMATION_SLOT tracking,
-# >=5 Hz during INGRESS) and reused as the element type of
+# >=2 Hz during INGRESS, FCC-010) and reused as the element type of
 # mc_msgs/FccMission.items (FCC-005).
 std_msgs/Header header
 uint16  seq
@@ -1623,8 +1628,7 @@ uint32  rx_drop_count
 | 10 | `GIMBAL_LINK_LOST` | Gimbal camera RTSP link silent > 3 s (perception-only, no flight failsafe) |
 | 11 | `OFFBOARD_STREAM_STALE` | OFFBOARD setpoint stream age > 500 ms while OFFBOARD confirmed active (SFR-009) — `health_monitor_node` publishes this fault only; `mission_manager_node` executes the fallback (FR-029) |
 | 12 | `VISION_MEM_HIGH` | `vision.service` cgroup memory usage ≥ 80% of its `MemoryMax=6G` cap, sustained (INFRA-007) |
-| 13 | `INDOOR_GNSS_SIM_LOST` | `gnss_sim_node`'s own self-supervision (IGS-005): `/mc/fcc/vehicle_state`/`/mc/sensors/optical_flow` input stale, `eph` exceeded its configured bound, or estimated position deviates too far from the uploaded mission's waypoints — published by `gnss_sim_node` itself, not `health_monitor_node` (same non-duplication precedent as `OFFBOARD_STREAM_STALE`, bit 11) |
-| 14–15 | Reserved | — |
+| 13–15 | Reserved | — |
 
 ### 10.9 Node Alive Mask Bits
 

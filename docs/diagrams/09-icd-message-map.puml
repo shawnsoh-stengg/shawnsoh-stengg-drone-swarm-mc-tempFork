@@ -83,7 +83,7 @@ note over FCC, MC #F5ECF5
 end note
 
 MC -[#C020A0]> FCC : <color:#C020A0>MISSION_COUNT</color>  →  <color:#C020A0>MISSION_ITEM_INT</color> ×N  →  <color:#C020A0>MISSION_ACK</color>\n  full upload, on mission change only  ·  search paths, ingress/muster legs (FR-013)\n  item: seq · frame=GLOBAL_INT · command (NAV_WAYPOINT=16) · lat,lon (degE7) · alt_msl (m) · acceptance_radius (m)
-MC -[#C020A0]> FCC : <color:#C020A0>MISSION_WRITE_PARTIAL_LIST</color>(seq,seq)  →  FCC <color:#C020A0>MISSION_REQUEST_INT</color>  →  <color:#C020A0>MISSION_ITEM_INT</color>  →  <color:#C020A0>MISSION_ACK</color>\n  single-item replace  ≥5 Hz (INGRESS)  ·  seq=0 = FORMATION_SLOT  (FR-020/FR-023)
+MC -[#C020A0]> FCC : <color:#C020A0>MISSION_COUNT</color>  →  <color:#C020A0>MISSION_ITEM_INT</color> ×N  →  <color:#C020A0>MISSION_ACK</color>\n  single-item replace = full re-upload w/ one item changed  ≥2 Hz (INGRESS)  ·  seq=0 = FORMATION_SLOT  (FR-020/FR-023, FCC-010: PX4 has no MISSION_WRITE_PARTIAL_LIST handler)
 
 note over FCC, MC #F5ECF5
   Handshake timeout: 500 ms with no MISSION_REQUEST_INT/MISSION_ACK
@@ -236,7 +236,7 @@ note over FCC, CAM #E8E8F8
   fcc_bridge_node  →  /mc/fcc/vehicle_state (≥10 Hz)  →  mission_manager · formation_controller · gcs_mavlink · health_monitor
   fcc_bridge_node  →  /mc/fault (event, FaultEvent — FCC_LINK_LOST)  →  mission_manager_node
   fcc_bridge_node  →  /mc/fcc/mission_ack (event, FCC-006)  →  mission_manager · formation_controller
-  formation_controller  →  /mc/fcc/mission_item_update (≥5 Hz)  →  fcc_bridge_node (→ FCC mission, seq 0)
+  formation_controller  →  /mc/fcc/mission_item_update (≥2 Hz, FCC-010)  →  fcc_bridge_node (→ FCC mission, seq 0)
   formation_controller  →  /mc/fcc/offboard_setpoint (≥5 Hz, FCC-009)  →  fcc_bridge_node (→ FCC OFFBOARD stream, OFFBOARD-flagged legs only)
   mission_manager  →  /mc/fcc/mission_upload (on change)  →  fcc_bridge_node (→ FCC mission, full replace)
   mission_manager  →  /mc/fcc/send_command (event)  →  fcc_bridge_node (→ FCC vehicle_command, incl. OFFBOARD mode entry/exit)

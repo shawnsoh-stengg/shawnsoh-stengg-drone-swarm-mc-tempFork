@@ -133,13 +133,12 @@ protected:
   // Sends exactly one throwaway datagram from the mock peer so
   // MavlinkUdpBackend learns its address (peer_known_) before a test
   // exercises a path that requires it (send_command, upload_mission,
-  // update_mission_item). Deliberately sent once, not resent inside the
+  // update_mission_item — the latter now itself a full upload_mission()
+  // re-run per FCC-010). Deliberately sent once, not resent inside the
   // poll loop: resending risks a second copy still sitting undrained in
   // recv_loop_'s queue right as a later handshake call grabs
-  // socket_use_mtx_ — MissionProtocolClient's single-shot reads (no
-  // retry-on-mismatch, unlike upload_mission()'s request-wait loop) would
-  // then consume that stale datagram instead of the real protocol reply
-  // and fail immediately. Waits on xy_valid rather than is_link_alive():
+  // socket_use_mtx_, which could be misread as a protocol reply and
+  // confuse the request-wait loop. Waits on xy_valid rather than is_link_alive():
   // last_fcc_msg_time_ is seeded to construction time, so a generous
   // is_link_alive(N) timeout reads "alive" immediately regardless of
   // whether this datagram was actually processed. The trailing sleep gives
@@ -476,7 +475,12 @@ TEST_F(MavlinkUdpBackendTest, UploadMissionCompletesFullHandshakeOverSharedSocke
   EXPECT_TRUE(result);
 }
 
-TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
+// FCC-010: PX4 has no handler for MISSION_WRITE_PARTIAL_LIST at any known
+// version, so update_mission_item() re-runs the full upload handshake
+// instead (see test_mission_protocol_client.cpp for the exhaustive
+// same-mechanism coverage) — this test just confirms that still holds when
+// driven through MavlinkUdpBackend's shared socket, not a dedicated one.
+TEST_F(MavlinkUdpBackendTest, UpdateMissionItemReUploadsFullMissionOverSharedSocket)
 {
   establish_peer();
 
@@ -489,24 +493,63 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
     return i;
   } ();
 
-  // update_mission_item()'s window for the FCC's MISSION_REQUEST_INT reply
-  // is a tight 0.5s (MissionProtocolClient's production default — not
-  // overridable through the FccBackend interface, correctly matching how
-  // mission_manager_node/formation_controller_node call it for real). A
-  // freshly-spawned mock thread can lose that whole budget to OS scheduling
-  // latency before it even calls its first recv_frame(), so synchronize on
-  // mock_ready to confirm it's already blocked in recv() before triggering
-  // the handshake — this narrows the real critical path to a few syscalls,
-  // comfortably inside 0.5s.
+  // Seed the backend's cached mission first — update_mission_item() has
+  // nothing to patch a single item into otherwise.
+  {
+    std::atomic<bool> mock_fcc_ok{false};
+    std::thread mock_fcc([&] {
+        mavlink_message_t msg;
+        if (!recv_frame(fcc_.fd(), 2.0, msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_COUNT) {
+          return;
+        }
+        mavlink_mission_count_t count_msg{};
+        mavlink_msg_mission_count_decode(&msg, &count_msg);
+        if (count_msg.count != 1) {
+          return;
+        }
+        mavlink_message_t req_msg;
+        mavlink_msg_mission_request_int_pack(
+          1, 1, &req_msg, 1, 191, fcc_bridge::FORMATION_SLOT, MAV_MISSION_TYPE_MISSION);
+        send_frame(fcc_.fd(), backend_addr_, req_msg);
+
+        mavlink_message_t item_msg;
+        if (!recv_frame(
+          fcc_.fd(), 2.0,
+          item_msg) || item_msg.msgid != MAVLINK_MSG_ID_MISSION_ITEM_INT)
+        {
+          return;
+        }
+        mavlink_message_t ack_msg;
+        mavlink_msg_mission_ack_pack(
+          1, 1, &ack_msg, 1, 191, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION, 0);
+        send_frame(fcc_.fd(), backend_addr_, ack_msg);
+        mock_fcc_ok = true;
+      });
+    ASSERT_TRUE(backend_->upload_mission({item}));
+    mock_fcc.join();
+    ASSERT_TRUE(mock_fcc_ok);
+  }
+
+  // update_mission_item()'s window for the FCC's reply is a tight 0.5s
+  // (MissionProtocolClient's production default — not overridable through
+  // the FccBackend interface, correctly matching how mission_manager_node/
+  // formation_controller_node call it for real, at the ≥2 Hz FR-023 rate).
+  // A freshly-spawned mock thread can lose that whole budget to OS
+  // scheduling latency before it even calls its first recv_frame(), so
+  // synchronize on mock_ready to confirm it's already blocked in recv()
+  // before triggering the handshake — this narrows the real critical path
+  // to a few syscalls, comfortably inside 0.5s.
   std::atomic<bool> mock_ready{false};
   std::atomic<bool> mock_fcc_ok{false};
   std::thread mock_fcc([&] {
       mock_ready = true;
       mavlink_message_t msg;
-      if (!recv_frame(
-        fcc_.fd(), 2.0,
-        msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_WRITE_PARTIAL_LIST)
-      {
+      if (!recv_frame(fcc_.fd(), 2.0, msg) || msg.msgid != MAVLINK_MSG_ID_MISSION_COUNT) {
+        return;
+      }
+      mavlink_mission_count_t count_msg{};
+      mavlink_msg_mission_count_decode(&msg, &count_msg);
+      if (count_msg.count != 1) {
         return;
       }
 
@@ -537,6 +580,6 @@ TEST_F(MavlinkUdpBackendTest, UpdateMissionItemUsesPartialListOverSharedSocket)
     backend_->update_mission_item(fcc_bridge::FORMATION_SLOT, item);
   mock_fcc.join();
 
-  EXPECT_TRUE(mock_fcc_ok) << "mock SITL peer did not see MISSION_WRITE_PARTIAL_LIST";
+  EXPECT_TRUE(mock_fcc_ok) << "mock SITL peer did not see a full MISSION_COUNT re-upload";
   EXPECT_TRUE(result);
 }
