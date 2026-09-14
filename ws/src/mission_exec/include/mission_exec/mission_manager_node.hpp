@@ -161,7 +161,13 @@ private:
   void publish_phase(bool force);
 
   // --- mission-channel ack-blocking (FCC-006) ---
-  enum class AckKind { NONE, ITEM_UPDATE, UPLOAD };
+  // Both kinds are full mission uploads at the wire level (FCC-010: PX4 has
+  // no MISSION_WRITE_PARTIAL_LIST handler at any known version, so even the
+  // one-item FORMATION_SLOT reservation goes through fcc_bridge's
+  // upload_mission()/`/mc/fcc/mission_upload`, not update_mission_item()/
+  // `/mc/fcc/mission_item_update`) — this enum only disambiguates which
+  // local send_*()/retry function is pending, not the ack's wire type.
+  enum class AckKind { NONE, FORMATION_SLOT_UPLOAD, COVERAGE_PATH_UPLOAD };
   void send_formation_slot_item();
   void send_coverage_path_upload();
   void check_ack_timeout();
@@ -250,7 +256,6 @@ private:
   // phase at a time.
   AckKind pending_ack_kind_{AckKind::NONE};
   uint32_t pending_upload_id_{0};
-  uint16_t pending_seq_{0};
   Phase pending_target_phase_{Phase::PREFLIGHT};
   uint8_t pending_source_{0};
   rclcpp::Time pending_ack_sent_at_;
@@ -287,7 +292,6 @@ private:
   rclcpp::Publisher<mc_msgs::msg::MissionPhase>::SharedPtr pub_mission_phase_;
   rclcpp::Publisher<std_msgs::msg::Header>::SharedPtr pub_heartbeat_;
   rclcpp::Publisher<mc_msgs::msg::FccCommand>::SharedPtr pub_send_command_;
-  rclcpp::Publisher<mc_msgs::msg::FccMissionItem>::SharedPtr pub_mission_item_update_;
   rclcpp::Publisher<mc_msgs::msg::FccMission>::SharedPtr pub_mission_upload_;
   rclcpp::Publisher<mc_msgs::msg::StatusText>::SharedPtr pub_status_text_;
   rclcpp::Publisher<mc_msgs::msg::GcsCommandAck>::SharedPtr pub_command_ack_;

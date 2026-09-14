@@ -548,7 +548,10 @@ TEST_F(FccBridgeNodeMissionForwardingTest, OffboardSetpointForwardsAllFieldsToBa
   EXPECT_FLOAT_EQ(backend_->last_offboard_setpoint_.yaw, 0.75F);
 }
 
-// FCC-005 AC: mission_item_update sustains >=5 Hz without dropping
+// FCC-005 AC: mission_item_update sustains >=2 Hz (lowered from the
+// original >=5 Hz design, FCC-010 — a FORMATION_SLOT update is now a full
+// mission re-upload, not a partial write, so the cadence dropped to keep
+// each re-upload within IR-007's 500 ms budget) without dropping
 // vehicle_state below 10 Hz — i.e. it runs on its own callback group, not
 // serialized behind the vehicle_state timer. A single-threaded spin_some()
 // loop (as used by the other tests here) can't distinguish "separate group"
@@ -566,7 +569,7 @@ TEST_F(FccBridgeNodeMissionForwardingTest, MissionItemUpdatesDoNotBlockVehicleSt
   std::thread spin_thread([&executor] {executor.spin();});
 
   auto item_timer = harness_->create_wall_timer(
-    std::chrono::milliseconds(200),  // 5 Hz, ICD §7.1 rate requirement
+    std::chrono::milliseconds(500),  // 2 Hz, ICD §7.1 rate requirement (FCC-010)
     [this] {
       mc_msgs::msg::FccMissionItem item;
       item.seq = fcc_bridge::FORMATION_SLOT;

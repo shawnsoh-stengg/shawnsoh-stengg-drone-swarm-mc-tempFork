@@ -34,20 +34,30 @@ entry for the full writeup and follow-up tracking):
    non-zero default home elevation (~490m) means the real 2.0m tolerance
    is never satisfiable, and PX4 itself never climbs ("Already higher than
    takeoff altitude"). Worked around via `extra_mission_manager_params`.
-3. `send_formation_slot_item()` (entered via TAKEOFF -> INGRESS's
-   `action_begin_formation_slot_reservation()`) sends
+3. FCC-010, fixed 2026-09-14 (see FCC-MISSION-CHANNEL-BACKLOG.md's entry):
+   `send_formation_slot_item()` (entered via TAKEOFF -> INGRESS's
+   `action_begin_formation_slot_reservation()`) used to send
    `MISSION_WRITE_PARTIAL_LIST(0,0)` expecting PX4 to reply with
-   `MISSION_REQUEST_INT` per SDD-MC-001.md §4.4's "FORMATION_SLOT=0,
-   uploaded during TAKEOFF -> INGRESS" design -- but real PX4 never sends
-   that request for a partial-list update against a mission with zero
-   items already declared (no prior full MISSION_COUNT upload has ever
-   happened at this point in the phase sequence), so
-   `update_mission_item()` times out every retry and mission_manager_node
-   escalates straight to FAULT. This is NOT worked around below (unlike
-   1-2 above) -- it would need either a real mission_exec sequencing
-   change or confirming PX4's actual MISSION_WRITE_PARTIAL_LIST
-   requirements, both out of scope here. test_03 through test_09 are
-   skipped as a result -- see each one's own skip reason.
+   `MISSION_REQUEST_INT` -- but PX4 has no handler for that message at any
+   known firmware version (confirmed against real PX4 source, v1.14.4
+   through v1.17.0), so it could never be ACKed. Fixed by making the
+   FORMATION_SLOT reservation a full (one-item) mission upload instead
+   (`mission_manager_node` now publishes on `/mc/fcc/mission_upload`, not
+   `/mc/fcc/mission_item_update`, for this reservation), and by having
+   `MissionProtocolClient::update_mission_item()` (fcc_bridge) re-run the
+   full upload handshake against the last uploaded mission with one item
+   replaced, rather than a partial write, for any *later* per-tick
+   FORMATION_SLOT update (`formation_controller_node`, SC-001, not yet
+   implemented). The FORMATION_SLOT design cadence dropped from >=5 Hz to
+   >=2 Hz accordingly (SDD §5.1) to keep a full re-upload within one
+   control-loop period.
+   test_03 through test_09 remain `@unittest.skip`'d below: this fix has
+   only been verified via `test_mission_protocol_client.cpp`/
+   `test_mission_manager_node.cpp`'s mock-peer unit/node-integration
+   coverage, not by re-running this module against a real PX4 SITL
+   instance -- do that re-run before removing the skips, per this repo's
+   own "verify against real PX4/live behavior before trusting a fix"
+   convention (this whole finding was itself only caught by a live run).
 """
 import os
 import subprocess
@@ -69,11 +79,11 @@ sys.path.insert(
 import sitl_common  # noqa: E402
 
 _BLOCKED_BY_PARTIAL_MISSION_UPDATE_BUG = (
-    'blocked on a real, pre-existing defect this harness discovered: PX4 never replies to '
-    "send_formation_slot_item()'s MISSION_WRITE_PARTIAL_LIST(0,0) with a MISSION_REQUEST_INT "
-    '(no prior full mission upload has happened at this point), so update_mission_item() times '
-    'out and mission_manager_node escalates to FAULT before reaching INGRESS -- see this '
-    "module's own docstring and PROJECT-PLAN-5-MONTH.md's TEST-002 entry."
+    'FCC-010 fixed 2026-09-14 (full mission re-upload replaces the MISSION_WRITE_PARTIAL_LIST '
+    'mechanism PX4 never implemented, at fcc_bridge/mission_exec code level) -- still skipped '
+    'here pending a real PX4 SITL re-run to confirm test_03 onward actually passes now; do not '
+    "remove these skips without that live verification -- see this module's own docstring and "
+    "PROJECT-PLAN-5-MONTH.md's TEST-002 entry."
 )
 
 PX4_DIR = os.environ.get('PX4_DIR', '')

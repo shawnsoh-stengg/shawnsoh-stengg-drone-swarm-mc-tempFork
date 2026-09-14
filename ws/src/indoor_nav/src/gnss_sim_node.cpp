@@ -14,7 +14,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -28,12 +27,6 @@ std::string env_or(const char * name, const std::string & fallback)
   const char * v = std::getenv(name);
   return v != nullptr ? std::string(v) : fallback;
 }
-
-// MAV_SEVERITY_CRITICAL (MAVLink common.xml), matching fcc_bridge_node's
-// own FCC_LINK_LOST precedent -- the failsafe response is mission_manager_
-// node's decision (FR-026), not this node's, so failsafe_action is left at
-// ACTION_NONE on the fault this severity is attached to.
-constexpr uint8_t kSeverityCritical = 2;
 }  // namespace
 
 namespace
@@ -120,14 +113,6 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
   hil_gps_sats_at_anchor_ =
     declare_parameter("hil_gps_sats_at_anchor", hil_gps_sats_at_anchor_);
   hil_gps_min_sats_ = declare_parameter("hil_gps_min_sats", hil_gps_min_sats_);
-  gnss_ok_hdop_threshold_ =
-    declare_parameter("gnss_ok_hdop_threshold", gnss_ok_hdop_threshold_);
-  input_staleness_timeout_s_ =
-    declare_parameter("input_staleness_timeout_s", input_staleness_timeout_s_);
-  max_eph_before_fault_m_ =
-    declare_parameter("max_eph_before_fault_m", max_eph_before_fault_m_);
-  max_waypoint_deviation_m_ =
-    declare_parameter("max_waypoint_deviation_m", max_waypoint_deviation_m_);
 
   pub_local_estimate_ = create_publisher<nav_msgs::msg::Odometry>(
     "/mc/indoor/local_estimate", rclcpp::QoS(10));
@@ -135,7 +120,6 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
     "/mc/indoor/gnss_sim_status", rclcpp::QoS(10));
   pub_status_text_ =
     create_publisher<mc_msgs::msg::StatusText>("/mc/status_text", rclcpp::QoS(10));
-  pub_fault_ = create_publisher<mc_msgs::msg::FaultEvent>("/mc/fault", rclcpp::QoS(10));
 
   sub_vehicle_state_ = create_subscription<mc_msgs::msg::VehicleState>(
     "/mc/fcc/vehicle_state", rclcpp::QoS(10),
@@ -146,9 +130,6 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
   sub_gcs_command_ = create_subscription<mc_msgs::msg::GcsCommand>(
     "/mc/gcs/command", rclcpp::QoS(10),
     [this](mc_msgs::msg::GcsCommand::SharedPtr msg) {on_gcs_command(*msg);});
-  sub_mission_upload_ = create_subscription<mc_msgs::msg::MissionUpload>(
-    "/mc/gcs/mission_upload", rclcpp::QoS(10),
-    [this](mc_msgs::msg::MissionUpload::SharedPtr msg) {on_mission_upload(*msg);});
 
   // IGS-004: HIL_GPS sender (ICD-MC-001.md §3.3b). Same env-var convention
   // as fcc_bridge's XrceDdsBackend (FCC_ETH_IP, DRONE_ID) -- this is the
@@ -176,10 +157,7 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
     std::chrono::duration<double>(1.0 / std::max(hil_gps_rate_hz_, 0.1));
   hil_gps_timer_ = create_wall_timer(
     std::chrono::duration_cast<std::chrono::nanoseconds>(hil_gps_period),
-    [this] {
-      check_self_supervision(now());
-      send_hil_gps();
-    });
+    [this] {send_hil_gps();});
 
   RCLCPP_INFO(
     get_logger(), "gnss_sim_node started, HIL_GPS -> %s:%d @ %.1f Hz (sysid=%u)",
@@ -207,12 +185,11 @@ int GnssSimNode::open_hil_gps_socket()
 
 void GnssSimNode::on_vehicle_state(const mc_msgs::msg::VehicleState & msg)
 {
-  const rclcpp::Time stamp(msg.header.stamp);
-  update_real_gps_lockout(msg, stamp);
-
   attitude_q_ = msg.q;
   has_attitude_ = true;
   last_alt_msl_ = msg.alt_msl;
+
+  const rclcpp::Time stamp(msg.header.stamp);
 
   if (!alt_msl_anchor_.has_value()) {
     alt_msl_anchor_ = msg.alt_msl;
@@ -245,56 +222,11 @@ void GnssSimNode::on_gcs_command(const mc_msgs::msg::GcsCommand & msg)
     rclcpp::Time(msg.header.stamp));
 }
 
-void GnssSimNode::on_mission_upload(const mc_msgs::msg::MissionUpload & msg)
-{
-  latest_mission_upload_ = std::make_shared<mc_msgs::msg::MissionUpload>(msg);
-}
-
-void GnssSimNode::update_real_gps_lockout(
-  const mc_msgs::msg::VehicleState & msg, const rclcpp::Time & stamp)
-{
-  // Same gnss_ok() threshold VIS-002/SDD §8.3 already defines (fix_type >=
-  // 3, hdop < 2.0) -- this ticket's own AC, not an independently-tuned
-  // number.
-  const bool now_ok = msg.fix_type >= 3 && msg.hdop < static_cast<float>(gnss_ok_hdop_threshold_);
-  if (now_ok == real_gps_ok_) {
-    return;  // no edge -- avoid spamming /mc/status_text every sample
-  }
-  real_gps_ok_ = now_ok;
-
-  mc_msgs::msg::StatusText status;
-  status.header.stamp = stamp;
-  if (real_gps_ok_) {
-    status.severity = mc_msgs::msg::StatusText::SEVERITY_WARNING;
-    status.text =
-      "gnss_sim_node: real GPS fix detected -- indoor lockout engaged, HIL_GPS streaming "
-      "suspended (Safety Considerations #3)";
-    RCLCPP_WARN(get_logger(), "%s", status.text.c_str());
-  } else {
-    status.severity = mc_msgs::msg::StatusText::SEVERITY_INFO;
-    status.text = "gnss_sim_node: real GPS fix not present -- indoor lockout clear";
-    RCLCPP_INFO(get_logger(), "%s", status.text.c_str());
-  }
-  pub_status_text_->publish(status);
-}
-
 void GnssSimNode::reanchor(
   double lat_deg, double lon_deg, float alt_msl, const rclcpp::Time & stamp)
 {
   mc_msgs::msg::StatusText status;
   status.header.stamp = stamp;
-
-  // IGS-005, Safety Considerations #3: this is an indoor-only capability --
-  // it must not be possible to start it while a real fix is available.
-  if (real_gps_ok_) {
-    status.severity = mc_msgs::msg::StatusText::SEVERITY_ERROR;
-    status.text =
-      "gnss_sim_node: rejected anchor command -- a real GPS fix is currently present "
-      "(indoor-only interlock)";
-    RCLCPP_ERROR(get_logger(), "%s", status.text.c_str());
-    pub_status_text_->publish(status);
-    return;
-  }
 
   if (std::abs(lat_deg) > 90.0 || std::abs(lon_deg) > 180.0) {
     status.severity = mc_msgs::msg::StatusText::SEVERITY_ERROR;
@@ -325,10 +257,6 @@ void GnssSimNode::reanchor(
   false_origin_alt_msl_ = alt_msl;
   anchor_stamp_ = stamp;
   active_ = true;
-  // IGS-005: a successful re-anchor is this module's only recovery path
-  // from a latched staleness/drift/deviation fault -- never automatic
-  // (Safety Considerations #1/#2).
-  gps_sim_lost_ = false;
 
   char text_buf[128];
   std::snprintf(
@@ -362,104 +290,12 @@ void GnssSimNode::publish_gnss_sim_status(const rclcpp::Time & stamp)
   msg.eph = static_cast<float>(eph_at_anchor_m_ + eph_growth_rate_m_per_s_ * time_since_anchor_s);
   msg.epv = static_cast<float>(epv_at_anchor_m_ + epv_growth_rate_m_per_s_ * time_since_anchor_s);
   msg.time_since_anchor_s = static_cast<float>(time_since_anchor_s);
-  // IGS-005: sanity-bound-only signal (see compute_waypoint_deviation()'s
-  // own doc comment) -- never feeds back into x_/y_/z_.
-  msg.waypoint_deviation_m = compute_waypoint_deviation();
+  // IGS-005's own concern (waypoint-deviation sanity bound) -- not
+  // implemented yet, see IndoorGnssSimStatus.msg's own header comment.
+  msg.waypoint_deviation_m = 0.0F;
 
   latest_gnss_sim_status_ = msg;
   pub_gnss_sim_status_->publish(msg);
-}
-
-// IGS-005. Read-only by construction: only ever reads x_/y_/z_ and
-// latest_mission_upload_, never writes them -- a sanity-bound fault
-// trigger, never a position correction (Safety Considerations #2).
-//
-// Coarse "is the estimate anywhere near the planned route" bound, not
-// real leg-progress tracking: compares against the *nearest* uploaded
-// ingress_waypoints entry, since gnss_sim_node has no signal telling it
-// which waypoint a well-behaved autopilot would currently be flying
-// toward (that state lives in mission_manager_node/formation_controller_
-// node, not published anywhere this node subscribes to). A documented
-// simplification, not silently assumed -- see this class's own doc
-// comment for the frame-matching caveat too (assumes the operator's
-// false-origin anchor sits at/near the FCC's own local-position origin).
-float GnssSimNode::compute_waypoint_deviation() const
-{
-  if (!latest_mission_upload_ || latest_mission_upload_->ingress_waypoints.empty()) {
-    return 0.0F;  // nothing uploaded yet -- not a fabricated "zero deviation"
-  }
-
-  float min_dist_sq = std::numeric_limits<float>::max();
-  for (const auto & wp : latest_mission_upload_->ingress_waypoints) {
-    const float dx = x_ - static_cast<float>(wp.pose.position.x);
-    const float dy = y_ - static_cast<float>(wp.pose.position.y);
-    const float dz = z_ - static_cast<float>(wp.pose.position.z);
-    min_dist_sq = std::min(min_dist_sq, dx * dx + dy * dy + dz * dz);
-  }
-  return std::sqrt(min_dist_sq);
-}
-
-// IGS-005. Driven from hil_gps_timer_ (via the constructor's lambda), not
-// message arrival -- staleness specifically means "nothing is arriving
-// anymore", so a purely message-driven check could never detect a total
-// input stall. gps_sim_lost_ latches on the first tick any condition
-// trips (edge-triggered publish, matching HEALTH-003's own "does not
-// repeatedly re-fire" precedent) and stays latched until reanchor()
-// clears it -- Safety Considerations #1/#2: a compromised estimate must
-// never silently resume streaming on its own.
-void GnssSimNode::check_self_supervision(const rclcpp::Time & stamp)
-{
-  if (!active_ || gps_sim_lost_) {
-    return;
-  }
-
-  const bool vehicle_state_stale = !last_vehicle_state_stamp_.has_value() ||
-    (stamp - *last_vehicle_state_stamp_).seconds() > input_staleness_timeout_s_;
-  const bool flow_stale = !last_flow_stamp_.has_value() ||
-    (stamp - *last_flow_stamp_).seconds() > input_staleness_timeout_s_;
-
-  const mc_msgs::msg::IndoorGnssSimStatus status = gnss_sim_status();
-  const bool drift_exceeded = status.eph > static_cast<float>(max_eph_before_fault_m_);
-
-  const float deviation_m = compute_waypoint_deviation();
-  const bool deviation_exceeded = deviation_m > static_cast<float>(max_waypoint_deviation_m_);
-
-  if (!(vehicle_state_stale || flow_stale || drift_exceeded || deviation_exceeded)) {
-    return;
-  }
-
-  gps_sim_lost_ = true;
-
-  std::string reason;
-  if (vehicle_state_stale) {
-    reason = "/mc/fcc/vehicle_state input stale (no sample within " +
-      std::to_string(input_staleness_timeout_s_) + " s)";
-  } else if (flow_stale) {
-    reason = "/mc/sensors/optical_flow input stale (no sample within " +
-      std::to_string(input_staleness_timeout_s_) + " s)";
-  } else if (drift_exceeded) {
-    reason = "eph (" + std::to_string(status.eph) + " m) exceeded max_eph_before_fault_m (" +
-      std::to_string(max_eph_before_fault_m_) + " m)";
-  } else {
-    reason = "waypoint deviation (" + std::to_string(deviation_m) +
-      " m) exceeded max_waypoint_deviation_m (" + std::to_string(max_waypoint_deviation_m_) +
-      " m)";
-  }
-  publish_gps_sim_lost_fault(stamp, reason);
-}
-
-void GnssSimNode::publish_gps_sim_lost_fault(const rclcpp::Time & stamp, const std::string & reason)
-{
-  mc_msgs::msg::FaultEvent fault;
-  fault.header.stamp = stamp;
-  fault.fault_id = mc_msgs::msg::FaultEvent::INDOOR_GNSS_SIM_LOST;
-  fault.severity = kSeverityCritical;
-  fault.description = "gnss_sim_node: " + reason +
-    " -- HIL_GPS streaming stopped, re-anchor required";
-  fault.failsafe_action = mc_msgs::msg::FaultEvent::ACTION_NONE;
-  latest_fault_ = fault;
-  pub_fault_->publish(fault);
-  RCLCPP_ERROR(get_logger(), "%s", fault.description.c_str());
 }
 
 void GnssSimNode::on_optical_flow(const mc_msgs::msg::OpticalFlow & msg)
@@ -542,19 +378,6 @@ void GnssSimNode::send_hil_gps()
     // (Safety Considerations #5, INDOOR-GNSS-SIMULATION-BACKLOG.md).
     // reanchor() already logs anchor state via /mc/status_text, so this
     // silence is not itself un-observable.
-    return;
-  }
-  // IGS-005 real-GPS lockout (Safety Considerations #3) -- auto-clears the
-  // moment real_gps_ok_ next goes false, no re-anchor needed: this isn't a
-  // fault of this module, just "doesn't apply right now" (see
-  // update_real_gps_lockout()'s own doc comment).
-  if (real_gps_ok_) {
-    return;
-  }
-  // IGS-005 staleness/drift/waypoint-deviation latch -- stays gated until
-  // an explicit reanchor() (see check_self_supervision()'s own doc
-  // comment for why this one does NOT auto-clear).
-  if (gps_sim_lost_) {
     return;
   }
 

@@ -211,7 +211,7 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | FR-020 | MUST | Test | During INGRESS phase, the MC shall maintain its assigned formation offset (North, East, Down in metres) relative to the formation leader, commanding the FCC in MISSION mode via a continuously-updated mission item, unless the active mission plan flags the leg for OFFBOARD (`offboard_phase_mask`, ICD-MC-001 §9.2), in which case `formation_controller_node` streams OFFBOARD setpoints instead (FR-026–029). |
 | FR-021 | MUST | Demo | Formation offsets for each drone shall be uploaded by the GCS as part of the pre-flight mission upload and stored persistently on the MC across restarts. |
 | FR-022 | MUST | Test | The MC shall receive the formation leader's position and velocity from swarm peer messages at ≥ 5 Hz and compute NED position targets accordingly. |
-| FR-023 | MUST | Test | Formation-keeping position targets shall be converted to geodetic coordinates and pushed to the FCC as a mission item replacement (PX4 mission upload mechanism) at ≥ 5 Hz while in MISSION mode. |
+| FR-023 | MUST | Test | Formation-keeping position targets shall be converted to geodetic coordinates and pushed to the FCC as a mission item replacement (PX4 mission upload mechanism) at ≥ 2 Hz while in MISSION mode. Lowered from an original ≥ 5 Hz design (FCC-010): PX4 has no handler for the partial-write mechanism the mission item replacement was meant to use at any known firmware version, so the MC re-runs a full mission upload per replacement instead — ≥ 2 Hz keeps that heavier handshake within one control-loop period rather than ≥ 5 Hz's tighter budget. |
 | FR-024 | MUST | Test | If the formation leader's state message is not received for > 2 s, the MC shall command FCC HOLD mode and alert the GCS with the reason. |
 | FR-025 | SHOULD | Test | The formation controller shall implement a PD position controller with configurable gains for NED position error, tunable via a ROS 2 parameter file without code recompilation. |
 
@@ -223,7 +223,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 |---|---|---|---|
 | FR-026 | MUST | Test | `mission_manager_node` shall read the per-phase `offboard_phase_mask` from the active mission plan and command the corresponding FCC flight mode (MISSION or OFFBOARD) at each phase entry. It shall be the sole node in the system that commands a flight-mode change; `health_monitor_node` shall never call `send_command()` for a flight-mode change (FR-012, SFR-009). |
 | FR-027 | MUST | Test | Before commanding `DO_SET_MODE OFFBOARD`, the MC shall establish an OFFBOARD setpoint stream at ≥ 2 Hz for at least 1 s, issue the mode command, then confirm entry by observing `/mc/fcc/vehicle_state.nav_state == OFFBOARD` within 1 s. If unconfirmed, the MC shall retry the mode command once; if still unconfirmed, it shall abort the OFFBOARD leg, remain in the vehicle's current mode, and raise fault `OFFBOARD_ENTRY_FAILED`. `formation_controller_node` shall not treat OFFBOARD as active until entry is confirmed. |
-| FR-028 | MUST | Test | While OFFBOARD is the FCC's confirmed active mode, `formation_controller_node` shall publish OFFBOARD position setpoints at ≥ 5 Hz (tracking-quality target, mirrors FR-023's cadence), never below the PX4-imposed 2 Hz floor. |
+| FR-028 | MUST | Test | While OFFBOARD is the FCC's confirmed active mode, `formation_controller_node` shall publish OFFBOARD position setpoints at ≥ 5 Hz (tracking-quality target — independent of FR-023's own cadence, which FCC-010 has since lowered to ≥ 2 Hz for unrelated reasons specific to the MISSION-mode mission-item-replace mechanism), never below the PX4-imposed 2 Hz floor. |
 | FR-029 | MUST | Test | Before commanding `DO_SET_MODE MISSION` to leave OFFBOARD, the MC shall confirm a valid mission is already loaded in FCC-side dataman for the upcoming leg, issue the mode command, then confirm exit by observing `/mc/fcc/vehicle_state.nav_state == MISSION` within 1 s (same retry-once-then-fault behaviour as FR-027) before `formation_controller_node` stops streaming. This is the same exit path used both for a normal phase exit and for the `OFFBOARD_STREAM_STALE` fallback (SFR-009). |
 
 #### 4.1.4 Swarm Coordination
@@ -307,7 +307,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 | IR-004 | MUST | Inspection | The MC shall subscribe to the following PX4 uORB topics via uXRCE-DDS: `vehicle_local_position`, `vehicle_global_position`, `vehicle_status`, `battery_status`, `vehicle_attitude`, `vehicle_odometry`, `sensor_combined`. |
 | IR-005 | MUST | Inspection | The MC shall publish to the following PX4 uORB topics via uXRCE-DDS: `vehicle_command`. |
 | IR-006 | MUST | Test | End-to-end command latency from MC publishing `vehicle_command` to PX4 actuation confirmation shall be ≤ 100 ms. |
-| IR-007 | MUST | Test | The MC shall upload and replace FCC mission items using the standard MAVLink mission protocol (full upload: `MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`; single-item replace: `MISSION_WRITE_PARTIAL_LIST` partial update) over a dedicated UDP port on the 192.168.12.x link, independent of the `FCC_TRANSPORT` DDS transport selection (IR-002). This is the only MAVLink traffic on the MC↔FCC interface — uXRCE-DDS is otherwise used exclusively (stock PX4 has no DDS-writable mission topic). |
+| IR-007 | MUST | Test | The MC shall upload and replace FCC mission items using the standard MAVLink mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) over a dedicated UDP port on the 192.168.12.x link, independent of the `FCC_TRANSPORT` DDS transport selection (IR-002). A single-item replace (e.g. `FORMATION_SLOT`) re-runs this same full handshake against the last uploaded mission with one item changed, rather than `MISSION_WRITE_PARTIAL_LIST` — PX4 has no handler for that message at any known firmware version (FCC-010). This is the only MAVLink traffic on the MC↔FCC interface — uXRCE-DDS is otherwise used exclusively (stock PX4 has no DDS-writable mission topic). |
 
 #### 4.2.2 MC ↔ GCS
 
@@ -358,7 +358,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
 | PR-001 | MUST | Test | Mission state machine update rate: ≥ 10 Hz. |
-| PR-002 | MUST | Test | Formation position setpoints published to FCC: ≥ 5 Hz during INGRESS. |
+| PR-002 | MUST | Test | Formation position setpoints published to FCC: ≥ 2 Hz during INGRESS (lowered from an original ≥ 5 Hz design — FCC-010). |
 | PR-003 | MUST | Test | GCS status telemetry stream rate: ≥ 2 Hz. |
 | PR-004 | MUST | Test | FCC telemetry receive and process rate: ≥ 10 Hz. |
 | PR-005 | MUST | Test | Swarm heartbeat transmit rate: 1 Hz. Peer loss declared after 3 s silence. |
@@ -439,7 +439,7 @@ Manages peer discovery, swarm heartbeat exchange, ISR subnet selection algorithm
 
 #### formation_controller_node
 
-Receives formation leader state from swarm coordinator. Computes NED position targets via PD controller to hold assigned offset, converts to geodetic, and pushes as a mission item replacement. Publishes at ≥ 5 Hz during INGRESS.
+Receives formation leader state from swarm coordinator. Computes NED position targets via PD controller to hold assigned offset, converts to geodetic, and pushes as a mission item replacement. Publishes at ≥ 2 Hz during INGRESS (lowered from an original ≥ 5 Hz design — FCC-010: the replacement is a full mission re-upload, not a partial write).
 
 | Direction | Topics |
 |---|---|

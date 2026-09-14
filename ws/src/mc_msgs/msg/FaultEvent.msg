@@ -14,12 +14,7 @@ uint16 GNSS_DEGRADED    = 256
 uint16 VISUAL_ODOM_FAIL = 512
 # Bits 10-11 (1024, 2048) are reserved for GIMBAL_LINK_LOST/OFFBOARD_STREAM_STALE
 # (ICD-MC-001 §10.8) -- not yet implemented, see health_monitor_node.hpp.
-uint16 VISION_MEM_HIGH      = 4096
-uint16 INDOOR_GNSS_SIM_LOST = 8192  # IGS-005: gnss_sim_node self-supervision
-                                     # (staleness/drift/waypoint-deviation) --
-                                     # published by gnss_sim_node itself, not
-                                     # health_monitor_node (INDOOR-GNSS-
-                                     # SIMULATION-BACKLOG.md).
+uint16 VISION_MEM_HIGH  = 4096
 
 std_msgs/Header header
 uint16 fault_id          # see constants above

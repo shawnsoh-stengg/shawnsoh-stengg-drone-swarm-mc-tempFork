@@ -1,7 +1,7 @@
 # A single PX4 mission item — mirrors fcc_bridge::MissionItem (ICD-MC-001
 # §3.3 "Mission Protocol"). Published standalone on /mc/fcc/mission_item_update
-# (FORMATION_SLOT tracking, >=5 Hz during INGRESS) and reused as the element
-# type of mc_msgs/FccMission.items (FCC-005).
+# (FORMATION_SLOT tracking, >=2 Hz during INGRESS, FCC-010) and reused as the
+# element type of mc_msgs/FccMission.items (FCC-005).
 std_msgs/Header header
 uint16  seq
 uint8   frame               # MAV_FRAME (5 = FRAME_GLOBAL_INT)
