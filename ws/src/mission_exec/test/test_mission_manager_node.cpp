@@ -76,7 +76,7 @@ bool spin_until(
   return false;
 }
 
-constexpr uint8_t kArmingStateStandby = 1;
+constexpr uint8_t kArmingStateDisarmed = 1;
 constexpr uint8_t kArmingStateArmed = 2;
 constexpr uint8_t kNavStateAutoLoiter = 4;
 constexpr uint32_t kMavCmdComponentArmDisarm = 400;
@@ -209,7 +209,7 @@ protected:
     vs.x = 0.0F;
     vs.y = 0.0F;
     vs.z = 0.0F;
-    vs.arming_state = kArmingStateStandby;
+    vs.arming_state = kArmingStateDisarmed;
     vs.nav_state = 0;
     vs.battery_pct = 1.0F;
     vs.gnss_ok = true;

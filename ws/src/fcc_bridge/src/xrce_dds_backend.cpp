@@ -239,11 +239,11 @@ void XrceDdsBackend::on_vehicle_status(const px4_msgs::msg::VehicleStatus::Share
   std::scoped_lock lock(state_mtx_);
   state_.arming_state = msg->arming_state;
   state_.nav_state = msg->nav_state;
-  // NOTE: stock PX4 v1.14+ VehicleStatus has no failure_detector_status
-  // field (ICD §3.2 describes one; that field does not exist upstream —
-  // flagged as a follow-up ICD correction, not fixed here). `failsafe` is
-  // the closest available signal in the meantime.
-  state_.failure_flags = msg->failsafe ? 1U : 0U;
+  // DEP-009: the placeholder this replaced (msg->failsafe as a 0/1 stand-in)
+  // predated the px4_msgs release/1.17 bump — VehicleStatus.failure_detector_status
+  // (ICD §3.2) is a real bitmask field on the actual v1.17 schema, so it's
+  // read directly instead of approximated.
+  state_.failure_flags = msg->failure_detector_status;
   last_fcc_msg_time_ = node_->now();
 }
 

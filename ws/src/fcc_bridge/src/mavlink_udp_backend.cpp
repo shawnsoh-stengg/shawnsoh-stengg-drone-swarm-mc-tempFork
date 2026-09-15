@@ -26,8 +26,8 @@ std::string env_or(const char * name, const std::string & fallback)
 constexpr uint8_t kCompIdOnboardComputer = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
 constexpr uint8_t kTargetSystem = 1;              // PX4 SITL default system ID
 constexpr uint8_t kTargetComponent = 1;           // PX4 SITL default component ID
-constexpr uint8_t kArmingStateStandby = 1;  // ICD-MC-001 §10.2
-constexpr uint8_t kArmingStateArmed = 2;    // ICD-MC-001 §10.2
+constexpr uint8_t kArmingStateDisarmed = 1;  // ICD-MC-001 §10.2
+constexpr uint8_t kArmingStateArmed = 2;     // ICD-MC-001 §10.2
 
 // mc_msgs/VehicleState.msg's own documented gnss_ok definition: "fix_type
 // >= 3 AND hdop < threshold". 2.0 matches ICD-MC-001 §10.8's GNSS_DEGRADED
@@ -256,7 +256,7 @@ void MavlinkUdpBackend::handle_heartbeat(const mavlink_message_t & msg)
   // MAVLink-compliant autopilot -- unlike nav_state, arming has a real
   // standard-dialect bit to read instead of needing PX4-specific decode.
   state_.arming_state = ((hb.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0) ?
-    kArmingStateArmed : kArmingStateStandby;
+    kArmingStateArmed : kArmingStateDisarmed;
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
 }

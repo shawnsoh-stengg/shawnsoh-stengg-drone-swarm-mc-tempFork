@@ -45,7 +45,7 @@ struct CheckResult
 // inputs (rather than assuming an earlier check already rejected a null
 // vehicle_state/mission_upload) so every check is safe to call standalone.
 CheckResult check_fcc_link_alive(const PreArmCheckInputs & in);
-CheckResult check_fcc_standby(const PreArmCheckInputs & in);
+CheckResult check_fcc_disarmed(const PreArmCheckInputs & in);
 CheckResult check_gcs_arm_authorised(const PreArmCheckInputs & in);
 CheckResult check_battery_margin(const PreArmCheckInputs & in);
 CheckResult check_swarm_peers_preflight(const PreArmCheckInputs & in);

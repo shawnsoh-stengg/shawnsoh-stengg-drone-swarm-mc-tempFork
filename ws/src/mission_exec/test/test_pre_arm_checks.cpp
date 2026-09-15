@@ -26,14 +26,17 @@ namespace mission_exec
 namespace
 {
 
-constexpr uint8_t kArmingStateStandby = 1;
+constexpr uint8_t kArmingStateDisarmed = 1;
 constexpr uint8_t kArmingStateArmed = 2;
-constexpr uint8_t kArmingStateStandbyError = 3;
+// DEP-009: PX4 v1.17's arming_state only ever reports 1 or 2 — this value
+// can no longer occur on the wire, but still exercises check_fcc_disarmed()
+// failing closed on any unexpected value.
+constexpr uint8_t kArmingStateUnexpectedValue = 3;
 
 mc_msgs::msg::VehicleState::SharedPtr good_vehicle_state()
 {
   auto vs = std::make_shared<mc_msgs::msg::VehicleState>();
-  vs->arming_state = kArmingStateStandby;
+  vs->arming_state = kArmingStateDisarmed;
   vs->battery_pct = 1.0F;
   vs->gnss_ok = true;
   vs->fcc_link_ok = true;
@@ -94,32 +97,32 @@ TEST(PreArmChecksTest, FccLinkAliveFailsWhenLinkDown)
   in.vehicle_state = vs;
   EXPECT_FALSE(check_fcc_link_alive(in).passed);
   // Independence: a failing link doesn't drag down an unrelated check.
-  EXPECT_TRUE(check_fcc_standby(in).passed);
+  EXPECT_TRUE(check_fcc_disarmed(in).passed);
 }
 
-// --- 2. FCC STANDBY (not STANDBY_ERROR) ---
+// --- 2. FCC DISARMED ---
 
-TEST(PreArmChecksTest, FccStandbyPassesOnStandby)
+TEST(PreArmChecksTest, FccDisarmedPassesOnDisarmed)
 {
-  EXPECT_TRUE(check_fcc_standby(good_inputs()).passed);
+  EXPECT_TRUE(check_fcc_disarmed(good_inputs()).passed);
 }
 
-TEST(PreArmChecksTest, FccStandbyFailsOnArmed)
+TEST(PreArmChecksTest, FccDisarmedFailsOnArmed)
 {
   auto in = good_inputs();
   auto vs = std::make_shared<mc_msgs::msg::VehicleState>(*in.vehicle_state);
   vs->arming_state = kArmingStateArmed;
   in.vehicle_state = vs;
-  EXPECT_FALSE(check_fcc_standby(in).passed);
+  EXPECT_FALSE(check_fcc_disarmed(in).passed);
 }
 
-TEST(PreArmChecksTest, FccStandbyFailsOnStandbyError)
+TEST(PreArmChecksTest, FccDisarmedFailsOnUnexpectedValue)
 {
   auto in = good_inputs();
   auto vs = std::make_shared<mc_msgs::msg::VehicleState>(*in.vehicle_state);
-  vs->arming_state = kArmingStateStandbyError;
+  vs->arming_state = kArmingStateUnexpectedValue;
   in.vehicle_state = vs;
-  EXPECT_FALSE(check_fcc_standby(in).passed);
+  EXPECT_FALSE(check_fcc_disarmed(in).passed);
 }
 
 // --- 3. GCS ARM authorisation ---

@@ -11,9 +11,10 @@ namespace mission_exec
 
 namespace
 {
-// ICD-MC-001 §10.2: STANDBY=1, STANDBY_ERROR=3 — STANDBY_ERROR isn't
-// special-cased; any arming_state other than STANDBY (including it) fails.
-constexpr uint8_t kArmingStateStandby = 1;
+// DEP-009: ICD-MC-001 §10.2's v1.14-era STANDBY/STANDBY_ERROR states no
+// longer exist on the wire — PX4 v1.17 arming_state is DISARMED=1/ARMED=2
+// only, so any value other than DISARMED fails this check.
+constexpr uint8_t kArmingStateDisarmed = 1;
 }  // namespace
 
 CheckResult check_fcc_link_alive(const PreArmCheckInputs & in)
@@ -27,13 +28,13 @@ CheckResult check_fcc_link_alive(const PreArmCheckInputs & in)
   return {true, ""};
 }
 
-CheckResult check_fcc_standby(const PreArmCheckInputs & in)
+CheckResult check_fcc_disarmed(const PreArmCheckInputs & in)
 {
   if (!in.vehicle_state) {
     return {false, "no vehicle_state received yet (cannot verify FCC arming state)"};
   }
-  if (in.vehicle_state->arming_state != kArmingStateStandby) {
-    return {false, "FCC arming_state != STANDBY"};
+  if (in.vehicle_state->arming_state != kArmingStateDisarmed) {
+    return {false, "FCC arming_state != DISARMED"};
   }
   return {true, ""};
 }
@@ -108,7 +109,7 @@ const std::vector<NamedCheck> & all_pre_arm_checks()
 {
   static const std::vector<NamedCheck> kChecks = {
     {"fcc_link_alive", &check_fcc_link_alive},
-    {"fcc_standby", &check_fcc_standby},
+    {"fcc_disarmed", &check_fcc_disarmed},
     {"gcs_arm_authorised", &check_gcs_arm_authorised},
     {"battery_margin", &check_battery_margin},
     {"swarm_peers_preflight", &check_swarm_peers_preflight},

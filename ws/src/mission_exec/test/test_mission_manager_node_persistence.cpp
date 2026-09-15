@@ -60,7 +60,7 @@ bool spin_until(
   return false;
 }
 
-constexpr uint8_t kArmingStateStandby = 1;
+constexpr uint8_t kArmingStateDisarmed = 1;
 
 mc_msgs::msg::VehicleState good_vehicle_state(const rclcpp::Node & clock_source)
 {
@@ -69,7 +69,7 @@ mc_msgs::msg::VehicleState good_vehicle_state(const rclcpp::Node & clock_source)
   vs.lat = 1.3;
   vs.lon = 103.8;
   vs.alt_msl = 40.0F;
-  vs.arming_state = kArmingStateStandby;
+  vs.arming_state = kArmingStateDisarmed;
   vs.battery_pct = 1.0F;
   vs.gnss_ok = true;
   vs.fcc_link_ok = true;
