@@ -8,10 +8,13 @@
     altitude with a downward optical-flow sensor into a local dead-reckoned
     position/velocity estimate (INDOOR-GNSS-SIMULATION-BACKLOG.md, IGS-001),
     converts it to a WGS-84 fix anchored at an operator-declared false
-    origin with a growing eph/epv uncertainty model (IGS-003), and streams
-    it to the FCC as a MAVLink HIL_GPS frame over a new dedicated MC-&gt;FCC
+    origin with a growing eph/epv uncertainty model (IGS-003), streams it
+    to the FCC as a MAVLink HIL_GPS frame over a new dedicated MC-&gt;FCC
     UDP channel (IGS-004; see that ticket's own firmware-verification note
-    for why HIL_GPS, not this proposal's original "GPS_INPUT" guess).
+    for why HIL_GPS, not this proposal's original "GPS_INPUT" guess), and
+    self-supervises with a real-GPS lockout, a staleness/drift watchdog,
+    and a waypoint-deviation sanity bound (IGS-005) so it fails safely
+    instead of compounding a bad estimate into a worse one.
   </description>
   <maintainer email="junhong.lee@stengg.com">Jun Hong Lee</maintainer>
   <license>Proprietary</license>
@@ -21,6 +24,7 @@
   <depend>rclcpp</depend>
   <depend>mc_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
   <depend>mavlink</depend>
 
   <test_depend>ament_lint_auto</test_depend>
