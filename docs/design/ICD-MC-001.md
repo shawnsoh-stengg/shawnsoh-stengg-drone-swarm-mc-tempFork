@@ -1532,6 +1532,15 @@ uint32  rx_drop_count
 
 ### 10.1 PX4 Navigation State (`nav_state`)
 
+**DEP-009 (2026-09-15):** rewritten wholesale against the real `px4_msgs`
+`release/1.17` enum (max value grew from 23 to 31, and several slots PX4
+v1.14 left as `NAVIGATION_STATE_UNUSED*` were reassigned to new named
+states) — not a value-for-value copy of the v1.14 table. This is still an
+abridged list (only the states this repo's code actually references), not
+every `NAVIGATION_STATE_*` PX4 defines. Notably, `AUTO_PRECLAND` moved from
+22 (v1.14) to 20 — the table below reflects the real v1.17 value, not the
+old one.
+
 | Value | Name | Description |
 |---|---|---|
 | 0 | `MANUAL` | Manual mode |
@@ -1540,18 +1549,21 @@ uint32  rx_drop_count
 | 5 | `AUTO_RTL` | Return to launch |
 | 14 | `OFFBOARD` | Offboard control (MC setpoints) |
 | 17 | `AUTO_TAKEOFF` | Autonomous takeoff |
-| 22 | `AUTO_PRECLAND` | Precision landing |
+| 20 | `AUTO_PRECLAND` | Precision landing |
 
 ### 10.2 PX4 Arming State (`arming_state`)
 
+**DEP-009 (2026-09-15):** PX4 v1.17 collapsed the v1.14-era 6-value
+`arming_state` enum (`INIT`/`STANDBY`/`ARMED`/`STANDBY_ERROR`/`SHUTDOWN`/
+`IN_AIR_RESTORE`) down to just 2 values — there is no wire-level "standby
+vs. standby-error" distinction any more. `mission_exec`'s own pre-arm-check
+pass/fail logic (SDD §4.2) is now the only source of that distinction on
+the MC side; the FCC only ever reports disarmed or armed.
+
 | Value | Name |
 |---|---|
-| 0 | `INIT` |
-| 1 | `STANDBY` |
+| 1 | `DISARMED` |
 | 2 | `ARMED` |
-| 3 | `STANDBY_ERROR` |
-| 4 | `SHUTDOWN` |
-| 5 | `IN_AIR_RESTORE` |
 
 ### 10.3 Battery Warning Level
 

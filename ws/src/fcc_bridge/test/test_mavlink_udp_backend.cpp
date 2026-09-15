@@ -278,7 +278,7 @@ TEST_F(MavlinkUdpBackendTest, AggregatesArmingStateFromHeartbeatSafetyArmedBit)
   EXPECT_EQ(backend_->get_vehicle_state().arming_state, 2);
 }
 
-TEST_F(MavlinkUdpBackendTest, ReportsStandbyWhenHeartbeatSafetyArmedBitClear)
+TEST_F(MavlinkUdpBackendTest, ReportsDisarmedWhenHeartbeatSafetyArmedBitClear)
 {
   mavlink_message_t msg;
   mavlink_heartbeat_t hb{};
@@ -289,7 +289,7 @@ TEST_F(MavlinkUdpBackendTest, ReportsStandbyWhenHeartbeatSafetyArmedBitClear)
     wait_until(
       [&] {
         send_frame(fcc_.fd(), backend_addr_, msg);
-        return backend_->get_vehicle_state().arming_state == 1;  // STANDBY, ICD §10.2
+        return backend_->get_vehicle_state().arming_state == 1;  // DISARMED, ICD §10.2
       }, std::chrono::seconds(3)));
 
   EXPECT_EQ(backend_->get_vehicle_state().arming_state, 1);

@@ -896,8 +896,9 @@ void MissionManagerNode::on_control_timer()
   }
 
   if (current_phase_ == Phase::LAND && !mission_complete_logged_) {
-    constexpr uint8_t kArmingStateStandby = 1;
-    if (vehicle_state_ && vehicle_state_->arming_state == kArmingStateStandby) {
+    // DEP-009: PX4 v1.17 arming_state is DISARMED=1/ARMED=2 only (ICD §10.2).
+    constexpr uint8_t kArmingStateDisarmed = 1;
+    if (vehicle_state_ && vehicle_state_->arming_state == kArmingStateDisarmed) {
       action_log_mission_complete();
       mission_complete_logged_ = true;
     }

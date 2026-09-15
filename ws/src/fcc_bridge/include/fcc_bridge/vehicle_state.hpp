@@ -54,10 +54,8 @@ struct VehicleState
   float vdop{0.0F};
   bool gnss_ok{false};
 
-  // See note in XrceDdsBackend::on_vehicle_status — stock PX4 v1.14
-  // VehicleStatus has no failure_detector_status field; this is
-  // currently populated from vehicle_status.failsafe as a placeholder
-  // pending an ICD correction.
+  // DEP-009: populated directly from vehicle_status.failure_detector_status
+  // (ICD §3.2), the real bitmask field on the px4_msgs release/1.17 schema.
   uint16_t failure_flags{0};
 
   rclcpp::Time stamp{};

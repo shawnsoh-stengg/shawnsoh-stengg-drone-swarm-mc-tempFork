@@ -192,6 +192,29 @@ TEST_F(XrceDdsBackendTest, AggregatesArmingAndNavStateFromVehicleStatus)
     px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_AUTO_MISSION);
 }
 
+TEST_F(XrceDdsBackendTest, AggregatesFailureDetectorStatusFromVehicleStatus)
+{
+  // DEP-009: failure_detector_status is a real px4_msgs release/1.17 field
+  // (ICD §3.2) — no longer approximated from `failsafe`.
+  px4_msgs::msg::VehicleStatus msg{};
+  msg.failure_detector_status = px4_msgs::msg::VehicleStatus::FAILURE_BATTERY |
+    px4_msgs::msg::VehicleStatus::FAILURE_MOTOR;
+
+  ASSERT_TRUE(
+    spin_until(
+      node_,
+      [&] {
+        pub_status_->publish(msg);
+        return backend_->get_vehicle_state().failure_flags != 0U;
+      },
+      std::chrono::seconds(3)));
+
+  EXPECT_EQ(
+    backend_->get_vehicle_state().failure_flags,
+    px4_msgs::msg::VehicleStatus::FAILURE_BATTERY |
+    px4_msgs::msg::VehicleStatus::FAILURE_MOTOR);
+}
+
 TEST_F(XrceDdsBackendTest, AggregatesBatteryRemaining)
 {
   px4_msgs::msg::BatteryStatus msg{};
