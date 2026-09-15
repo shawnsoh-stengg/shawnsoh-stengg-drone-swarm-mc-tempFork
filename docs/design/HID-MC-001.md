@@ -224,7 +224,7 @@ If the topics are absent, check:
 |---|---|
 | Interface type | 100BASE-T Ethernet (IEEE 802.3u) |
 | Routing | On-board Ethernet switch / direct trace on baseboard |
-| Jetson interface | `eth0` on Jetson Orin NX (Realtek RTL8211F, 1000BASE-T capable; baseboard may limit to 100 Mbps). Kernel/systemd assigns a PCIe-path predictable name (observed: `enP8p1s0`, board-dependent); Netplan renames it to `eth0` — see §4.2. |
+| Jetson interface | `eth0` on Jetson Orin NX (Realtek RTL8211F, 1000BASE-T capable; baseboard may limit to 100 Mbps). Kernel/systemd assigns a predictable name that varies by baseboard/JetPack combo (observed: `enP8p1s0` on one unit, `eno1` on `jetson-nx-001`); Netplan renames it to `eth0` via MAC-address match — see §4.2. |
 | Pixhawk interface | Pixhawk 6X Ethernet port (100BASE-T, Microchip LAN8742A) |
 | Connector (external) | Holybro baseboard provides an RJ45 port shared with external LAN; internal Pixhawk port is connected via baseboard switch fabric |
 | Cable (if external jumper used) | Cat 5e or better, shielded, ≤ 1 m |
@@ -238,7 +238,7 @@ If the topics are absent, check:
 | Jetson eth0 (MC side) | `192.168.12.1` | 255.255.255.0 | MC endpoint on internal subnet |
 | Pixhawk Ethernet (FCC side) | `192.168.12.31` | 255.255.255.0 | FCC endpoint on internal subnet |
 
-This subnet is isolated from the MANET radio subnet (192.168.10.x). The Jetson has two IP addresses on `eth0` — one on each subnet — configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel, e.g. `enP8p1s0`), the config uses `match`/`set-name` to rename it before assigning addresses, so `eth0` stays the stable logical name used everywhere else in this document:
+This subnet is isolated from the MANET radio subnet (192.168.10.x). The Jetson has two IP addresses on `eth0` — one on each subnet — configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel — observed `enP8p1s0` on one baseboard, `eno1` on another; board-dependent), the config uses `match`/`set-name` to rename it before assigning addresses, so `eth0` stays the stable logical name used everywhere else in this document. It matches by MAC address rather than by kernel name: matching by `name` races udev's own predictable-naming rename on the same boot `add` uevent, and was observed to fail silently on cold boot (interface stayed unmanaged, no IPs). The MAC is unit-specific — this config currently assumes a single physical MC (`jetson-nx-001`); a second Jetson unit would need its own MAC here:
 
 ```yaml
 # /etc/netplan/01-drone-mc.yaml
@@ -247,7 +247,7 @@ network:
   ethernets:
     eth0:
       match:
-        name: enP8p1s0        # actual kernel name; update if it differs per baseboard
+        macaddress: 4c:bb:47:c4:2d:6e   # jetson-nx-001's onboard NIC; update if the NIC is replaced
       set-name: eth0
       addresses:
         - 192.168.10.11/24    # MANET-facing address (HIF-004)

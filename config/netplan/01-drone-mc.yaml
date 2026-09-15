@@ -18,6 +18,13 @@
 # resolves deterministically every boot. If the NIC (and thus its MAC) is
 # ever replaced, update `match.macaddress` here.
 #
+# macaddress below is jetson-nx-001's onboard NIC (enumerates as "eno1" on
+# this baseboard/JetPack combo, not "enP8p1s0" — confirms the naming-varies
+# warning above). This value is unit-specific: this file assumes a single
+# physical MC. If/when a second Jetson unit is provisioned (peer MCs,
+# 192.168.10.12+), this match needs to become per-host (e.g. templated by
+# hostname) rather than a single hardcoded MAC.
+#
 # eth0 carries two subnets:
 #   192.168.10.11/24 — MANET-facing address (HIF-004): GCS, peer MCs
 #   192.168.12.1/24  — FCC-internal address (HIF-002): Pixhawk Ethernet fallback
@@ -26,7 +33,7 @@ network:
   ethernets:
     eth0:
       match:
-        macaddress: 3c:6d:66:c3:a6:39
+        macaddress: 4c:bb:47:c4:2d:6e
       set-name: eth0
       addresses:
         - 192.168.10.11/24
