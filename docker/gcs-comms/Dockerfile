@@ -60,8 +60,7 @@ RUN bash -c "\
 # upstream's own package.xml; rosdep is the same mechanism this repo
 # already trusts colcon/ament with everywhere else.
 COPY docker/gcs-comms/mavros.repos /tmp/mavros.repos
-RUN mkdir -p src/mavros_ros2 \
-    && vcs import src/mavros_ros2 < /tmp/mavros.repos \
+RUN vcs import src < /tmp/mavros.repos \
     && rm -rf src/mavros_ros2/mavros_msgs
 RUN apt-get update
 RUN bash -c "\
@@ -80,6 +79,16 @@ RUN bash -c "\
 FROM ${ROS2_CORE_IMAGE} AS runtime
 COPY --from=builder /opt/drone-mc/install /opt/drone-mc/install
 COPY --from=builder /opt/ros/humble/install /opt/ros/humble/install
+
+# geographiclib-tools: the install_geographiclib_datasets.sh script below
+# needs its geographiclib-get-geoids/geographiclib-datasets-download CLI
+# tools at runtime, in THIS stage — rosdep installed it in the builder
+# stage (DEP-009 follow-up above), but multi-stage COPY only brings across
+# the /opt/ros/humble/install and /opt/drone-mc/install trees named below,
+# not arbitrary system packages apt put elsewhere in the builder image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        geographiclib-tools \
+    && rm -rf /var/lib/apt/lists/*
 
 # install_geographiclib_datasets.sh is NOT optional, despite this file's
 # former comment claiming it only matters for plugins nothing here uses
