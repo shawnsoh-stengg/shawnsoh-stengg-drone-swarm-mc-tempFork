@@ -48,8 +48,45 @@ if ! command -v netplan &>/dev/null; then
     apt-get install -y --no-install-recommends netplan.io
 fi
 
-echo "==> Installing /etc/netplan/01-drone-mc.yaml (HIF-002/HIF-004 dual-IP eth0)"
-install -m 600 "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" /etc/netplan/01-drone-mc.yaml
+if ! command -v envsubst &>/dev/null; then
+    echo "==> envsubst not found, installing gettext-base"
+    if ! timeout 10 getent hosts archive.ubuntu.com &>/dev/null; then
+        echo "ERROR: cannot resolve archive.ubuntu.com — check network connectivity" \
+             "and retry." >&2
+        exit 1
+    fi
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10
+    apt-get install -y --no-install-recommends gettext-base
+fi
+
+# INFRA-008: config/netplan/01-drone-mc.yaml is an envsubst template
+# (MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP) — /etc/drone-mc/environment is
+# this drone's source of truth for those values, so it must exist before
+# rendering. This mirrors 02-install-systemd-units.sh's own idempotent
+# provisioning of the same file: install the repo default only if this
+# drone has no per-drone copy yet, never overwrite an existing one.
+echo "==> Provisioning /etc/drone-mc/environment (for netplan template rendering)"
+mkdir -p /etc/drone-mc
+if [[ -f /etc/drone-mc/environment ]]; then
+    echo "    /etc/drone-mc/environment already exists — leaving per-drone values untouched."
+else
+    install -m 644 "${REPO_ROOT}/config/environment" /etc/drone-mc/environment
+    echo "    Installed default environment. Edit DRONE_ID/MC_ETH_MAC/MC_ETH_IP/" \
+         "MC_ETH_INTERNAL_IP/FCC_TRANSPORT for this vehicle, then re-run this" \
+         "script to render netplan with the real values."
+fi
+
+echo "==> Rendering /etc/netplan/01-drone-mc.yaml (HIF-002/HIF-004 dual-IP eth0)"
+set -a
+# shellcheck disable=SC1091
+source /etc/drone-mc/environment
+set +a
+RENDERED_NETPLAN="$(mktemp)"
+trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
+envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_INTERNAL_IP' \
+    < "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" > "${RENDERED_NETPLAN}"
+install -m 600 "${RENDERED_NETPLAN}" /etc/netplan/01-drone-mc.yaml
 netplan apply
 
 echo "==> Installing /etc/udev/rules.d/99-drone-mc.rules (HIF-001 ttyTHS1 permissions)"

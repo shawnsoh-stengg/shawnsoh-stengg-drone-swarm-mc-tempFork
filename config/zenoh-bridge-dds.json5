@@ -11,15 +11,20 @@
 // MANET link than DDS's own discovery protocol — CycloneDDS still runs
 // per-drone, but nothing in it reaches across hosts anymore.
 //
-// Per-drone deployment: extend the connect endpoints below with every
-// other swarm member's eth0 address (192.168.10.1N, SRS §2.3/ICD §9.4)
-// before deploying a swarm larger than the two peers shown here as an
-// example — this mirrors the "extend the Peers list" habit the old
-// cyclonedds.xml Discovery/Peers list already established, just relocated.
+// INFRA-008: this file is an envsubst template, not the file installed
+// directly — scripts/02-install-systemd-units.sh generates
+// ${CONNECT_ENDPOINTS} from config/fleet.yaml (the fleet-wide drone_id ->
+// eth0 IP manifest) minus this drone's own DRONE_ID
+// (/etc/drone-mc/environment), then renders this file to
+// /etc/drone-mc/zenoh-bridge-dds.json5. Adding a new swarm member is: add
+// one line to config/fleet.yaml, re-run 02-install-systemd-units.sh on
+// every drone (including the new one) — not hand-editing this file or the
+// rendered output per drone as before.
 //
-// SITL/dev: if there are no other hosts on the network, leave "connect"
-// empty (an idle bridge with peer mode and no reachable peers is harmless)
-// — all SITL nodes are on one host and never need this bridge.
+// SITL/dev: if there are no other hosts on the network (or config/fleet.yaml
+// doesn't exist yet), ${CONNECT_ENDPOINTS} renders empty and "connect" is
+// left empty (an idle bridge with peer mode and no reachable peers is
+// harmless) — all SITL nodes are on one host and never need this bridge.
 {
   // Bridges whichever DDS domain this drone's containers use
   // ($ROS_DOMAIN_ID, /etc/drone-mc/environment) — not hardcoded here.
@@ -47,10 +52,11 @@
   // used to document for eth0.
   scouting: { multicast: { enabled: false } },
 
-  // This drone's own peer MCs (SRS §2.3 example: Peer MC #2 at .12, Peer MC
-  // #3 at .13 — this drone's own address is not listed). A future GCS-side
-  // zenoh endpoint, if one is ever stood up, would be added here the same
-  // way — GCS software itself stays out of this repo's scope (SRS §1.4).
-  connect: { endpoints: ["tcp/192.168.10.12:7447", "tcp/192.168.10.13:7447"] },
+  // This drone's own peer MCs, generated from config/fleet.yaml (this
+  // drone's own address is excluded by construction). A future GCS-side
+  // zenoh endpoint, if one is ever stood up, would be added to fleet.yaml
+  // the same way — GCS software itself stays out of this repo's scope
+  // (SRS §1.4).
+  connect: { endpoints: [${CONNECT_ENDPOINTS}] },
   listen: { endpoints: ["tcp/0.0.0.0:7447"] },
 }
