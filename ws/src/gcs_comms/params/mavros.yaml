@@ -1,7 +1,9 @@
-# MAVROS (ros-humble-mavros, apt package — not a gcs_comms build/link
-# dependency; see CMakeLists.txt's own header comment on why
-# gcs_mavlink_node deliberately doesn't link MAVROS, which this file does
-# not change). Minimal override on top of mavros_node's own defaults —
+# MAVROS (built from source, docker/gcs-comms/Dockerfile — DEP-009
+# follow-up, 2026-09-15: ros-humble-mavros's apt binary was pulled
+# upstream; not a gcs_comms build/link dependency either way, see
+# CMakeLists.txt's own header comment on why gcs_mavlink_node deliberately
+# doesn't link MAVROS, which this file does not change). Minimal override
+# on top of mavros_node's own defaults —
 # everything else (plugin allowlist, message rates) is whatever the
 # package ships out of the box.
 #

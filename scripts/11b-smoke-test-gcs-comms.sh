@@ -17,8 +17,11 @@
 #
 # Set LIVE_CHECK=1 to additionally build/run the actual image (requires
 # scripts/11-build-gcs-comms-image.sh to have succeeded on this host, and
-# network access for apt to fetch ros-humble-mavros): verifies AC1 (both
-# nodes registered within 30 s) and AC3 (kill -> fresh restart re-establishes
+# network access for its apt installs + the mavros/libmavconn from-source
+# build stage's vcs import/rosdep — DEP-009 follow-up, 2026-09-15:
+# ros-humble-mavros's own apt binary was pulled upstream, see
+# docker/gcs-comms/Dockerfile's own comment): verifies AC1 (both nodes
+# registered within 30 s) and AC3 (kill -> fresh restart re-establishes
 # both nodes within 15 s).
 set -euo pipefail
 
@@ -48,7 +51,16 @@ check "entrypoint.sh present"      test -f "${ENTRYPOINT}"
 check "entrypoint.sh is executable" test -x "${ENTRYPOINT}"
 check "systemd unit present"       test -f "${UNIT}"
 
-check "Dockerfile installs ros-humble-mavros" grep -q 'ros-humble-mavros' "${DOCKERFILE}"
+# DEP-009 follow-up (2026-09-15): ros-humble-mavros's own apt binary was
+# pulled upstream (confirmed absent from the real Packages index, any
+# architecture) — mavros/libmavconn are now a from-source build stage
+# pinned via docker/gcs-comms/mavros.repos, not a plain apt-get install.
+check "Dockerfile pins mavros.repos for the from-source build" \
+    grep -q 'mavros.repos' "${DOCKERFILE}"
+check "Dockerfile builds mavros via colcon" \
+    grep -qE -- '--packages-up-to mavros\b' "${DOCKERFILE}"
+check "mavros.repos pins the real upstream mavlink/mavros.git" \
+    grep -q 'https://github.com/mavlink/mavros.git' "${REPO_ROOT}/docker/gcs-comms/mavros.repos"
 
 # SDD-MC-001.md §11.1's GCS-005 update: MAVROS runs as a second OS process
 # in this container, not a library dependency of gcs_mavlink_node itself —

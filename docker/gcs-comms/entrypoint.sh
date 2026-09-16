@@ -19,16 +19,11 @@ set -euo pipefail
 # unbound variable" — nounset is relaxed for just these lines, same as
 # docker/mission-exec/entrypoint.sh and docker/health-monitor/entrypoint.sh.
 set +u
+# DEP-009 follow-up (2026-09-15): mavros/libmavconn are now built from
+# source straight into this same /opt/ros/humble/install prefix (no more
+# ros-humble-mavros apt package, no more separate dpkg prefix to source —
+# see docker/gcs-comms/Dockerfile's own comment for why).
 source /opt/ros/humble/install/setup.bash
-# ros-humble-mavros (apt package) lands under the dpkg prefix
-# /opt/ros/humble, a different subtree than this base image's own
-# source-built /opt/ros/humble/install — ros2-core's ENV AMENT_PREFIX_PATH/
-# CMAKE_PREFIX_PATH already covers both for package *lookup*, but running
-# an apt-installed node's actual binary also needs whatever
-# LD_LIBRARY_PATH/PYTHONPATH the dpkg-provided /opt/ros/humble/setup.bash
-# sets up — source it too, defensively, same optional-source guard
-# ros2-core/Dockerfile's own .bashrc lines use.
-[[ -f /opt/ros/humble/setup.bash ]] && source /opt/ros/humble/setup.bash
 source /opt/drone-mc/install/setup.bash
 set -u
 

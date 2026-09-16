@@ -1640,7 +1640,8 @@ the MC side; the FCC only ever reports disarmed or armed.
 | 10 | `GIMBAL_LINK_LOST` | Gimbal camera RTSP link silent > 3 s (perception-only, no flight failsafe) |
 | 11 | `OFFBOARD_STREAM_STALE` | OFFBOARD setpoint stream age > 500 ms while OFFBOARD confirmed active (SFR-009) — `health_monitor_node` publishes this fault only; `mission_manager_node` executes the fallback (FR-029) |
 | 12 | `VISION_MEM_HIGH` | `vision.service` cgroup memory usage ≥ 80% of its `MemoryMax=6G` cap, sustained (INFRA-007) |
-| 13–15 | Reserved | — |
+| 13 | `INDOOR_GNSS_SIM_LOST` | `gnss_sim_node`'s own self-supervision (IGS-005): `/mc/fcc/vehicle_state`/`/mc/sensors/optical_flow` input stale, `eph` exceeded its configured bound, or estimated position deviates too far from the uploaded mission's waypoints — published by `gnss_sim_node` itself, not `health_monitor_node` (same non-duplication precedent as `OFFBOARD_STREAM_STALE`, bit 11) |
+| 14–15 | Reserved | — |
 
 ### 10.9 Node Alive Mask Bits
 

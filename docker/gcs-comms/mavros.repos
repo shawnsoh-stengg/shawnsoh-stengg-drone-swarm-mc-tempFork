@@ -1,0 +1,5 @@
+repositories:
+  mavros_ros2:
+    type: git
+    url: https://github.com/mavlink/mavros.git
+    version: 2.15.1

@@ -7,10 +7,24 @@
 # telemetry for the still-unbuilt Mission Orchestrator App integration
 # (SDD-MC-001.md §11.1's GCS-005 update).
 #
-# Unlike fcc-bridge's Micro XRCE-DDS Agent (no arm64 apt package, built
-# from source in its own stage), ros-humble-mavros ships a prebuilt arm64
-# deb — no extra build stage needed, just an apt-get install in the
-# runtime stage alongside the colcon-built install tree.
+# DEP-009 follow-up (2026-09-15): ros-humble-mavros (the plain apt package
+# this Dockerfile used to install) no longer has a prebuilt binary on
+# packages.ros.org for Humble, on any architecture — confirmed absent from
+# the real upstream Packages index (amd64 and arm64 both), not an
+# arm64-only or transient-network gap. Only ros-humble-mavros-msgs (pure
+# .msg/.srv, no C++ node) survived. So, like fcc-bridge's Micro XRCE-DDS
+# Agent, mavros/libmavconn now get their own from-source build stage —
+# pinned to the real upstream mavlink/mavros.git tag 2.15.1
+# (docker/gcs-comms/mavros.repos). mavros_extras/test_mavros/
+# mavros_examples are never selected (only `mavros` is passed to
+# --packages-up-to below) — this project only runs plain `mavros_node`
+# (docker/gcs-comms/entrypoint.sh), no mavros_extras plugins.
+#
+# Built into /opt/ros/humble/install (ros2-core's own source-built prefix,
+# baked into every service image — NOT /opt/drone-mc/install, which
+# production bind-mounts over with a host-built tree that only ever
+# contains this repo's own ws/src/ packages and would otherwise shadow a
+# baked-in mavros/libmavconn entirely).
 #
 # In production, drone-mc-gcs-comms.service bind-mounts the host-built
 # /opt/drone-mc/install over this image's own copy (same "shared workspace
@@ -36,17 +50,44 @@ RUN bash -c "\
       --packages-up-to gcs_comms \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF"
 
+# mavros/libmavconn from source (see the file-level comment above for why).
+# mavros_msgs is deliberately NOT checked out — mavros's own <depend>
+# mavros_msgs</depend> is satisfied by the still-real ros-humble-mavros-msgs
+# apt package instead, resolved by rosdep below like every other system/ROS
+# build dependency mavros's package.xml declares (eigen, geographiclib,
+# libconsole-bridge-dev, diagnostic_updater, angles, eigen_stl_containers,
+# mavlink, ...) — hand-enumerating those here would silently drift from
+# upstream's own package.xml; rosdep is the same mechanism this repo
+# already trusts colcon/ament with everywhere else.
+COPY docker/gcs-comms/mavros.repos /tmp/mavros.repos
+RUN vcs import src < /tmp/mavros.repos \
+    && rm -rf src/mavros_ros2/mavros_msgs
+RUN apt-get update
+RUN bash -c "\
+    source /opt/ros/humble/install/setup.bash && \
+    rosdep update --rosdistro humble && \
+    rosdep install --from-paths src/mavros_ros2 --ignore-src -y --rosdistro humble" \
+    && rm -rf /var/lib/apt/lists/*
+RUN bash -c "\
+    source /opt/ros/humble/install/setup.bash && \
+    colcon build \
+      --merge-install \
+      --install-base /opt/ros/humble/install \
+      --packages-up-to mavros \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF"
+
 FROM ${ROS2_CORE_IMAGE} AS runtime
 COPY --from=builder /opt/drone-mc/install /opt/drone-mc/install
+COPY --from=builder /opt/ros/humble/install /opt/ros/humble/install
 
-# ros-humble-mavros: mavros_node executable (GCS-005). Not installed in
-# ros2-core (the shared base for every service container) — no other
-# service needs it, and keeping it out of the base image matches this
-# project's existing minimal-toolchain-per-service pattern (mavlink-router
-# and zenoh-bridge are similarly standalone, not built FROM ros2-core at
-# all).
+# geographiclib-tools: the install_geographiclib_datasets.sh script below
+# needs its geographiclib-get-geoids/geographiclib-datasets-download CLI
+# tools at runtime, in THIS stage — rosdep installed it in the builder
+# stage (DEP-009 follow-up above), but multi-stage COPY only brings across
+# the /opt/ros/humble/install and /opt/drone-mc/install trees named below,
+# not arbitrary system packages apt put elsewhere in the builder image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ros-humble-mavros \
+        geographiclib-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # install_geographiclib_datasets.sh is NOT optional, despite this file's
@@ -56,10 +97,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ("File not readable .../egm96-5.pgm") if the geoid dataset is missing,
 # aborting mavros_node before it ever reaches a ready state. Confirmed on
 # a real ros-humble-mavros install, not assumed. Needs real internet
-# access for its download, same INFRA-006 reasoning as the apt-get above
-# — scripts/11-build-gcs-comms-image.sh's `docker build --network=host`
-# already covers this RUN step too.
-RUN /opt/ros/humble/lib/mavros/install_geographiclib_datasets.sh
+# access for its download, same INFRA-006 reasoning as the builder stage's
+# vcs import/rosdep above — scripts/11-build-gcs-comms-image.sh's
+# `docker build --network=host` already covers this RUN step too. Script
+# path unchanged by the from-source build — mavros/libmavconn's own CMake
+# installs it to the same relative `lib/mavros/` location regardless of
+# which prefix they're installed under.
+RUN /opt/ros/humble/install/lib/mavros/install_geographiclib_datasets.sh
 
 COPY ws/src/gcs_comms/params/default.yaml /etc/drone-mc/params/gcs_comms.yaml
 COPY ws/src/gcs_comms/params/mavros.yaml /etc/drone-mc/params/mavros.yaml

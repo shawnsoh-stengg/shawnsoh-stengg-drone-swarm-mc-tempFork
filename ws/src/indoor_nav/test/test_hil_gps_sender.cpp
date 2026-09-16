@@ -149,6 +149,16 @@ TEST_F(HilGpsSenderTest, SendsCorrectHilGpsFrameFromKnownFix)
   constexpr float kAltMsl0 = 50.0F;
   constexpr float kAltMsl1 = 45.0F;  // climbed 5 m since anchor
 
+  // IGS-005: real_gps_ok_ starts true (fail-safe default) until a real
+  // /mc/fcc/vehicle_state sample proves otherwise -- vs0's default
+  // fix_type=0 does that, so it must arrive before the anchor attempt or
+  // reanchor() rejects it (indoor-only interlock).
+  mc_msgs::msg::VehicleState vs0;
+  vs0.header.stamp = stamp_at(1000.0);
+  vs0.q = {1.0F, 0.0F, 0.0F, 0.0F};  // identity: body frame == local NED frame
+  vs0.alt_msl = kAltMsl0;
+  node_->on_vehicle_state(vs0);
+
   mc_msgs::msg::GcsCommand anchor;
   anchor.header.stamp = stamp_at(1000.0);
   anchor.command = indoor_nav::kMcCmdIndoorGnssSimAnchor;
@@ -156,12 +166,6 @@ TEST_F(HilGpsSenderTest, SendsCorrectHilGpsFrameFromKnownFix)
   anchor.params[1] = static_cast<float>(kLonDeg);
   anchor.params[2] = kAltMsl0;
   node_->on_gcs_command(anchor);
-
-  mc_msgs::msg::VehicleState vs0;
-  vs0.header.stamp = stamp_at(1000.0);
-  vs0.q = {1.0F, 0.0F, 0.0F, 0.0F};  // identity: body frame == local NED frame
-  vs0.alt_msl = kAltMsl0;
-  node_->on_vehicle_state(vs0);
 
   mc_msgs::msg::OpticalFlow flow0;
   flow0.header.stamp = stamp_at(1000.0);

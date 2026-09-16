@@ -23,8 +23,11 @@ if ! docker image inspect "${ROS2_CORE_IMAGE}" &>/dev/null; then
 fi
 
 # INFRA-006: see 08-build-fcc-bridge-image.sh's own comment on this —
-# fail in seconds with a clear diagnosis instead of burning minutes
-# inside a doomed `apt-get update` (ros-humble-mavros install below).
+# fail in seconds with a clear diagnosis instead of burning minutes inside
+# a doomed apt-get update/rosdep update/vcs import (DEP-009 follow-up,
+# 2026-09-15: mavros/libmavconn are now a from-source build stage, needing
+# github.com as well as the apt mirrors — ros-humble-mavros's own apt
+# binary was pulled upstream, see docker/gcs-comms/Dockerfile's comment).
 echo "==> Checking build-time network reachability"
 if ! docker run --rm --network=host ubuntu:22.04 \
     bash -c 'getent hosts ports.ubuntu.com || getent hosts archive.ubuntu.com' &>/dev/null
@@ -32,14 +35,26 @@ then
     cat >&2 <<'NETERR'
 ==> ERROR: a "docker run --network=host ubuntu:22.04" container can't
     resolve ports.ubuntu.com/archive.ubuntu.com. This build needs real
-    internet access for the ros-humble-mavros apt-get install. Diagnose
-    with:
+    internet access for its apt-get installs and rosdep-resolved
+    dependencies. Diagnose with:
       getent hosts ports.ubuntu.com                                    # host DNS
       sudo docker run --rm --network=host ubuntu:22.04 \
           getent hosts ports.ubuntu.com                                # container DNS via host networking
     If the host command also fails, this is a host-level network/DNS
     problem (bad /etc/resolv.conf, DHCP, firewall) -- not something any
     docker build flag can work around.
+NETERR
+    exit 1
+fi
+if ! docker run --rm --network=host ubuntu:22.04 \
+    bash -c 'getent hosts github.com' &>/dev/null
+then
+    cat >&2 <<'NETERR'
+==> ERROR: a "docker run --network=host ubuntu:22.04" container can't
+    resolve github.com. This build needs it for the mavros/libmavconn
+    from-source build stage's `vcs import` (docker/gcs-comms/mavros.repos)
+    — the apt mirrors alone aren't enough. Diagnose the same way as the
+    apt-mirror check above, substituting github.com.
 NETERR
     exit 1
 fi
