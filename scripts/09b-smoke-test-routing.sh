@@ -27,9 +27,9 @@ set -euo pipefail
 
 PASS=0; FAIL=0
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONF_A="${REPO_ROOT}/config/mavlink-router-channel-a.conf"
-CONF_B="${REPO_ROOT}/config/mavlink-router-channel-b.conf"
-CONF_C="${REPO_ROOT}/config/mavlink-router-channel-c.conf"
+TMPL_A="${REPO_ROOT}/config/mavlink-router-channel-a.conf"
+TMPL_B="${REPO_ROOT}/config/mavlink-router-channel-b.conf"
+TMPL_C="${REPO_ROOT}/config/mavlink-router-channel-c.conf"
 ENTRYPOINT="${REPO_ROOT}/docker/mavlink-router/entrypoint.sh"
 UNIT="${REPO_ROOT}/config/systemd/drone-mc-mavlink-router.service"
 INSTALL_SCRIPT="${REPO_ROOT}/scripts/02-install-systemd-units.sh"
@@ -45,8 +45,25 @@ check() {
     fi
 }
 
-check "channel-a.conf present"  test -f "${CONF_A}"
-check "channel-b.conf present"  test -f "${CONF_B}"
+check "channel-a.conf present"  test -f "${TMPL_A}"
+check "channel-b.conf present"  test -f "${TMPL_B}"
+
+# INFRA-008: these three .conf files are envsubst templates now — render
+# them against representative (production-default) values before asserting
+# content, same as scripts/02-install-systemd-units.sh does against a real
+# drone's /etc/drone-mc/environment. Every check below keeps asserting the
+# exact same literal values as before this change.
+RENDER_DIR="$(mktemp -d)"
+trap 'rm -rf "${RENDER_DIR}"' EXIT
+: "${FCC_GCS_IP:=192.168.10.31}"
+: "${GCS_IP:=192.168.10.10}"
+export FCC_GCS_IP GCS_IP
+CONF_A="${RENDER_DIR}/mavlink-router-channel-a.conf"
+CONF_B="${RENDER_DIR}/mavlink-router-channel-b.conf"
+CONF_C="${RENDER_DIR}/mavlink-router-channel-c.conf"
+envsubst '$FCC_GCS_IP' < "${TMPL_A}" > "${CONF_A}"
+envsubst '$GCS_IP' < "${TMPL_B}" > "${CONF_B}"
+envsubst '$GCS_IP' < "${TMPL_C}" > "${CONF_C}"
 
 # Channel A: GCS<->FCC only, port 14550.
 check "channel-a: FCC endpoint at 192.168.10.31:14550" \
@@ -90,7 +107,7 @@ check "channel-b: no Channel C ports (14571/14572/14580)" \
 # end-to-end MAVFTP) is verified by
 # 15b-smoke-test-mission-orchestrator.sh — this is only the isolation
 # property, matching this file's existing scope for A/B.
-check "channel-c.conf present" test -f "${CONF_C}"
+check "channel-c.conf present" test -f "${TMPL_C}"
 check "channel-c: Orchestrator endpoint at 192.168.10.10:14571" \
     grep -qE 'Address = 192\.168\.10\.10' "${CONF_C}"
 check "channel-c: mission_orchestrator_node loopback at 127.0.0.1:14580" \
@@ -132,7 +149,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     done
 
     WORKDIR="$(mktemp -d)"
-    trap 'rm -rf "${WORKDIR}"; [[ -n "${cid:-}" ]] && docker rm -f "${cid}" &>/dev/null || true; [[ -n "${tcpdump_pid:-}" ]] && kill "${tcpdump_pid}" &>/dev/null || true' EXIT
+    trap 'rm -rf "${WORKDIR}" "${RENDER_DIR}"; [[ -n "${cid:-}" ]] && docker rm -f "${cid}" &>/dev/null || true; [[ -n "${tcpdump_pid:-}" ]] && kill "${tcpdump_pid}" &>/dev/null || true' EXIT
 
     # Loopback-rewritten copies: real 192.168.10.x addresses aren't routable
     # in a sandboxed test host, so both channels run entirely on 127.0.0.1,

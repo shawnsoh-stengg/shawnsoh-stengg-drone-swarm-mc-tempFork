@@ -18,25 +18,28 @@
 # resolves deterministically every boot. If the NIC (and thus its MAC) is
 # ever replaced, update `match.macaddress` here.
 #
-# macaddress below is jetson-nx-001's onboard NIC (enumerates as "eno1" on
-# this baseboard/JetPack combo, not "enP8p1s0" — confirms the naming-varies
-# warning above). This value is unit-specific: this file assumes a single
-# physical MC. If/when a second Jetson unit is provisioned (peer MCs,
-# 192.168.10.12+), this match needs to become per-host (e.g. templated by
-# hostname) rather than a single hardcoded MAC.
+# INFRA-008: this file is an envsubst template, not the file installed
+# directly — scripts/01-install-os.sh renders it against
+# /etc/drone-mc/environment's MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP
+# before installing to /etc/netplan/01-drone-mc.yaml. Provisioning a second
+# physical unit is: edit those three values in that drone's
+# /etc/drone-mc/environment, re-run 01-install-os.sh — no hand-editing of
+# this file or the rendered netplan output.
 #
 # eth0 carries two subnets:
-#   192.168.10.11/24 — MANET-facing address (HIF-004): GCS, peer MCs
-#   192.168.12.1/24  — FCC-internal address (HIF-002): Pixhawk Ethernet fallback
+#   MC_ETH_IP/24          — MANET-facing address (HIF-004): GCS, peer MCs
+#                            (192.168.10.11 by default)
+#   MC_ETH_INTERNAL_IP/24 — FCC-internal address (HIF-002): Pixhawk
+#                            Ethernet fallback (192.168.12.1 by default)
 network:
   version: 2
   ethernets:
     eth0:
       match:
-        macaddress: 4c:bb:47:c4:2d:6e
+        macaddress: ${MC_ETH_MAC}
       set-name: eth0
       addresses:
-        - 192.168.10.11/24
-        - 192.168.12.1/24
+        - ${MC_ETH_IP}/24
+        - ${MC_ETH_INTERNAL_IP}/24
       nameservers:
         addresses: []

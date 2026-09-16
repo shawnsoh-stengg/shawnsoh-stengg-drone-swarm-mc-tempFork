@@ -32,6 +32,13 @@ if ! command -v systemctl &>/dev/null; then
     exit 1
 fi
 
+if ! command -v envsubst &>/dev/null; then
+    echo "==> envsubst not found, installing gettext-base"
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10
+    apt-get install -y --no-install-recommends gettext-base
+fi
+
 echo "==> Installing cgroup slices"
 install -m 644 "${UNIT_SRC_DIR}/rt.slice" "${UNIT_DST_DIR}/rt.slice"
 install -m 644 "${UNIT_SRC_DIR}/be.slice" "${UNIT_DST_DIR}/be.slice"
@@ -57,6 +64,15 @@ else
     echo "    Installed default environment. Edit DRONE_ID/MC_VERSION/FCC_TRANSPORT for this vehicle before starting drone-mc.target."
 fi
 
+# INFRA-008: mavlink-router-channel-{a,b,c}.conf and zenoh-bridge-dds.json5
+# below are envsubst templates rendered against this drone's own
+# /etc/drone-mc/environment (just provisioned/confirmed above) — load it
+# into the shell environment so envsubst can see it.
+set -a
+# shellcheck disable=SC1091
+source /etc/drone-mc/environment
+set +a
+
 # Every service bind-mounts the host's /etc/drone-mc over the image's own
 # copy (INFRA-004), so config files baked into an image (cyclonedds.xml) or
 # only ever shipped in the repo (the mavlink-router channel confs) must
@@ -70,18 +86,39 @@ else
     echo "    Installed default config (same-host discovery only, lo)."
 fi
 
-echo "==> Provisioning /etc/drone-mc/zenoh-bridge-dds.json5"
-if [[ -f /etc/drone-mc/zenoh-bridge-dds.json5 ]]; then
-    echo "    /etc/drone-mc/zenoh-bridge-dds.json5 already exists — leaving per-drone peer list untouched."
+# INFRA-008: zenoh-bridge-dds.json5's connect-endpoint peer list is now
+# generated from config/fleet.yaml (drone_id -> IP) minus this drone's own
+# DRONE_ID, rather than hand-edited per drone — always regenerated (like
+# the mavlink-router confs below), not left-alone-if-present like
+# environment above, since there is no longer a manual edit to preserve.
+echo "==> Rendering /etc/drone-mc/zenoh-bridge-dds.json5 (peer list from config/fleet.yaml)"
+FLEET_FILE="${REPO_ROOT}/config/fleet.yaml"
+CONNECT_ENDPOINTS=""
+if [[ -f "${FLEET_FILE}" ]]; then
+    endpoints=()
+    while read -r peer_id peer_ip; do
+        [[ "${peer_id}" == "${DRONE_ID:-1}" ]] && continue
+        endpoints+=("\"tcp/${peer_ip}:7447\"")
+    done < <(grep -E '^[[:space:]]+[0-9]+:[[:space:]]*[0-9]+(\.[0-9]+){3}' "${FLEET_FILE}" \
+             | sed -E 's/^[[:space:]]*([0-9]+):[[:space:]]*([0-9.]+).*/\1 \2/')
+    IFS=,
+    CONNECT_ENDPOINTS="${endpoints[*]}"
+    unset IFS
+    echo "    ${#endpoints[@]} peer(s) from config/fleet.yaml (excluding DRONE_ID=${DRONE_ID:-1})"
 else
-    install -m 644 "${REPO_ROOT}/config/zenoh-bridge-dds.json5" /etc/drone-mc/zenoh-bridge-dds.json5
-    echo "    Installed default config. Edit the connect endpoints for this vehicle's swarm before starting drone-mc.target."
+    echo "    ${FLEET_FILE} not found — rendering with an empty peer list (SITL/single-drone default)."
 fi
+export CONNECT_ENDPOINTS
+envsubst '$CONNECT_ENDPOINTS' \
+    < "${REPO_ROOT}/config/zenoh-bridge-dds.json5" > /etc/drone-mc/zenoh-bridge-dds.json5
 
-echo "==> Provisioning mavlink-router channel configs (GCS-001/MAVR-001/GCS-006)"
-install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-a.conf" /etc/drone-mc/mavlink-router-channel-a.conf
-install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-b.conf" /etc/drone-mc/mavlink-router-channel-b.conf
-install -m 644 "${REPO_ROOT}/config/mavlink-router-channel-c.conf" /etc/drone-mc/mavlink-router-channel-c.conf
+echo "==> Rendering mavlink-router channel configs (GCS-001/MAVR-001/GCS-006)"
+envsubst '$FCC_GCS_IP' \
+    < "${REPO_ROOT}/config/mavlink-router-channel-a.conf" > /etc/drone-mc/mavlink-router-channel-a.conf
+envsubst '$GCS_IP' \
+    < "${REPO_ROOT}/config/mavlink-router-channel-b.conf" > /etc/drone-mc/mavlink-router-channel-b.conf
+envsubst '$GCS_IP' \
+    < "${REPO_ROOT}/config/mavlink-router-channel-c.conf" > /etc/drone-mc/mavlink-router-channel-c.conf
 
 # drone-mc-mission-orchestrator.service bind-mounts this read-write for
 # plan-library persistence across container restarts (GCS-006 AC4) —

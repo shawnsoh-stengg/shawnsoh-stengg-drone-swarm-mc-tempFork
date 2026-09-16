@@ -26,7 +26,7 @@ set -euo pipefail
 
 PASS=0; FAIL=0
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG="${REPO_ROOT}/config/zenoh-bridge-dds.json5"
+TMPL="${REPO_ROOT}/config/zenoh-bridge-dds.json5"
 UNIT="${REPO_ROOT}/config/systemd/drone-mc-zenoh-bridge.service"
 INSTALL_SCRIPT="${REPO_ROOT}/scripts/02-install-systemd-units.sh"
 IMAGE="${MC_VERSION:+ghcr.io/drone-mc/zenoh-bridge:${MC_VERSION}}"
@@ -41,7 +41,19 @@ check() {
     fi
 }
 
-check "zenoh-bridge-dds.json5 present"     test -f "${CONFIG}"
+check "zenoh-bridge-dds.json5 present"     test -f "${TMPL}"
+
+# INFRA-008: zenoh-bridge-dds.json5's connect-endpoint list is an envsubst
+# template now (${CONNECT_ENDPOINTS}, generated from config/fleet.yaml by
+# scripts/02-install-systemd-units.sh) — render it with a representative
+# two-peer value here so the content checks below keep asserting the same
+# shape as before this change.
+RENDER_DIR="$(mktemp -d)"
+trap 'rm -rf "${RENDER_DIR}"' EXIT
+: "${CONNECT_ENDPOINTS:=\"tcp/192.168.10.12:7447\", \"tcp/192.168.10.13:7447\"}"
+export CONNECT_ENDPOINTS
+CONFIG="${RENDER_DIR}/zenoh-bridge-dds.json5"
+envsubst '$CONNECT_ENDPOINTS' < "${TMPL}" > "${CONFIG}"
 check "peer mode declared"                 grep -qF 'mode: "peer"' "${CONFIG}"
 check "multicast scouting disabled"        grep -qF 'scouting: { multicast: { enabled: false } }' "${CONFIG}"
 check "at least one connect endpoint"      grep -qE 'connect: \{ endpoints: \[.*"tcp/[0-9]' "${CONFIG}"
@@ -77,7 +89,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     fi
 
     cleanup() {
-        rm -rf "${WORKDIR}"
+        rm -rf "${WORKDIR}" "${RENDER_DIR}"
         [[ -n "${cid:-}" ]] && docker rm -f "${cid}" &>/dev/null || true
         if [[ "${SERVICE_WAS_ACTIVE}" -eq 1 ]]; then
             echo "==> restarting drone-mc-zenoh-bridge.service"

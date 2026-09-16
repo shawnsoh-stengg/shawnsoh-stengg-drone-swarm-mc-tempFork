@@ -4,8 +4,18 @@
 # starting drone-mc.target on each vehicle.
 
 # --- Drone identity ---
-DRONE_ID=1
+DRONE_ID=4
 MC_VERSION=dev
+
+# --- MC's own network identity (INFRA-008) ---
+# Per-drone: unique per physical unit. Rendered into
+# config/netplan/01-drone-mc.yaml's ${MC_ETH_MAC}/${MC_ETH_IP}/
+# ${MC_ETH_INTERNAL_IP} placeholders by scripts/01-install-os.sh — edit
+# these three values (and re-run that script) rather than hand-editing the
+# rendered /etc/netplan/01-drone-mc.yaml when provisioning a new unit.
+MC_ETH_MAC=4c:bb:47:c4:2d:6e
+MC_ETH_IP=192.168.10.14
+MC_ETH_INTERNAL_IP=192.168.12.4
 
 # --- FCC transport (SDD §3, ICD §9.4) ---
 # serial: ttyTHS1 via uXRCE-DDS (production default, HID §HIF-001)
@@ -13,8 +23,15 @@ MC_VERSION=dev
 FCC_TRANSPORT=serial
 FCC_SERIAL_DEVICE=/dev/ttyTHS1
 FCC_SERIAL_BAUD=921600
-FCC_ETH_IP=192.168.12.31
+FCC_ETH_IP=192.168.12.19
 FCC_ETH_PORT=8888
+
+# The FCC is dual-homed: FCC_ETH_IP above is its 192.168.12.x-internal
+# address (mission protocol/HIL_GPS, always active). FCC_GCS_IP is its
+# separate 192.168.10.x GCS-facing address, used only by
+# mavlink-router-channel-a.conf's Channel A pass-through target
+# (per-drone: this drone's own Pixhawk, INFRA-008).
+FCC_GCS_IP=192.168.10.19
 
 # Mission protocol (MAVLink, always on 192.168.12.x — independent of
 # FCC_TRANSPORT above; stock PX4 has no DDS-writable mission topic, IR-007)
