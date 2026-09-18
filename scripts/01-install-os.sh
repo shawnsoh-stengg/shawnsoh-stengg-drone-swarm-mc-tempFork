@@ -77,11 +77,32 @@ else
          "script to render netplan with the real values."
 fi
 
+# Per-variable migration: the file-level check above only seeds
+# /etc/drone-mc/environment once, so a repo change to config/environment
+# (e.g. INFRA-008 adding MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP/FCC_GCS_IP)
+# never reaches an already-provisioned Jetson on its own. Backfill any
+# variable present in the repo default but missing on-device, without
+# touching existing per-drone values.
+while IFS='=' read -r key value; do
+    if ! grep -q "^${key}=" /etc/drone-mc/environment; then
+        echo "${key}=${value}" >> /etc/drone-mc/environment
+        echo "    Migrated new variable ${key}=${value} into /etc/drone-mc/environment" \
+             "(review/edit this per-drone value if it needs to differ from the repo default)."
+    fi
+done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${REPO_ROOT}/config/environment")
+
 echo "==> Rendering /etc/netplan/01-drone-mc.yaml (HIF-002/HIF-004 dual-IP eth0)"
 set -a
 # shellcheck disable=SC1091
 source /etc/drone-mc/environment
 set +a
+for var in MC_ETH_MAC MC_ETH_IP MC_ETH_INTERNAL_IP; do
+    if [[ -z "${!var:-}" ]]; then
+        echo "ERROR: ${var} is unset/empty in /etc/drone-mc/environment — envsubst would" \
+             "silently render a blank value into netplan. Set it and re-run." >&2
+        exit 1
+    fi
+done
 RENDERED_NETPLAN="$(mktemp)"
 trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
 envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_INTERNAL_IP' \
