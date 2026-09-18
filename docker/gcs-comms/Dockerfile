@@ -86,8 +86,18 @@ COPY --from=builder /opt/ros/humble/install /opt/ros/humble/install
 # stage (DEP-009 follow-up above), but multi-stage COPY only brings across
 # the /opt/ros/humble/install and /opt/drone-mc/install trees named below,
 # not arbitrary system packages apt put elsewhere in the builder image.
+#
+# ros-humble-mavros-msgs: same gap, for the same reason — mavros_msgs
+# satisfies mavros's <depend> via rosdep/apt in the builder stage (its
+# source is deliberately deleted above, see the vcs import comment) and
+# lands in the dpkg prefix /opt/ros/humble, which this multi-stage COPY
+# never brings across either. Without it, mavros_node's ELF NEEDED entry
+# on libmavros_msgs__rosidl_typesupport_cpp.so resolves to nothing at
+# runtime — the .so is only ever present in the discarded builder stage
+# — and ros2 run reports a generic exit 127, confirmed on real hardware.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         geographiclib-tools \
+        ros-humble-mavros-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 # install_geographiclib_datasets.sh is NOT optional, despite this file's
