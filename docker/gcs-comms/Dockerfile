@@ -86,19 +86,31 @@ COPY --from=builder /opt/ros/humble/install /opt/ros/humble/install
 # stage (DEP-009 follow-up above), but multi-stage COPY only brings across
 # the /opt/ros/humble/install and /opt/drone-mc/install trees named below,
 # not arbitrary system packages apt put elsewhere in the builder image.
-#
-# ros-humble-mavros-msgs: same gap, for the same reason — mavros_msgs
-# satisfies mavros's <depend> via rosdep/apt in the builder stage (its
-# source is deliberately deleted above, see the vcs import comment) and
-# lands in the dpkg prefix /opt/ros/humble, which this multi-stage COPY
-# never brings across either. Without it, mavros_node's ELF NEEDED entry
-# on libmavros_msgs__rosidl_typesupport_cpp.so resolves to nothing at
-# runtime — the .so is only ever present in the discarded builder stage
-# — and ros2 run reports a generic exit 127, confirmed on real hardware.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         geographiclib-tools \
-        ros-humble-mavros-msgs \
     && rm -rf /var/lib/apt/lists/*
+
+# mavros's package.xml declares several other system/ROS runtime
+# dependencies (mavros_msgs, diagnostic_updater, angles,
+# eigen_stl_containers, libconsole-bridge-dev, geographiclib, eigen,
+# mavlink, ...) that rosdep/apt resolves into the dpkg prefix
+# /opt/ros/humble in the BUILDER stage — same gap as geographiclib-tools
+# above: this multi-stage COPY never brings that prefix across, so none of
+# those .so's exist in this image. Confirmed twice on real hardware, one
+# missing library at a time (libmavros_msgs__rosidl_typesupport_cpp.so,
+# then libdiagnostic_updater.so) before landing on the actual fix: rather
+# than keep hand-enumerating individual package names as each missing .so
+# turns up, re-run the exact same rosdep resolution rosdep ran in the
+# builder stage, against the same (mavros_msgs already deleted, see the
+# vcs import comment above) source tree, so this stays in lockstep with
+# mavros's own package.xml instead of drifting from it one crash at a
+# time.
+COPY --from=builder /ws/src/mavros_ros2 /tmp/mavros_ros2
+RUN apt-get update && bash -c "\
+    source /opt/ros/humble/install/setup.bash && \
+    rosdep update --rosdistro humble && \
+    rosdep install --from-paths /tmp/mavros_ros2 --ignore-src -y --rosdistro humble" \
+    && rm -rf /tmp/mavros_ros2 /var/lib/apt/lists/*
 
 # install_geographiclib_datasets.sh is NOT optional, despite this file's
 # former comment claiming it only matters for plugins nothing here uses
