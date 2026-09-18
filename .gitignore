@@ -3,6 +3,7 @@
 mission_orchestrator_sim/__pycache__/
 _generated/
 .venv/
+drone/
 plans/
 __pycache__/
 *.pyc

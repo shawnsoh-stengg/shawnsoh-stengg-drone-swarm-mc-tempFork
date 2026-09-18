@@ -16,7 +16,13 @@
 # deliberate exception (GCS-005's MAVROS_CHANNEL_A endpoint, channel-a.conf's
 # own header comment) is exactly what's documented — present, loopback-only,
 # and not colliding with any Channel B/C port — rather than an accidental
-# widening of what was previously a strict two-party channel.
+# widening of what was previously a strict two-party channel. Also checks
+# (always, when this host has been provisioned) that the *deployed*
+# /etc/drone-mc/mavlink-router-channel-*.conf files were actually rendered
+# from this drone's current /etc/drone-mc/environment — the template checks
+# above render an in-memory copy against a representative default and can't
+# catch a stale on-disk file left over from before FCC_GCS_IP/GCS_IP were
+# last edited.
 #
 # Set LIVE_CHECK=1 to additionally start the built image against
 # loopback-rewritten copies of both conf files and use tcpdump to confirm a
@@ -140,6 +146,39 @@ check "install script provisions channel-b.conf" \
     grep -q 'mavlink-router-channel-b.conf' "${INSTALL_SCRIPT}"
 check "install script provisions channel-c.conf" \
     grep -q 'mavlink-router-channel-c.conf' "${INSTALL_SCRIPT}"
+
+# Deployed-config drift check (always runs, no LIVE_CHECK needed — just a
+# grep, not a container/tcpdump run): everything above only proves the
+# *template* has the right shape when rendered against a representative
+# default. It never looks at what's actually on this host, so it can't
+# catch e.g. FCC_GCS_IP/GCS_IP having been edited in
+# /etc/drone-mc/environment without a follow-up
+# scripts/02-install-systemd-units.sh run to re-render the deployed
+# .conf files. Skipped on a plain dev checkout that was never provisioned.
+LIVE_ENV="/etc/drone-mc/environment"
+LIVE_CONF_A="/etc/drone-mc/mavlink-router-channel-a.conf"
+LIVE_CONF_B="/etc/drone-mc/mavlink-router-channel-b.conf"
+LIVE_CONF_C="/etc/drone-mc/mavlink-router-channel-c.conf"
+if [[ -f "${LIVE_ENV}" ]]; then
+    echo "==> Checking deployed configs on this host against /etc/drone-mc/environment"
+    LIVE_FCC_GCS_IP="$(grep -E '^FCC_GCS_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
+    LIVE_GCS_IP="$(grep -E '^GCS_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
+    if [[ -n "${LIVE_FCC_GCS_IP}" && -f "${LIVE_CONF_A}" ]]; then
+        check "deployed channel-a.conf matches this drone's FCC_GCS_IP (${LIVE_FCC_GCS_IP})" \
+            grep -qE "Address = ${LIVE_FCC_GCS_IP//./\\.}\$" "${LIVE_CONF_A}"
+    fi
+    if [[ -n "${LIVE_GCS_IP}" && -f "${LIVE_CONF_B}" ]]; then
+        check "deployed channel-b.conf matches this drone's GCS_IP (${LIVE_GCS_IP})" \
+            grep -qE "Address = ${LIVE_GCS_IP//./\\.}\$" "${LIVE_CONF_B}"
+    fi
+    if [[ -n "${LIVE_GCS_IP}" && -f "${LIVE_CONF_C}" ]]; then
+        check "deployed channel-c.conf matches this drone's GCS_IP (${LIVE_GCS_IP})" \
+            grep -qE "Address = ${LIVE_GCS_IP//./\\.}\$" "${LIVE_CONF_C}"
+    fi
+else
+    echo "==> No /etc/drone-mc/environment on this host — skipping deployed-config drift check" \
+         "(run scripts/02-install-systemd-units.sh first to provision it)."
+fi
 
 if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     echo "==> LIVE_CHECK=1: verifying zero cross-channel leakage via tcpdump"
