@@ -90,6 +90,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         geographiclib-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# mavros's package.xml declares several other system/ROS runtime
+# dependencies (mavros_msgs, diagnostic_updater, angles,
+# eigen_stl_containers, libconsole-bridge-dev, geographiclib, eigen,
+# mavlink, ...) that rosdep/apt resolves into the dpkg prefix
+# /opt/ros/humble in the BUILDER stage — same gap as geographiclib-tools
+# above: this multi-stage COPY never brings that prefix across, so none of
+# those .so's exist in this image. Confirmed twice on real hardware, one
+# missing library at a time (libmavros_msgs__rosidl_typesupport_cpp.so,
+# then libdiagnostic_updater.so) before landing on the actual fix: rather
+# than keep hand-enumerating individual package names as each missing .so
+# turns up, re-run the exact same rosdep resolution rosdep ran in the
+# builder stage, against the same (mavros_msgs already deleted, see the
+# vcs import comment above) source tree, so this stays in lockstep with
+# mavros's own package.xml instead of drifting from it one crash at a
+# time.
+COPY --from=builder /ws/src/mavros_ros2 /tmp/mavros_ros2
+RUN apt-get update && bash -c "\
+    source /opt/ros/humble/install/setup.bash && \
+    rosdep update --rosdistro humble && \
+    rosdep install --from-paths /tmp/mavros_ros2 --ignore-src -y --rosdistro humble" \
+    && rm -rf /tmp/mavros_ros2 /var/lib/apt/lists/*
+
 # install_geographiclib_datasets.sh is NOT optional, despite this file's
 # former comment claiming it only matters for plugins nothing here uses
 # yet — MAVROS's UAS node calls into GeographicLib unconditionally during

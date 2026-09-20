@@ -64,6 +64,20 @@ else
     echo "    Installed default environment. Edit DRONE_ID/MC_VERSION/FCC_TRANSPORT for this vehicle before starting drone-mc.target."
 fi
 
+# Per-variable migration: the file-level check above only seeds
+# /etc/drone-mc/environment once, so a repo change to config/environment
+# (e.g. INFRA-008 adding MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP/FCC_GCS_IP)
+# never reaches an already-provisioned Jetson on its own. Backfill any
+# variable present in the repo default but missing on-device, without
+# touching existing per-drone values.
+while IFS='=' read -r key value; do
+    if ! grep -q "^${key}=" /etc/drone-mc/environment; then
+        echo "${key}=${value}" >> /etc/drone-mc/environment
+        echo "    Migrated new variable ${key}=${value} into /etc/drone-mc/environment" \
+             "(review/edit this per-drone value if it needs to differ from the repo default)."
+    fi
+done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${REPO_ROOT}/config/environment")
+
 # INFRA-008: mavlink-router-channel-{a,b,c}.conf and zenoh-bridge-dds.json5
 # below are envsubst templates rendered against this drone's own
 # /etc/drone-mc/environment (just provisioned/confirmed above) — load it
@@ -72,6 +86,14 @@ set -a
 # shellcheck disable=SC1091
 source /etc/drone-mc/environment
 set +a
+for var in FCC_GCS_IP GCS_IP; do
+    if [[ -z "${!var:-}" ]]; then
+        echo "ERROR: ${var} is unset/empty in /etc/drone-mc/environment — envsubst would" \
+             "silently render a blank value into the mavlink-router configs. Set it and" \
+             "re-run." >&2
+        exit 1
+    fi
+done
 
 # Every service bind-mounts the host's /etc/drone-mc over the image's own
 # copy (INFRA-004), so config files baked into an image (cyclonedds.xml) or
