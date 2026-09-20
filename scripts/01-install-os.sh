@@ -103,6 +103,43 @@ for var in MC_ETH_MAC MC_ETH_IP MC_ETH_INTERNAL_IP; do
         exit 1
     fi
 done
+
+# INFRA-008: MC_ETH_MAC must match this drone's own NIC, not a stale/copied
+# value from another unit's provisioning (config/environment's repo default
+# is jetson-nx-001's MAC). A mismatch means netplan's `match: macaddress:`
+# matches zero interfaces — set-name never fires, eth0 never gets its
+# addresses, and netplan's own duplicate-match resolution can hit an
+# internal GLib assertion (g_ascii_strcasecmp on a NULL MAC) rather than
+# failing cleanly. Catch it here instead, with the local MACs to compare
+# against. Skippable with ALLOW_NON_JETSON=1 for a dev-workstation dry run,
+# same escape hatch as the aarch64/Ubuntu precondition check above.
+if [[ "${ALLOW_NON_JETSON:-0}" -ne 1 ]]; then
+    mac_found=0
+    for addr_file in /sys/class/net/*/address; do
+        iface="$(basename "$(dirname "${addr_file}")")"
+        [[ "${iface}" == "lo" ]] && continue
+        if [[ "$(cat "${addr_file}")" == "${MC_ETH_MAC,,}" ]]; then
+            mac_found=1
+            break
+        fi
+    done
+    if [[ "${mac_found}" -ne 1 ]]; then
+        echo "ERROR: MC_ETH_MAC=${MC_ETH_MAC} in /etc/drone-mc/environment does not match" \
+             "any local interface's MAC — netplan's macaddress match would select" \
+             "nothing, eth0 would never get its addresses, and netplan apply may fail" \
+             "with an opaque internal error instead of a clean one. Local interfaces:" >&2
+        for addr_file in /sys/class/net/*/address; do
+            iface="$(basename "$(dirname "${addr_file}")")"
+            [[ "${iface}" == "lo" ]] && continue
+            echo "    ${iface}: $(cat "${addr_file}")" >&2
+        done
+        echo "Set MC_ETH_MAC to this drone's real NIC MAC (usually the wired interface" \
+             "above) and re-run. Set ALLOW_NON_JETSON=1 to skip this check for a" \
+             "dev-workstation dry run." >&2
+        exit 1
+    fi
+fi
+
 RENDERED_NETPLAN="$(mktemp)"
 trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
 envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_INTERNAL_IP' \
