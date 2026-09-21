@@ -53,6 +53,20 @@ skip() {
 
 nrestarts() { systemctl show "$1" -p NRestarts --value 2>/dev/null || echo "0"; }
 
+# AC2/AC3 run `ros2` on the HOST, against nodes running inside containers
+# whose ROS_DOMAIN_ID/CYCLONEDDS_URI come from /etc/drone-mc/environment
+# (EnvironmentFile=/--env-file, every drone-mc-*.service). Without loading
+# the same two vars here, the host CLI falls back to CycloneDDS's default
+# config, which docker/ros2-core/cyclonedds.xml's locked-down lo-only,
+# AllowMulticast=false, Peers=127.0.0.1-only setup will never answer —
+# this is what caused every prior run's AC2/AC3 to come back empty/SKIP,
+# not a real discovery failure.
+if [[ -f /etc/drone-mc/environment ]]; then
+    # shellcheck disable=SC1091
+    source /etc/drone-mc/environment
+    export ROS_DOMAIN_ID CYCLONEDDS_URI
+fi
+
 # All 10 services drone-mc.target eventually manages (SDD §12.4 / CLAUDE.md
 # repo-structure note). mavlink-router/zenoh-bridge are standalone daemons
 # with no ROS 2 node (CLAUDE.md's Tooling Decisions) — omitted from
@@ -239,10 +253,21 @@ echo "==> Stopping drone-mc.target"
 systemctl stop drone-mc.target
 sleep 2
 all_stopped=1
+STILL_ACTIVE=()
 for unit in "${AVAILABLE_SERVICES[@]}"; do
-    systemctl is-active --quiet "${unit}" && all_stopped=0
+    if systemctl is-active --quiet "${unit}"; then
+        all_stopped=0
+        STILL_ACTIVE+=("${unit}")
+    fi
 done
 check "all available services stopped cleanly" bash -c "[[ ${all_stopped} -eq 1 ]]"
+if [[ "${all_stopped}" -eq 0 ]]; then
+    for unit in "${STILL_ACTIVE[@]}"; do
+        echo "    still active: ${unit} (NRestarts $(nrestarts "${unit}")) — $(systemctl show "${unit}" -p ActiveState -p SubState -p Result --value | tr '\n' ' ')"
+        echo "        last 5 log lines:"
+        journalctl -u "${unit}" -n 5 --no-pager 2>/dev/null | sed 's/^/        /'
+    done
+fi
 
 echo ""
 echo "==> Missing images (FT-004 Deliverables: called out explicitly, not silently skipped):"
