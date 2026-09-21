@@ -39,7 +39,7 @@ try to run something:
 | `drone-mc-mission-orchestrator` | `gcs_comms` (`mission_orchestrator_node`, Channel C) | ✅ (GCS-006) |
 | `drone-mc-mission-exec` | `mission_exec` (`mission_manager_node` + `search_planner_node`) | ✅ |
 | `drone-mc-health-monitor` | `health_monitor` | ✅ (HEALTH-004) |
-| `drone-mc-swarm-coord` | `swarm_coord` | 🧭 (`ghcr.io/drone-mc/swarm-coord`, no `docker/swarm-coord/` yet) |
+| `drone-mc-swarm-coord` | `swarm_coord` | ✅ (`DEP-001`, 2026-08-19 — image builds; `swarm_coordinator_node`/`formation_controller_node` are still §2.4/§5/§6 scaffolds, tracked separately under Track A) |
 | `drone-mc-vision` | `vision` | 🧭 (`ghcr.io/drone-mc/vision`, no `docker/vision/` yet) |
 | `drone-mc-camera` | (gscam2 capture, no ROS 2 package of its own yet) | 🧭 (`ghcr.io/drone-mc/camera`, no `docker/camera/` yet) |
 | — | `video_downlink` (`perception_front_node`, `video_mux_node`) | ⛔ — no `drone-mc-video-ingest`/`drone-mc-video-downlink` unit exists; `CLAUDE.md`'s repo-layout note flags this as SDD §12.4 design only |
@@ -317,13 +317,19 @@ constants (same value on every drone) and are not per-drone inputs.
   that conf file and `/var/drone-mc/mission_plans` onto the host, and
   `drone-mc-mission-orchestrator.service` runs `mission_orchestrator_node`
   in its own container. See `PROJECT-PLAN-5-MONTH.md`'s `GCS-006` entry.
-- **Three service units reference images that don't build yet**
-  (`swarm-coord`, `vision`, `camera` — see the status table above;
-  `health-monitor` closed this gap in HEALTH-004). `02b-smoke-test-units.sh`
-  verifies the *unit files* are valid and enabled; it does not verify the
-  images they reference exist. `START_NOW=1 ./scripts/02-install-systemd-
-  units.sh` (or a manual `systemctl start drone-mc.target`) will fail
-  partway through until these are built.
+- **Two service units reference images that don't build yet**
+  (`vision`, `camera` — see the status table above; `swarm-coord` closed
+  this gap in `DEP-001` (2026-08-19), `health-monitor` in `HEALTH-004` —
+  this bullet previously listed `swarm-coord` here too, stale as of
+  `FT-004`'s 2026-09-21 bench run, which confirmed
+  `ghcr.io/drone-mc/swarm-coord` builds and starts). `02b-smoke-test-
+  units.sh` verifies the *unit files* are valid and enabled; it does not
+  verify the images they reference exist. `START_NOW=1 ./scripts/02-
+  install-systemd-units.sh` (or a manual `systemctl start drone-mc.target`)
+  will fail partway through until these are built — see
+  `INTEGRATION-AND-FLIGHT-TEST-PLAN.md`'s `FT-004` for the dedicated
+  full-stack bring-up test (`scripts/17-smoke-test-full-stack.sh`), which
+  computes the available/missing image set itself rather than assuming it.
 - **`14b-smoke-test-health.sh`'s "GCS receives health telemetry in QGC"
   criterion (HEALTH-004) is not smoke-testable in any environment** — it
   needs a real QGroundControl instance on the far end of a real MAVLink
