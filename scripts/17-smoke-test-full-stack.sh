@@ -58,14 +58,22 @@ nrestarts() { systemctl show "$1" -p NRestarts --value 2>/dev/null || echo "0"; 
 # (EnvironmentFile=/--env-file, every drone-mc-*.service). Without loading
 # the same two vars here, the host CLI falls back to CycloneDDS's default
 # config, which docker/ros2-core/cyclonedds.xml's locked-down lo-only,
-# AllowMulticast=false, Peers=127.0.0.1-only setup will never answer —
-# this is what caused every prior run's AC2/AC3 to come back empty/SKIP,
-# not a real discovery failure.
+# AllowMulticast=false, Peers=127.0.0.1-only setup will never answer.
+#
+# RMW_IMPLEMENTATION=rmw_cyclonedds_cpp is baked into the ros2-core image
+# itself (docker/ros2-core/Dockerfile) rather than /etc/drone-mc/
+# environment, since it's a build-time image default, not a per-drone
+# deployment value — so it must be set explicitly here too. Without it,
+# the host CLI defaults to ROS 2 Humble's stock RMW (FastRTPS), which
+# can't discover CycloneDDS-only participants at all regardless of
+# ROS_DOMAIN_ID/CYCLONEDDS_URI matching — this was the second half of why
+# every prior run's AC2/AC3 came back empty/SKIP.
 if [[ -f /etc/drone-mc/environment ]]; then
     # shellcheck disable=SC1091
     source /etc/drone-mc/environment
     export ROS_DOMAIN_ID CYCLONEDDS_URI
 fi
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # All 10 services drone-mc.target eventually manages (SDD §12.4 / CLAUDE.md
 # repo-structure note). mavlink-router/zenoh-bridge are standalone daemons
@@ -251,16 +259,28 @@ fi
 
 echo "==> Stopping drone-mc.target"
 systemctl stop drone-mc.target
-sleep 2
-all_stopped=1
-STILL_ACTIVE=()
-for unit in "${AVAILABLE_SERVICES[@]}"; do
-    if systemctl is-active --quiet "${unit}"; then
-        all_stopped=0
-        STILL_ACTIVE+=("${unit}")
-    fi
+# systemctl stop is synchronous, but ExecStop=docker stop can itself block
+# up to Docker's own SIGTERM->SIGKILL grace period (10s default) if a
+# container is slow to exit, and Restart=on-failure can race a unit back
+# to active if its process exits nonzero right as the stop is issued —
+# poll for up to 30s (matching the startup wait's own pattern) instead of
+# a single fixed sleep, so a genuine hang/restart-loop is distinguished
+# from ordinary shutdown latency.
+deadline=$((SECONDS + 30))
+all_stopped=0
+while [[ ${SECONDS} -lt ${deadline} ]]; do
+    all_stopped=1
+    STILL_ACTIVE=()
+    for unit in "${AVAILABLE_SERVICES[@]}"; do
+        if systemctl is-active --quiet "${unit}"; then
+            all_stopped=0
+            STILL_ACTIVE+=("${unit}")
+        fi
+    done
+    [[ ${all_stopped} -eq 1 ]] && break
+    sleep 2
 done
-check "all available services stopped cleanly" bash -c "[[ ${all_stopped} -eq 1 ]]"
+check "all available services stopped cleanly within 30s" bash -c "[[ ${all_stopped} -eq 1 ]]"
 if [[ "${all_stopped}" -eq 0 ]]; then
     for unit in "${STILL_ACTIVE[@]}"; do
         echo "    still active: ${unit} (NRestarts $(nrestarts "${unit}")) — $(systemctl show "${unit}" -p ActiveState -p SubState -p Result --value | tr '\n' ' ')"

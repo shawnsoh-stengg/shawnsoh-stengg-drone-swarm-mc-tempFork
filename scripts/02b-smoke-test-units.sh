@@ -64,8 +64,16 @@ check "rt.slice installed"             test -f "${UNIT_DIR}/rt.slice"
 check "be.slice installed"             test -f "${UNIT_DIR}/be.slice"
 check "drone-mc.target loaded"         systemctl list-unit-files drone-mc.target
 check "drone-mc.target enabled"        systemctl is-enabled --quiet drone-mc.target
-check "systemd-analyze verify clean"   bash -c \
-    "systemd-analyze verify ${UNIT_DIR}/drone-mc.target ${UNIT_DIR}/rt.slice ${UNIT_DIR}/be.slice ${UNIT_DIR}/drone-mc-*.service 2>&1 | grep -v 'marked executable\|Proceeding anyway' | grep -qv . "
+# systemd-analyze verify walks the FULL transitive dependency closure of
+# drone-mc.target (After=network-online.target etc.), which on a real
+# Jetson pulls in unrelated pre-existing OS units (snapd, nvs-service,
+# nvargus-daemon) that emit their own harmless upstream warnings
+# ("Unknown key name ... ignoring", "syslog is obsolete"). Filtering by
+# known-noise substring is a losing game against those, so instead assert
+# nothing verify says is actually ABOUT one of our own files — that's the
+# only thing this smoke test can meaningfully claim responsibility for.
+check "systemd-analyze verify: no warnings/errors about our own units" bash -c \
+    "! systemd-analyze verify ${UNIT_DIR}/drone-mc.target ${UNIT_DIR}/rt.slice ${UNIT_DIR}/be.slice ${UNIT_DIR}/drone-mc-*.service 2>&1 | grep -qE '${UNIT_DIR}/(drone-mc|rt\.slice|be\.slice)'"
 
 for unit in "${SERVICES[@]}"; do
     check "${unit} installed"          test -f "${UNIT_DIR}/${unit}"
