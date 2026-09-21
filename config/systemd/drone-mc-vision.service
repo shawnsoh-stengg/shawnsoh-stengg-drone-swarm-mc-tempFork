@@ -7,7 +7,8 @@
 Description=Drone MC — Vision (VO + detection)
 PartOf=drone-mc.target
 After=docker.service drone-mc-health-monitor.service drone-mc-camera.service drone-mc-fcc-bridge.service
-Requires=docker.service drone-mc-camera.service drone-mc-fcc-bridge.service
+Requires=docker.service
+Wants=drone-mc-camera.service drone-mc-fcc-bridge.service
 StartLimitIntervalSec=60
 StartLimitBurst=3
 
