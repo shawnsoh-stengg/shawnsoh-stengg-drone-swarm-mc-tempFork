@@ -24,8 +24,17 @@ kernel_at_least_5_10() {
 }
 
 netplan_has_dual_ip() {
-    ip -4 addr show eth0 | grep -q '192.168.10.11/24' &&
-    ip -4 addr show eth0 | grep -q '192.168.12.1/24'
+    # INFRA-008: MC_ETH_IP/MC_ETH_INTERNAL_IP are per-drone values rendered
+    # from /etc/drone-mc/environment, not the repo's config/environment
+    # defaults — checking the hardcoded defaults here would fail on every
+    # drone provisioned with its own IPs (see MC_ETH_MAC/IP override note
+    # in config/netplan/01-drone-mc.yaml).
+    local mc_eth_ip mc_eth_internal_ip
+    mc_eth_ip="$(grep -E '^MC_ETH_IP=' /etc/drone-mc/environment | cut -d= -f2-)"
+    mc_eth_internal_ip="$(grep -E '^MC_ETH_INTERNAL_IP=' /etc/drone-mc/environment | cut -d= -f2-)"
+    [[ -n "${mc_eth_ip}" && -n "${mc_eth_internal_ip}" ]] || return 1
+    ip -4 addr show eth0 | grep -q "${mc_eth_ip}/24" &&
+    ip -4 addr show eth0 | grep -q "${mc_eth_internal_ip}/24"
 }
 
 # cyclonedds.xml requires SocketReceiveBufferSize/SocketSendBufferSize
