@@ -53,27 +53,31 @@ skip() {
 
 nrestarts() { systemctl show "$1" -p NRestarts --value 2>/dev/null || echo "0"; }
 
-# AC2/AC3 run `ros2` on the HOST, against nodes running inside containers
-# whose ROS_DOMAIN_ID/CYCLONEDDS_URI come from /etc/drone-mc/environment
-# (EnvironmentFile=/--env-file, every drone-mc-*.service). Without loading
-# the same two vars here, the host CLI falls back to CycloneDDS's default
-# config, which docker/ros2-core/cyclonedds.xml's locked-down lo-only,
-# AllowMulticast=false, Peers=127.0.0.1-only setup will never answer.
-#
-# RMW_IMPLEMENTATION=rmw_cyclonedds_cpp is baked into the ros2-core image
-# itself (docker/ros2-core/Dockerfile) rather than /etc/drone-mc/
-# environment, since it's a build-time image default, not a per-drone
-# deployment value — so it must be set explicitly here too. Without it,
-# the host CLI defaults to ROS 2 Humble's stock RMW (FastRTPS), which
-# can't discover CycloneDDS-only participants at all regardless of
-# ROS_DOMAIN_ID/CYCLONEDDS_URI matching — this was the second half of why
-# every prior run's AC2/AC3 came back empty/SKIP.
-if [[ -f /etc/drone-mc/environment ]]; then
-    # shellcheck disable=SC1091
-    source /etc/drone-mc/environment
-    export ROS_DOMAIN_ID CYCLONEDDS_URI
-fi
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+# AC2/AC3 need to run `ros2` somewhere that actually has ROS 2 Humble
+# installed. The host never does — scripts/04-install-ros2-core.sh only
+# ever builds ros2-core as a Docker image (CLAUDE.md's Build System), and
+# no script installs ROS 2 natively on the Jetson host OS. Loading
+# ROS_DOMAIN_ID/CYCLONEDDS_URI/RMW_IMPLEMENTATION into the host's own shell
+# doesn't fix that: there is no host `ros2` binary for those vars to steer,
+# so `ros2 node list` on the bare host silently resolves to "command not
+# found" (swallowed by 2>/dev/null further down) rather than a DDS
+# discovery failure. Every other <n>b-smoke-test-*.sh script in this repo
+# gets this right already (e.g. scripts/14b-smoke-test-health.sh) by
+# running the CLI with `docker exec` inside a container that has both
+# /opt/ros/humble and the bind-mounted /opt/drone-mc/install — do the same
+# here rather than assume a host install.
+container_name() {
+    local unit="$1"
+    unit="${unit#drone-mc-}"
+    unit="${unit%.service}"
+    echo "mc-${unit}"
+}
+
+ros2_exec() {
+    local timeout_s="$1"; shift
+    docker exec "${EXEC_CONTAINER}" bash -c \
+        "source /opt/ros/humble/install/setup.bash && source /opt/drone-mc/install/setup.bash && timeout ${timeout_s} $*"
+}
 
 # All 10 services drone-mc.target eventually manages (SDD §12.4 / CLAUDE.md
 # repo-structure note). mavlink-router/zenoh-bridge are standalone daemons
@@ -119,6 +123,18 @@ if [[ "${#AVAILABLE_SERVICES[@]}" -eq 0 ]]; then
     echo "==> ERROR: no service images found — build at least one via scripts/0{8,9,10,...}-build-*.sh first" >&2
     exit 1
 fi
+
+# Pick any available service that hosts a ROS 2 node (i.e. not the
+# standalone mavlink-router/zenoh-bridge daemons, which aren't built FROM
+# ros2-core and have no `ros2` binary at all) to `docker exec` into for
+# AC2/AC3's ros2 CLI calls.
+EXEC_CONTAINER=""
+for unit in "${AVAILABLE_SERVICES[@]}"; do
+    if [[ -n "${SERVICE_NODES[${unit}]:-}" ]]; then
+        EXEC_CONTAINER="$(container_name "${unit}")"
+        break
+    fi
+done
 
 check "drone-mc.target unit installed" test -f "${UNIT_DIR}/drone-mc.target"
 
@@ -190,9 +206,9 @@ done
 if [[ "${#EXPECTED_NODES[@]}" -eq 0 ]]; then
     skip "ros2 node list (only standalone daemons — mavlink-router/zenoh-bridge — are available this run)"
 else
-    ACTUAL_NODES="$(timeout 10 ros2 node list 2>/dev/null || true)"
+    ACTUAL_NODES="$(ros2_exec 10 ros2 node list 2>/dev/null || true)"
     if [[ -z "${ACTUAL_NODES}" ]]; then
-        skip "ros2 node list (no nodes discovered — check host RMW/ROS_DOMAIN_ID matches the containers' CycloneDDS config, and the CycloneDDS rmem floor, INFRA-004)"
+        skip "ros2 node list (no nodes discovered via docker exec ${EXEC_CONTAINER} — check that container's ROS_DOMAIN_ID matches its peers' and the CycloneDDS rmem floor, INFRA-004)"
     else
         for node in "${EXPECTED_NODES[@]}"; do
             check "ros2 node list shows ${node}" bash -c "grep -qx '${node}' <<<\"${ACTUAL_NODES}\""
@@ -203,7 +219,9 @@ fi
 # ---- AC3: resource budgets --------------------------------------------------
 echo "==> AC3: checking /mc/health against SDD §10.1 fault thresholds, and per-unit cgroup budgets"
 if [[ " ${AVAILABLE_SERVICES[*]} " == *" drone-mc-health-monitor.service "* ]] && systemctl is-active --quiet drone-mc-health-monitor.service; then
-    HEALTH_MSG="$(timeout 5 ros2 topic echo --once /mc/health 2>/dev/null || true)"
+    HEALTH_MSG="$(docker exec mc-health-monitor bash -c \
+        "source /opt/ros/humble/install/setup.bash && source /opt/drone-mc/install/setup.bash && timeout 5 ros2 topic echo --once /mc/health" \
+        2>/dev/null || true)"
     if [[ -z "${HEALTH_MSG}" ]]; then
         skip "/mc/health resource budget check (no message received within 5s)"
     else
