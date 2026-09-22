@@ -49,12 +49,6 @@ uint8_t cpu_pct_from_totals(const CpuTotals & prev, const CpuTotals & cur);
 // MemTotal is 0.
 std::optional<uint8_t> parse_meminfo_pct(const std::string & contents);
 
-// Extracts the integer part of a tegrastats "GPU@<N>C" (or "GPU@<N>.<N>C")
-// token out of a raw tegrastats output line — the "nvidia-smi-equivalent"
-// GPU temperature source on Jetson, which has no nvidia-smi (HID-MC-001
-// §8.5, SDD §10.1). Returns std::nullopt if no such token is present.
-std::optional<uint8_t> parse_tegrastats_gpu_temp_c(const std::string & line);
-
 // Reads each path in `thermal_zone_paths` (each expected to hold a single
 // integer, millidegrees C, as /sys/class/thermal/thermal_zone*/temp does)
 // and returns the maximum across all readable paths. Returns std::nullopt
@@ -89,10 +83,15 @@ struct ResourceSamplerConfig
   std::string meminfo_path{"/proc/meminfo"};
   std::string disk_path{"/var/drone-mc"};
   std::vector<std::string> cpu_thermal_zone_paths{"/sys/class/thermal/thermal_zone0/temp"};
-  // "timeout" bounds tegrastats' own indefinite streaming so the
-  // popen()/pclose() pair behind the default GPU temp provider can't block
-  // the 1 Hz timer waiting on a process that never exits on its own.
-  std::string gpu_temp_command{"timeout 1 tegrastats --interval 500"};
+  // Jetson Orin NX (JetPack 6.2.2) exposes a dedicated GPU thermal zone
+  // directly under sysfs (type "gpu-thermal", confirmed against the real
+  // orin-nx hardware as thermal_zone1) — read that the same way
+  // cpu_thermal_zone_paths reads the CPU zone, rather than shelling out to
+  // `tegrastats`, which isn't installed in the health-monitor container
+  // (docker/health-monitor/Dockerfile builds FROM ros2-core, a bare ROS 2
+  // Humble image with no JetPack/nvidia-l4t-tools package) and silently
+  // left gpu_temp_c at 0 in every deployed run.
+  std::vector<std::string> gpu_thermal_zone_paths{"/sys/class/thermal/thermal_zone1/temp"};
   // INFRA-007: vision.service's cgroup v2 memory accounting files. Default
   // path matches drone-mc-vision.service's Slice=be.slice + unit name
   // (SDD §12.3/§12.4) under the unified cgroup v2 hierarchy's standard
@@ -122,10 +121,6 @@ public:
   void set_disk_usage_provider(
     std::function<std::optional<uint8_t>(const std::string &)> provider);
 
-  // Overrides the real popen(3)-backed tegrastats reader with `provider`.
-  // Test seam: avoids spawning a real subprocess in unit tests.
-  void set_gpu_temp_line_provider(std::function<std::optional<std::string>()> provider);
-
   // INFRA-007: overrides the real cgroupfs-backed vision-memory reader with
   // `provider`. Test seam: avoids depending on a real vision.service cgroup
   // existing on the test host.
@@ -148,7 +143,6 @@ private:
   ResourceSamplerConfig config_;
   std::optional<CpuTotals> prev_cpu_totals_;
   std::function<std::optional<uint8_t>(const std::string &)> disk_usage_provider_;
-  std::function<std::optional<std::string>()> gpu_temp_line_provider_;
   std::function<std::optional<uint8_t>()> vision_mem_pct_provider_;
 };
 

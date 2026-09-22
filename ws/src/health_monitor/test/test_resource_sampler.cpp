@@ -103,20 +103,6 @@ TEST(ParseMeminfoPct, ReturnsNulloptWhenKeysMissing)
   EXPECT_FALSE(parse_meminfo_pct("SomeOtherKey: 123 kB\n").has_value());
 }
 
-TEST(ParseTegrastatsGpuTempC, ExtractsIntegerDegreesFromToken)
-{
-  const std::string line =
-    "RAM 3245/7854MB ... CPU@[12%,4%,3%,7%] GPU@43C PMIC@50C thermal@45.5C\n";
-  const auto temp = parse_tegrastats_gpu_temp_c(line);
-  ASSERT_TRUE(temp.has_value());
-  EXPECT_EQ(*temp, 43);
-}
-
-TEST(ParseTegrastatsGpuTempC, ReturnsNulloptWhenTokenAbsent)
-{
-  EXPECT_FALSE(parse_tegrastats_gpu_temp_c("no gpu token here").has_value());
-}
-
 TEST(MaxThermalZoneTempC, ReturnsMaxAcrossMultipleZonesInMillidegrees)
 {
   const std::string zone0 = write_fixture("zone0", "45000\n");
@@ -169,16 +155,16 @@ TEST(ResourceSamplerSample, FillsAllFieldsFromMockedSources)
   const std::string meminfo_path = write_fixture(
     "meminfo", "MemTotal:       10000 kB\nMemAvailable:    2000 kB\n");
   const std::string thermal_path = write_fixture("thermal", "55500\n");
+  const std::string gpu_thermal_path = write_fixture("gpu_thermal", "48000\n");
 
   ResourceSamplerConfig config;
   config.proc_stat_path = proc_stat_path;
   config.meminfo_path = meminfo_path;
   config.cpu_thermal_zone_paths = {thermal_path};
+  config.gpu_thermal_zone_paths = {gpu_thermal_path};
 
   ResourceSampler sampler(config);
   sampler.set_disk_usage_provider([](const std::string &) {return std::optional<uint8_t>(37);});
-  sampler.set_gpu_temp_line_provider(
-    [] {return std::optional<std::string>("RAM ... GPU@48C ...");});
 
   mc_msgs::msg::SystemHealth first;
   sampler.sample(first);
@@ -209,11 +195,11 @@ TEST(ResourceSamplerSample, LeavesFieldAtZeroWhenOneSourceIsUnavailable)
   config.proc_stat_path = "/no/such/proc/stat";
   config.meminfo_path = "/no/such/meminfo";
   config.cpu_thermal_zone_paths = {"/no/such/thermal/zone"};
+  config.gpu_thermal_zone_paths = {"/no/such/thermal/gpu/zone"};
 
   ResourceSampler sampler(config);
   sampler.set_disk_usage_provider(
     [](const std::string &) {return std::optional<uint8_t>(std::nullopt);});
-  sampler.set_gpu_temp_line_provider([] {return std::optional<std::string>(std::nullopt);});
 
   mc_msgs::msg::SystemHealth msg;
   sampler.sample(msg);

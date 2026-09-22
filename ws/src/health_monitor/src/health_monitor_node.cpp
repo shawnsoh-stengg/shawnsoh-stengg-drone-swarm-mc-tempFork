@@ -62,7 +62,8 @@ HealthMonitorNode::HealthMonitorNode(const rclcpp::NodeOptions & options)
   config.disk_path = declare_parameter("disk_path", config.disk_path);
   config.cpu_thermal_zone_paths =
     declare_parameter("cpu_thermal_zone_paths", config.cpu_thermal_zone_paths);
-  config.gpu_temp_command = declare_parameter("gpu_temp_command", config.gpu_temp_command);
+  config.gpu_thermal_zone_paths =
+    declare_parameter("gpu_thermal_zone_paths", config.gpu_thermal_zone_paths);
   config.vision_cgroup_memory_current_path = declare_parameter(
     "vision_cgroup_memory_current_path", config.vision_cgroup_memory_current_path);
   config.vision_cgroup_memory_max_path = declare_parameter(

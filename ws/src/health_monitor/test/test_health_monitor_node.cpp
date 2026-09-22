@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <fstream>
 #include <string>
 #include <thread>
 
@@ -48,6 +49,18 @@ bool spin_until(
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return false;
+}
+
+// Writes `millidegrees` to a fresh file under /tmp and returns its path --
+// a fixture ResourceSamplerConfig::gpu_thermal_zone_paths can point at,
+// mirroring how /sys/class/thermal/thermal_zone*/temp reports millidegrees C.
+std::string write_thermal_fixture(const std::string & suffix, int millidegrees)
+{
+  const std::string path = "/tmp/health_monitor_node_test_" + suffix;
+  std::ofstream out(path, std::ios::trunc);
+  out << millidegrees << "\n";
+  out.close();
+  return path;
 }
 
 // HEALTH-003: shared harness for the failsafe-decision-tree tests --
@@ -116,6 +129,8 @@ TEST(HealthMonitorNode, ConstructsWithExpectedName)
 // real 1 Hz WallTimer tick.
 TEST(HealthMonitorNode, PublishesSystemHealthFromMockedSources)
 {
+  const std::string gpu_thermal_path = write_thermal_fixture("gpu_publishes", 51000);
+
   rclcpp::NodeOptions opts;
   opts.parameter_overrides(
   {
@@ -123,12 +138,12 @@ TEST(HealthMonitorNode, PublishesSystemHealthFromMockedSources)
     rclcpp::Parameter("meminfo_path", std::string("/no/such/meminfo")),
     rclcpp::Parameter(
       "cpu_thermal_zone_paths", std::vector<std::string>{"/no/such/thermal/zone"}),
+    rclcpp::Parameter(
+      "gpu_thermal_zone_paths", std::vector<std::string>{gpu_thermal_path}),
   });
   auto node = std::make_shared<health_monitor::HealthMonitorNode>(opts);
   node->resource_sampler().set_disk_usage_provider(
     [](const std::string &) {return std::optional<uint8_t>(42);});
-  node->resource_sampler().set_gpu_temp_line_provider(
-    [] {return std::optional<std::string>("RAM ... GPU@51C ...");});
 
   auto harness = std::make_shared<rclcpp::Node>("health_monitor_node_test_harness");
   std::vector<mc_msgs::msg::SystemHealth::SharedPtr> received;
@@ -628,9 +643,12 @@ TEST(HealthMonitorNode, GcsLinkLostNoActionOutsideSupervisedPhase)
 // (SDD §10.3), edge-triggered.
 TEST(HealthMonitorNode, GpuOvertempThrottlesInferenceAndDoesNotRefire)
 {
-  auto node = std::make_shared<health_monitor::HealthMonitorNode>();
-  node->resource_sampler().set_gpu_temp_line_provider(
-    [] {return std::optional<std::string>("RAM ... GPU@90C ...");});
+  const std::string gpu_thermal_path = write_thermal_fixture("gpu_overtemp", 90000);
+  rclcpp::NodeOptions opts;
+  opts.parameter_overrides(
+    {rclcpp::Parameter(
+      "gpu_thermal_zone_paths", std::vector<std::string>{gpu_thermal_path})});
+  auto node = std::make_shared<health_monitor::HealthMonitorNode>(opts);
 
   auto harness = std::make_shared<FailsafeHarness>("health_monitor_node_test_harness_gpu");
 
