@@ -4,7 +4,8 @@
 Description=Drone MC — Swarm Coordinator
 PartOf=drone-mc.target
 After=docker.service drone-mc-health-monitor.service drone-mc-gcs-comms.service
-Requires=docker.service drone-mc-gcs-comms.service
+Requires=docker.service
+Wants=drone-mc-gcs-comms.service
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

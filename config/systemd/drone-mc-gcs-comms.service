@@ -8,7 +8,8 @@
 Description=Drone MC — GCS Communications
 PartOf=drone-mc.target
 After=docker.service drone-mc-health-monitor.service drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
-Requires=docker.service drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
+Requires=docker.service
+Wants=drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

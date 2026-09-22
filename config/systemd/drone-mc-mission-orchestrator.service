@@ -8,18 +8,22 @@
 # never runs anywhere and Channel C has no MC-side endpoint to route to.
 # Installed by scripts/02-install-systemd-units.sh.
 #
-# Requires= mavlink-router (Channel C's mavlink-routerd process lives in
-# that container, per docker/mavlink-router/entrypoint.sh) and fcc-bridge
-# (matching drone-mc-gcs-comms.service's own Requires= shape) — this unit
-# has no direct dependency on fcc-bridge's own traffic, but activate's
-# eventual /mc/gcs/mission_upload publish only matters once fcc-bridge is
-# up to forward it, same reasoning gcs-comms's unit already documents for
-# its own Requires=.
+# Wants= (not Requires=) mavlink-router (Channel C's mavlink-routerd
+# process lives in that container, per docker/mavlink-router/entrypoint.sh)
+# and fcc-bridge — this unit has no direct dependency on fcc-bridge's own
+# traffic, but activate's eventual /mc/gcs/mission_upload publish only
+# matters once fcc-bridge is up to forward it, same reasoning
+# gcs-comms's unit documents for its own Wants=. Changed from Requires= to
+# Wants= 2026-09-21 (FT-004 defect, see INTEGRATION-AND-FLIGHT-TEST-PLAN.md)
+# — a real LIVE_CHECK=1 run showed Requires= propagates a stop to this
+# unit whenever fcc-bridge is merely restarted, not just when it fails to
+# start; After= alone still orders startup correctly.
 [Unit]
 Description=Drone MC — Mission Orchestrator (Channel C)
 PartOf=drone-mc.target
 After=docker.service drone-mc-health-monitor.service drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
-Requires=docker.service drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
+Requires=docker.service
+Wants=drone-mc-fcc-bridge.service drone-mc-mavlink-router.service
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

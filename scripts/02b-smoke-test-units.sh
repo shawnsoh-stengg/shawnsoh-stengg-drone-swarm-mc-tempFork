@@ -19,15 +19,20 @@ set -euo pipefail
 PASS=0; FAIL=0
 UNIT_DIR="/etc/systemd/system"
 
-# 9 MC services per SDD §12.4 (health-monitor, mavlink-router, zenoh-bridge,
-# fcc-bridge, gcs-comms, swarm-coord, mission-exec, vision) plus camera
-# (split out of vision — see drone-mc-camera.service).
+# 10 MC services per SDD §12.4 (health-monitor, mavlink-router, zenoh-bridge,
+# fcc-bridge, gcs-comms, mission-orchestrator (GCS-006), swarm-coord,
+# mission-exec, vision) plus camera (split out of vision — see
+# drone-mc-camera.service). mission-orchestrator was missing from this list
+# until FT-004 caught it — it never affected `enabled`/unit-file checks
+# (those loop over what's actually installed elsewhere), but this SERVICES
+# array itself silently skipped it.
 SERVICES=(
     drone-mc-health-monitor.service
     drone-mc-mavlink-router.service
     drone-mc-zenoh-bridge.service
     drone-mc-fcc-bridge.service
     drone-mc-gcs-comms.service
+    drone-mc-mission-orchestrator.service
     drone-mc-swarm-coord.service
     drone-mc-mission-exec.service
     drone-mc-camera.service
@@ -59,8 +64,16 @@ check "rt.slice installed"             test -f "${UNIT_DIR}/rt.slice"
 check "be.slice installed"             test -f "${UNIT_DIR}/be.slice"
 check "drone-mc.target loaded"         systemctl list-unit-files drone-mc.target
 check "drone-mc.target enabled"        systemctl is-enabled --quiet drone-mc.target
-check "systemd-analyze verify clean"   bash -c \
-    "systemd-analyze verify ${UNIT_DIR}/drone-mc.target ${UNIT_DIR}/rt.slice ${UNIT_DIR}/be.slice ${UNIT_DIR}/drone-mc-*.service 2>&1 | grep -v 'marked executable\|Proceeding anyway' | grep -qv . "
+# systemd-analyze verify walks the FULL transitive dependency closure of
+# drone-mc.target (After=network-online.target etc.), which on a real
+# Jetson pulls in unrelated pre-existing OS units (snapd, nvs-service,
+# nvargus-daemon) that emit their own harmless upstream warnings
+# ("Unknown key name ... ignoring", "syslog is obsolete"). Filtering by
+# known-noise substring is a losing game against those, so instead assert
+# nothing verify says is actually ABOUT one of our own files — that's the
+# only thing this smoke test can meaningfully claim responsibility for.
+check "systemd-analyze verify: no warnings/errors about our own units" bash -c \
+    "! systemd-analyze verify ${UNIT_DIR}/drone-mc.target ${UNIT_DIR}/rt.slice ${UNIT_DIR}/be.slice ${UNIT_DIR}/drone-mc-*.service 2>&1 | grep -qE '${UNIT_DIR}/(drone-mc|rt\.slice|be\.slice)'"
 
 for unit in "${SERVICES[@]}"; do
     check "${unit} installed"          test -f "${UNIT_DIR}/${unit}"
@@ -82,6 +95,7 @@ check "mission-exec in be.slice"       grep -qE "^Slice=be.slice$" "${UNIT_DIR}/
 # declared After=, rather than the live job queue (no images -> can't start).
 check "fcc-bridge after mavlink-router"   grep -E "^After=" "${UNIT_DIR}/drone-mc-fcc-bridge.service" | grep -q drone-mc-mavlink-router.service
 check "gcs-comms after fcc-bridge"        grep -E "^After=" "${UNIT_DIR}/drone-mc-gcs-comms.service" | grep -q drone-mc-fcc-bridge.service
+check "mission-orchestrator after fcc-bridge" grep -E "^After=" "${UNIT_DIR}/drone-mc-mission-orchestrator.service" | grep -q drone-mc-fcc-bridge.service
 check "swarm-coord after gcs-comms"       grep -E "^After=" "${UNIT_DIR}/drone-mc-swarm-coord.service" | grep -q drone-mc-gcs-comms.service
 check "mission-exec after swarm-coord"    grep -E "^After=" "${UNIT_DIR}/drone-mc-mission-exec.service" | grep -q drone-mc-swarm-coord.service
 check "vision after fcc-bridge"           grep -E "^After=" "${UNIT_DIR}/drone-mc-vision.service" | grep -q drone-mc-fcc-bridge.service
@@ -101,7 +115,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
         [[ ${all_active} -eq 1 ]] && break
         sleep 2
     done
-    check "all 9 services active within 120s" bash -c "[[ ${all_active} -eq 1 ]]"
+    check "all ${#SERVICES[@]} services active within 120s" bash -c "[[ ${all_active} -eq 1 ]]"
 
     systemctl stop drone-mc.target
     sleep 2
@@ -109,7 +123,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     for unit in "${SERVICES[@]}"; do
         systemctl is-active --quiet "${unit}" && all_stopped=0
     done
-    check "all 9 services stopped cleanly" bash -c "[[ ${all_stopped} -eq 1 ]]"
+    check "all ${#SERVICES[@]} services stopped cleanly" bash -c "[[ ${all_stopped} -eq 1 ]]"
 fi
 
 printf "\nResults: %d passed, %d failed\n" "${PASS}" "${FAIL}"
