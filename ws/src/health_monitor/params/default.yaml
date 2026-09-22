@@ -11,7 +11,7 @@ health_monitor_node:
     meminfo_path: "/proc/meminfo"
     disk_path: "/var/drone-mc"
     cpu_thermal_zone_paths: ["/sys/class/thermal/thermal_zone0/temp"]
-    gpu_temp_command: "timeout 1 tegrastats --interval 500"
+    gpu_thermal_zone_paths: ["/sys/class/thermal/thermal_zone1/temp"]
     # FR-074: mission_manager_node heartbeat (/mc/manager/heartbeat)
     # silence threshold. Also this node's node_alive_mask timeout for the
     # MISSION_MANAGER_ALIVE bit -- one value serves both.

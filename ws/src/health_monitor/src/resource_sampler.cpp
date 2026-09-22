@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <fstream>
 #include <sstream>
 
@@ -37,23 +36,6 @@ uint8_t clamp_to_pct(double value)
     return 100;
   }
   return static_cast<uint8_t>(std::lround(value));
-}
-
-// Real popen(3)-backed tegrastats reader: runs `command`, returns its
-// first line of stdout (or std::nullopt if it produced none / failed to
-// launch).
-std::optional<std::string> run_command_first_line(const std::string & command)
-{
-  FILE * pipe = ::popen(command.c_str(), "r");
-  if (pipe == nullptr) {
-    return std::nullopt;
-  }
-  char buf[512];
-  const char * line = std::fgets(buf, sizeof(buf), pipe);
-  const std::optional<std::string> result =
-    (line != nullptr) ? std::make_optional(std::string(line)) : std::nullopt;
-  ::pclose(pipe);
-  return result;
 }
 
 // Real statvfs(2)-backed disk usage reader, matching `df`'s "Use%" (based
@@ -135,28 +117,6 @@ std::optional<uint8_t> parse_meminfo_pct(const std::string & contents)
   return clamp_to_pct(100.0 * used / static_cast<double>(*mem_total_kb));
 }
 
-std::optional<uint8_t> parse_tegrastats_gpu_temp_c(const std::string & line)
-{
-  const std::string needle = "GPU@";
-  const size_t pos = line.find(needle);
-  if (pos == std::string::npos) {
-    return std::nullopt;
-  }
-  const size_t digits_start = pos + needle.size();
-  size_t digits_end = digits_start;
-  while (digits_end < line.size() && std::isdigit(static_cast<unsigned char>(line[digits_end]))) {
-    ++digits_end;
-  }
-  if (digits_end == digits_start) {
-    return std::nullopt;
-  }
-  try {
-    return static_cast<uint8_t>(std::stoul(line.substr(digits_start, digits_end - digits_start)));
-  } catch (const std::exception &) {
-    return std::nullopt;
-  }
-}
-
 std::optional<uint8_t> max_thermal_zone_temp_c(
   const std::vector<std::string> & thermal_zone_paths)
 {
@@ -222,8 +182,6 @@ std::optional<uint8_t> read_cgroup_mem_pct(
 ResourceSampler::ResourceSampler(ResourceSamplerConfig config)
 : config_(std::move(config)),
   disk_usage_provider_(statvfs_disk_pct),
-  gpu_temp_line_provider_(
-    [this]() {return run_command_first_line(config_.gpu_temp_command);}),
   vision_mem_pct_provider_(
     [this]() {
       return read_cgroup_mem_pct(
@@ -236,12 +194,6 @@ void ResourceSampler::set_disk_usage_provider(
   std::function<std::optional<uint8_t>(const std::string &)> provider)
 {
   disk_usage_provider_ = std::move(provider);
-}
-
-void ResourceSampler::set_gpu_temp_line_provider(
-  std::function<std::optional<std::string>()> provider)
-{
-  gpu_temp_line_provider_ = std::move(provider);
 }
 
 void ResourceSampler::set_vision_mem_pct_provider(
@@ -284,12 +236,10 @@ void ResourceSampler::sample(mc_msgs::msg::SystemHealth & out)
     out.disk_pct = *disk_pct;
   }
 
-  if (const std::optional<std::string> gpu_line = gpu_temp_line_provider_(); gpu_line.has_value()) {
-    if (const std::optional<uint8_t> gpu_temp = parse_tegrastats_gpu_temp_c(*gpu_line);
-      gpu_temp.has_value())
-    {
-      out.gpu_temp_c = *gpu_temp;
-    }
+  if (const std::optional<uint8_t> gpu_temp =
+    max_thermal_zone_temp_c(config_.gpu_thermal_zone_paths); gpu_temp.has_value())
+  {
+    out.gpu_temp_c = *gpu_temp;
   }
 
   if (const std::optional<uint8_t> cpu_temp =
