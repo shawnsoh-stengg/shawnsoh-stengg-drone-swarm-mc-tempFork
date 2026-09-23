@@ -35,7 +35,15 @@ DEVICE="${FCC_SERIAL_DEVICE:-/dev/ttyTHS1}"
 BAUD="${FCC_SERIAL_BAUD:-921600}"
 IMAGE="${MC_VERSION:+ghcr.io/drone-mc/fcc-bridge:${MC_VERSION}}"
 IMAGE="${IMAGE:-ghcr.io/drone-mc/fcc-bridge:latest}"
-SOURCE="source /opt/ros/humble/install/setup.bash"
+# Both the base ROS 2 Humble underlay and the /opt/drone-mc/install
+# workspace overlay are needed for the LIVE_CHECK rate checks below —
+# px4_msgs' typesupport lives in the latter (COPY --from=builder
+# /opt/drone-mc/install, docker/fcc-bridge/Dockerfile), not in stock
+# Humble. Sourcing only the underlay makes `ros2 topic hz` on
+# /fmu/out/vehicle_status etc. fail to decode the message type — confirmed
+# on real hardware for the analogous mc_msgs case in
+# 06c-smoke-test-xrce-agent.sh.
+SOURCE="source /opt/ros/humble/install/setup.bash && source /opt/drone-mc/install/setup.bash"
 
 check() {
     local desc="$1"; shift

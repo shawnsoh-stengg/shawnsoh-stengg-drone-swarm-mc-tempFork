@@ -18,7 +18,14 @@ REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
 PASS=0; FAIL=0
 IMAGE="${MC_VERSION:+ghcr.io/drone-mc/fcc-bridge:${MC_VERSION}}"
 IMAGE="${IMAGE:-ghcr.io/drone-mc/fcc-bridge:latest}"
-SOURCE="source /opt/ros/humble/install/setup.bash"
+# Both the base ROS 2 Humble underlay and the /opt/drone-mc/install
+# workspace overlay are needed — mc_msgs' typesupport lives in the latter
+# (COPY --from=builder /opt/drone-mc/install, docker/fcc-bridge/Dockerfile),
+# not in stock Humble. Sourcing only the underlay makes any ros2 CLI tool
+# that needs to decode an mc_msgs/px4_msgs type fail with "The message
+# type '...' is invalid" — confirmed on real hardware — even though the
+# topic itself is publishing fine.
+SOURCE="source /opt/ros/humble/install/setup.bash && source /opt/drone-mc/install/setup.bash"
 AGENT_PORT=18888
 
 check() {
