@@ -71,8 +71,12 @@ check "install script provisions zenoh-bridge-dds.json5" \
     grep -q 'zenoh-bridge-dds.json5' "${INSTALL_SCRIPT}"
 
 check "image exists" docker image inspect "${IMAGE}"
+# --network none: this check never needs connectivity, only the bridge
+# driver's veth setup, which some hosts' kernels lack (e.g. a Jetson
+# whose /lib/modules/<kernel>/ has no veth.ko) — real drone-mc containers
+# never hit this since they all run with --network=host.
 check "zenoh-bridge-dds binary present in image" \
-    docker run --rm --entrypoint /usr/bin/which "${IMAGE}" zenoh-bridge-dds
+    docker run --rm --network none --entrypoint /usr/bin/which "${IMAGE}" zenoh-bridge-dds
 
 if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     echo "==> LIVE_CHECK=1: verifying the container starts and stays up"

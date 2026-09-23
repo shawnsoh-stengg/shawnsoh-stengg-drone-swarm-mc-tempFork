@@ -61,7 +61,14 @@ echo "    install: ${INSTALL_DIR}"
 echo "    image:   ${IMAGE}"
 echo "    type:    ${BUILD_TYPE}"
 
+# --network none: colcon build here is a pure local compile (no rosdep
+# install, no FetchContent/ExternalProject in any current package's
+# CMakeLists.txt), so it doesn't need connectivity — and some hosts'
+# kernels lack the bridge driver's veth setup (e.g. a Jetson whose
+# /lib/modules/<kernel>/ has no veth.ko), which --network=bridge (the
+# implicit default) would otherwise require.
 docker run --rm \
+    --network none \
     --volume "${SRC_DIR}:/ws/src:ro" \
     --volume "${INSTALL_DIR}:/opt/drone-mc/install" \
     --workdir /ws \

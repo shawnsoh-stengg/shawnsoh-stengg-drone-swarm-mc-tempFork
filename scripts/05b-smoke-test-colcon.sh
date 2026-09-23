@@ -18,7 +18,11 @@ check() {
     fi
 }
 
-RUN=(docker run --rm --volume "${INSTALL_DIR}:/opt/drone-mc/install" "${IMAGE}")
+# --network none: these checks never need connectivity, only the bridge
+# driver's veth setup, which some hosts' kernels lack (e.g. a Jetson
+# whose /lib/modules/<kernel>/ has no veth.ko) — real drone-mc containers
+# never hit this since they all run with --network=host.
+RUN=(docker run --rm --network none --volume "${INSTALL_DIR}:/opt/drone-mc/install" "${IMAGE}")
 
 check "install dir exists on host"    test -d "${INSTALL_DIR}"
 

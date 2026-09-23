@@ -53,8 +53,13 @@ check "config/environment: FCC_SERIAL_BAUD is 921600 (HIF-001)" \
 check "${DEVICE} exists on this host" test -e "${DEVICE}"
 check "${DEVICE} group is dialout" \
     bash -c "[[ \"\$(stat -c %G '${DEVICE}' 2>/dev/null)\" == dialout ]]"
+# --network none: this check never needs connectivity, only the bridge
+# driver's veth setup, which some hosts' kernels lack (e.g. a Jetson
+# whose /lib/modules/<kernel>/ has no veth.ko) — real drone-mc containers
+# never hit this since they all run with --network=host, as the
+# LIVE_CHECK section below already does.
 check "fcc-bridge image has MicroXRCEAgent binary" \
-    docker run --rm "${IMAGE}" bash -c "${SOURCE} && command -v MicroXRCEAgent"
+    docker run --rm --network none "${IMAGE}" bash -c "${SOURCE} && command -v MicroXRCEAgent"
 
 if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     echo "==> LIVE_CHECK=1: verifying live HIF-001 link against attached Pixhawk 6X"

@@ -17,7 +17,11 @@ check() {
     fi
 }
 
-RUN=(docker run --rm "${IMAGE}")
+# --network none: these checks never need connectivity, only the bridge
+# driver's veth setup, which some hosts' kernels lack (e.g. a Jetson
+# whose /lib/modules/<kernel>/ has no veth.ko) — real drone-mc containers
+# never hit this since they all run with --network=host.
+RUN=(docker run --rm --network none "${IMAGE}")
 
 check "ros2-core image exists"        docker image inspect "${IMAGE}"
 check "ROS 2 Humble sourced"          "${RUN[@]}" bash -c \
