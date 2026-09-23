@@ -84,8 +84,12 @@ check "systemd unit bind-mounts /var/drone-mc/mission_plans read-write (not read
     bash -c "grep -E 'src=/var/drone-mc/mission_plans,dst=/var/drone-mc/mission_plans' '${UNIT}' | grep -qv readonly"
 check "systemd unit restarts on failure" grep -q 'Restart=on-failure' "${UNIT}"
 check "systemd unit in be.slice" grep -qE '^Slice=be.slice$' "${UNIT}"
-check "systemd unit requires fcc-bridge and mavlink-router" \
-    grep -qE 'Requires=.*drone-mc-fcc-bridge\.service.*drone-mc-mavlink-router\.service' "${UNIT}"
+# Requires= was changed to Wants= 2026-09-21 (FT-004 defect): a real
+# LIVE_CHECK=1 run showed Requires= propagates a stop from fcc-bridge/
+# mavlink-router to this unit, which shouldn't happen — After= alone still
+# orders startup correctly.
+check "systemd unit wants fcc-bridge and mavlink-router" \
+    grep -qE 'Wants=.*drone-mc-fcc-bridge\.service.*drone-mc-mavlink-router\.service' "${UNIT}"
 
 # AC2: Channel C's mavlink-routerd process is started automatically, as a
 # third process alongside A/B in the same container — not a manually-run
