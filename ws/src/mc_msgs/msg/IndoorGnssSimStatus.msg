@@ -29,6 +29,10 @@ float32 time_since_anchor_s   # s, time since the last (re-)anchor command.
 
 float32 waypoint_deviation_m  # m, sanity-bound-only signal (IGS-005's own
                                # concern: fault trigger, never a position
-                               # correction). Always 0 here -- IGS-005 hasn't
-                               # landed yet, and fabricating a number would
-                               # misrepresent a check that doesn't exist.
+                               # correction) -- distance from the current
+                               # local estimate to the nearest uploaded
+                               # ingress waypoint (GnssSimNode::
+                               # compute_waypoint_deviation()). 0 until a
+                               # mission has been uploaded (nothing to
+                               # compare against yet), not a fabricated
+                               # "zero deviation".

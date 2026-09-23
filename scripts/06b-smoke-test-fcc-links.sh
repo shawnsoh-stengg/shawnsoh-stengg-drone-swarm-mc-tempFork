@@ -58,23 +58,59 @@ check "${DEVICE} group is dialout" \
 # whose /lib/modules/<kernel>/ has no veth.ko) — real drone-mc containers
 # never hit this since they all run with --network=host, as the
 # LIVE_CHECK section below already does.
+# --entrypoint bash: the image's own ENTRYPOINT is entrypoint.sh, which
+# under set -u reads FCC_SERIAL_DEVICE immediately (FCC_TRANSPORT defaults
+# to "serial") — without overriding it, "bash -c ..." is appended as
+# *arguments* to entrypoint.sh rather than replacing it, so it dies on an
+# unbound variable before this check's own command ever runs.
 check "fcc-bridge image has MicroXRCEAgent binary" \
-    docker run --rm --network none "${IMAGE}" bash -c "${SOURCE} && command -v MicroXRCEAgent"
+    docker run --rm --network none --entrypoint bash "${IMAGE}" -c "${SOURCE} && command -v MicroXRCEAgent"
 
 if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     echo "==> LIVE_CHECK=1: verifying live HIF-001 link against attached Pixhawk 6X"
 
     command -v docker >/dev/null || { echo "==> ERROR: docker required for LIVE_CHECK" >&2; exit 1; }
 
+    # If drone-mc-fcc-bridge.service is already running, this smoke-test
+    # container would fight it over the same real /dev/ttyTHS1 device *and*
+    # collide on the DDS domain (both use --network=host; CycloneDDS's
+    # same-host discovery merges them, producing a duplicate fcc_bridge_node
+    # and cross-talk between the two — see 10b-smoke-test-zenoh-bridge.sh's
+    # own precedent for this exact class of collision). Stop it for the
+    # duration of this check, restart on exit. Needs root to stop/start the
+    # systemd unit.
+    SERVICE_WAS_ACTIVE=0
+    if command -v systemctl &>/dev/null \
+        && systemctl is-active --quiet drone-mc-fcc-bridge.service 2>/dev/null
+    then
+        echo "==> drone-mc-fcc-bridge.service is active — stopping it for" \
+             "the duration of this check to avoid a /dev/ttyTHS1 + DDS collision"
+        SERVICE_WAS_ACTIVE=1
+        systemctl stop drone-mc-fcc-bridge.service
+    fi
+
     cid=""
-    cleanup() { [[ -n "${cid}" ]] && docker rm -f "${cid}" &>/dev/null || true; }
+    cleanup() {
+        [[ -n "${cid}" ]] && docker rm -f "${cid}" &>/dev/null || true
+        if [[ "${SERVICE_WAS_ACTIVE}" -eq 1 ]]; then
+            echo "==> restarting drone-mc-fcc-bridge.service"
+            systemctl start drone-mc-fcc-bridge.service
+        fi
+    }
     trap cleanup EXIT
 
+    # --entrypoint bash: same reasoning as the static check above — without
+    # it, "-c ..." is appended as arguments to the image's own entrypoint.sh,
+    # which crashes on an unbound FCC_SERIAL_DEVICE/FCC_SERIAL_BAUD before
+    # MicroXRCEAgent ever launches (neither is set as a container env var
+    # here — ${DEVICE}/${BAUD} are this script's own shell variables, not
+    # exported into the container).
     cid="$(docker run -d --rm --name mc-fcc-links-smoke \
         --device "${DEVICE}" \
         --network=host \
+        --entrypoint bash \
         "${IMAGE}" \
-        bash -c "${SOURCE} && exec MicroXRCEAgent serial --dev ${DEVICE} --baudrate ${BAUD} --rts-cts")"
+        -c "${SOURCE} && exec MicroXRCEAgent serial --dev ${DEVICE} --baudrate ${BAUD} --rts-cts")"
 
     check "MicroXRCEAgent container is running" \
         docker inspect -f '{{.State.Running}}' "${cid}"

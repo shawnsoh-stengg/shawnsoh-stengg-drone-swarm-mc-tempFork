@@ -37,8 +37,32 @@ check "entrypoint.sh selects ethernet transport command" \
 
 command -v docker >/dev/null || { echo "==> ERROR: docker required" >&2; exit 1; }
 
+# If drone-mc-fcc-bridge.service is already running, this smoke-test
+# container's own fcc_bridge_node collides with the real one on the DDS
+# domain: both use --network=host, and CycloneDDS's same-host discovery
+# merges them, producing a duplicate fcc_bridge_node node name and
+# cross-talk between the two (confirmed in practice — this is what broke
+# this exact check on real hardware once before). Stop it for the duration
+# of this check, restart on exit — same precedent as
+# 10b-smoke-test-zenoh-bridge.sh. Needs root to stop/start the systemd unit.
+SERVICE_WAS_ACTIVE=0
+if command -v systemctl &>/dev/null \
+    && systemctl is-active --quiet drone-mc-fcc-bridge.service 2>/dev/null
+then
+    echo "==> drone-mc-fcc-bridge.service is active — stopping it for" \
+         "the duration of this check to avoid a DDS-domain collision"
+    SERVICE_WAS_ACTIVE=1
+    systemctl stop drone-mc-fcc-bridge.service
+fi
+
 cid=""
-cleanup() { [[ -n "${cid}" ]] && docker rm -f "${cid}" &>/dev/null || true; }
+cleanup() {
+    [[ -n "${cid}" ]] && docker rm -f "${cid}" &>/dev/null || true
+    if [[ "${SERVICE_WAS_ACTIVE}" -eq 1 ]]; then
+        echo "==> restarting drone-mc-fcc-bridge.service"
+        systemctl start drone-mc-fcc-bridge.service
+    fi
+}
 trap cleanup EXIT
 
 # --network=host matches every drone-mc-*.service unit (config/systemd/) —
