@@ -19,12 +19,16 @@
 # together) — this script stays focused on HIF-001 link verification.
 #
 # Set LIVE_CHECK=1 to additionally start the Micro XRCE-DDS Agent against
-# a real Pixhawk 6X wired via HIF-001 and assert /fmu/out/vehicle_status
+# a real Pixhawk 6X wired via HIF-001 and assert /fmu/out/vehicle_status_v1
 # publishes at >=5 Hz (HIF-001 acceptance criterion) and
-# /fmu/out/vehicle_local_position at >=10 Hz (HID §3.4). Requires: this
+# /fmu/out/vehicle_local_position_v1 at >=10 Hz (HID §3.4) — PX4 v1.16+
+# suffixes versioned messages' topic names with _v<N>. Requires: this
 # script running on the Jetson DUT with a powered Pixhawk 6X on ttyTHS1,
-# UXRCE_DDS_CFG=102 and UXRCE_DDS_BAUD=921600 already set on the FCC
-# (HID §3.3), and the fcc-bridge image built locally
+# UXRCE_DDS_CFG=102 (TELEM2) and SER_TEL2_BAUD=921600 on the FCC — there
+# is no UXRCE_DDS_BAUD param, the baud comes from TELEM2's own port param
+# (HID §3.3) — ttyTHS1's DMA disabled via the device-tree overlay (without
+# it every 16-byte RX DMA burst reads back as zeros and the Agent never sees
+# a valid frame), and the fcc-bridge image built locally
 # (scripts/08-build-fcc-bridge-image.sh) with a MicroXRCEAgent binary.
 set -euo pipefail
 
@@ -118,25 +122,33 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
         --network=host \
         --entrypoint bash \
         "${IMAGE}" \
-        -c "${SOURCE} && exec MicroXRCEAgent serial --dev ${DEVICE} --baudrate ${BAUD} --rts-cts")"
+        -c "${SOURCE} && exec MicroXRCEAgent serial --dev ${DEVICE} --baudrate ${BAUD}")"
 
     check "MicroXRCEAgent container is running" \
         docker inspect -f '{{.State.Running}}' "${cid}"
 
-    # Allow the Agent to establish the DDS session with the FCC's embedded
-    # uXRCE-DDS client before sampling topic rates.
-    sleep 2
+    # Wait for the FCC's uXRCE-DDS client to find the Agent and register its
+    # topics before sampling rates. The client only pings once a second and
+    # then creates dozens of DDS entities, so this took ~8 s on real hardware
+    # — a fixed sleep either wastes time or samples before anything exists.
+    # (grep without -q: under pipefail, -q's early exit SIGPIPEs docker exec
+    # and fails the pipeline even on a match.)
+    for _ in $(seq 1 30); do
+        docker exec "${cid}" bash -c "${SOURCE} && ros2 topic list 2>/dev/null" \
+            | grep -x /fmu/out/vehicle_status_v1 >/dev/null && break
+        sleep 1
+    done
 
     rate_status="$(docker exec "${cid}" bash -c \
-        "${SOURCE} && timeout 6 ros2 topic hz /fmu/out/vehicle_status 2>/dev/null" \
+        "${SOURCE} && timeout 6 ros2 topic hz /fmu/out/vehicle_status_v1 2>/dev/null" \
         | grep -oP 'average rate: \K[0-9.]+' | tail -1 || true)"
     rate_localpos="$(docker exec "${cid}" bash -c \
-        "${SOURCE} && timeout 6 ros2 topic hz /fmu/out/vehicle_local_position 2>/dev/null" \
+        "${SOURCE} && timeout 6 ros2 topic hz /fmu/out/vehicle_local_position_v1 2>/dev/null" \
         | grep -oP 'average rate: \K[0-9.]+' | tail -1 || true)"
 
-    check "/fmu/out/vehicle_status >= 5 Hz (HIF-001 AC)" \
+    check "/fmu/out/vehicle_status_v1 >= 5 Hz (HIF-001 AC)" \
         bash -c "[[ -n '${rate_status}' ]] && awk -v r='${rate_status}' 'BEGIN{exit !(r >= 5.0)}'"
-    check "/fmu/out/vehicle_local_position >= 10 Hz (HID §3.4)" \
+    check "/fmu/out/vehicle_local_position_v1 >= 10 Hz (HID §3.4)" \
         bash -c "[[ -n '${rate_localpos}' ]] && awk -v r='${rate_localpos}' 'BEGIN{exit !(r >= 10.0)}'"
 fi
 

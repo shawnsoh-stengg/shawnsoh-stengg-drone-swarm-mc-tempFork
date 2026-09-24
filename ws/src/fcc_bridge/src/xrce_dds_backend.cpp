@@ -41,8 +41,12 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
 {
   const auto qos = px4_qos();
 
+  // PX4 v1.16+ appends "_v<N>" to the DDS topic name of any message whose
+  // MESSAGE_VERSION is non-zero (uxrce_dds_client/utilities.hpp). At
+  // v1.17.0 that's VehicleLocalPosition, VehicleStatus and BatteryStatus
+  // (all v1); every other topic here is still v0 and keeps its plain name.
   sub_local_pos_ = node_->create_subscription<px4_msgs::msg::VehicleLocalPosition>(
-    "/fmu/out/vehicle_local_position", qos,
+    "/fmu/out/vehicle_local_position_v1", qos,
     [this](px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {on_local_pos(msg);});
 
   sub_global_pos_ = node_->create_subscription<px4_msgs::msg::VehicleGlobalPosition>(
@@ -50,11 +54,11 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
     [this](px4_msgs::msg::VehicleGlobalPosition::SharedPtr msg) {on_global_pos(msg);});
 
   sub_status_ = node_->create_subscription<px4_msgs::msg::VehicleStatus>(
-    "/fmu/out/vehicle_status", qos,
+    "/fmu/out/vehicle_status_v1", qos,
     [this](px4_msgs::msg::VehicleStatus::SharedPtr msg) {on_vehicle_status(msg);});
 
   sub_battery_ = node_->create_subscription<px4_msgs::msg::BatteryStatus>(
-    "/fmu/out/battery_status", qos,
+    "/fmu/out/battery_status_v1", qos,
     [this](px4_msgs::msg::BatteryStatus::SharedPtr msg) {on_battery(msg);});
 
   sub_attitude_ = node_->create_subscription<px4_msgs::msg::VehicleAttitude>(

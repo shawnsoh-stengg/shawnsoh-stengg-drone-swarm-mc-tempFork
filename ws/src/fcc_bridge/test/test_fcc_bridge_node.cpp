@@ -91,7 +91,7 @@ protected:
     harness_ = std::make_shared<rclcpp::Node>("fcc_bridge_node_test_harness");
 
     pub_local_pos_ = harness_->create_publisher<px4_msgs::msg::VehicleLocalPosition>(
-      "/fmu/out/vehicle_local_position", px4_qos());
+      "/fmu/out/vehicle_local_position_v1", px4_qos());
     pub_global_pos_ = harness_->create_publisher<px4_msgs::msg::VehicleGlobalPosition>(
       "/fmu/out/vehicle_global_position", px4_qos());
 

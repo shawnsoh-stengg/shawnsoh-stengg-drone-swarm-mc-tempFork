@@ -17,7 +17,11 @@ FCC_TRANSPORT="${FCC_TRANSPORT:-serial}"
 
 case "${FCC_TRANSPORT}" in
     serial)
-        MicroXRCEAgent serial --dev "${FCC_SERIAL_DEVICE}" --baudrate "${FCC_SERIAL_BAUD}" --rts-cts &
+        # No --rts-cts: PX4's uxrce_dds_client clears CRTSCTS on its own UART
+        # (TELEM2), so the FCC never drives our CTS. With --rts-cts on real
+        # hardware the session kept dropping ("session re-established") and
+        # PX4 never got to create a single DDS topic.
+        MicroXRCEAgent serial --dev "${FCC_SERIAL_DEVICE}" --baudrate "${FCC_SERIAL_BAUD}" &
         ;;
     ethernet)
         MicroXRCEAgent udp4 --port "${FCC_ETH_PORT}" &

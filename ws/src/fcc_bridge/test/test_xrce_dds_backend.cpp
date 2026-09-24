@@ -87,13 +87,13 @@ protected:
     backend_ = std::make_unique<fcc_bridge::XrceDdsBackend>(node_.get());
 
     pub_local_pos_ = node_->create_publisher<px4_msgs::msg::VehicleLocalPosition>(
-      "/fmu/out/vehicle_local_position", px4_qos());
+      "/fmu/out/vehicle_local_position_v1", px4_qos());
     pub_global_pos_ = node_->create_publisher<px4_msgs::msg::VehicleGlobalPosition>(
       "/fmu/out/vehicle_global_position", px4_qos());
     pub_status_ = node_->create_publisher<px4_msgs::msg::VehicleStatus>(
-      "/fmu/out/vehicle_status", px4_qos());
+      "/fmu/out/vehicle_status_v1", px4_qos());
     pub_battery_ = node_->create_publisher<px4_msgs::msg::BatteryStatus>(
-      "/fmu/out/battery_status", px4_qos());
+      "/fmu/out/battery_status_v1", px4_qos());
 
     sub_vehicle_command_ = node_->create_subscription<px4_msgs::msg::VehicleCommand>(
       "/fmu/in/vehicle_command", px4_qos(),
