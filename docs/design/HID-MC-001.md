@@ -235,14 +235,16 @@ If the topics are absent, check:
 
 ### 4.2 Network Configuration
 
-**Dedicated internal subnet for MC↔FCC:**
+**Single shared subnet for MC↔FCC (192.168.10.x):**
 
 | Interface | IP Address | Subnet | Purpose |
 |---|---|---|---|
-| Jetson eth0 (MC side) | `192.168.12.1` | 255.255.255.0 | MC endpoint on internal subnet |
-| Pixhawk Ethernet (FCC side) | `192.168.12.31` | 255.255.255.0 | FCC endpoint on internal subnet |
+| Jetson eth0 (MC side) | `MC_ETH_IP` (default `192.168.10.11`) | 255.255.255.0 | The Jetson's only `eth0` address — MC↔FCC and MANET (HIF-004) alike |
+| Pixhawk Ethernet (FCC side) | `FCC_ETH_IP` (default `192.168.10.31`; bench unit `orin-nx` = `192.168.10.19`) | 255.255.255.0 | The Pixhawk's only address — every MC↔FCC channel and Channel A |
 
-This subnet is isolated from the MANET radio subnet (192.168.10.x). The Jetson has two IP addresses on `eth0` — one on each subnet — configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel — observed `enP8p1s0` on one baseboard, `eno1` on another; board-dependent), the config uses `match`/`set-name` to rename it before assigning addresses, so `eth0` stays the stable logical name used everywhere else in this document. It matches by MAC address rather than by kernel name: matching by `name` races udev's own predictable-naming rename on the same boot `add` uevent, and was observed to fail silently on cold boot (interface stayed unmanaged, no IPs). The MAC is unit-specific — this config currently assumes a single physical MC (`jetson-nx-001`); a second Jetson unit would need its own MAC here:
+> **Correction (2026-09-25):** this section previously specified a dedicated, isolated MC↔FCC subnet (`192.168.12.1` Jetson via `MC_ETH_INTERNAL_IP` / `192.168.12.31` Pixhawk), with the Pixhawk also holding a separate `FCC_GCS_IP` (`192.168.10.31`) for Channel A. PX4's NuttX network stack gives the Pixhawk exactly one IPv4 address (a single `IPADDR` in `/fs/microsd/net.cfg`), so that dual-homed layout was never physically possible — on the `orin-nx` bench the Pixhawk answered only on `192.168.10.19`, and `192.168.12.19` failed ARP, so mission/flow-relay/HIL_GPS traffic to `192.168.12.x` had gone nowhere. `FCC_GCS_IP` and `MC_ETH_INTERNAL_IP` are retired (folded into `FCC_ETH_IP`/`MC_ETH_IP`; `scripts/01-install-os.sh`/`02-install-systemd-units.sh` migrate old `/etc/drone-mc/environment` files). Consequence: MC↔FCC unicast now shares the `192.168.10.x` segment with MANET/GCS traffic — it stays on the drone's onboard switch as unicast, but there is no longer subnet-level separation.
+
+The GCS, peer MCs (MANET), this drone's Jetson and this drone's Pixhawk all sit on the one `192.168.10.0/24` subnet; the Jetson has a single `MC_ETH_IP` address on `eth0`, configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel — observed `enP8p1s0` on one baseboard, `eno1` on another; board-dependent), the config uses `match`/`set-name` to rename it before assigning its address, so `eth0` stays the stable logical name used everywhere else in this document. It matches by MAC address rather than by kernel name: matching by `name` races udev's own predictable-naming rename on the same boot `add` uevent, and was observed to fail silently on cold boot (interface stayed unmanaged, no IPs). The MAC is unit-specific — `config/netplan/01-drone-mc.yaml` is an envsubst template that `scripts/01-install-os.sh` renders against `/etc/drone-mc/environment`'s `MC_ETH_MAC`/`MC_ETH_IP` (INFRA-008); rendered for `jetson-nx-001`'s defaults it reads:
 
 ```yaml
 # /etc/netplan/01-drone-mc.yaml
@@ -254,8 +256,7 @@ network:
         macaddress: 4c:bb:47:c4:2d:6e   # jetson-nx-001's onboard NIC; update if the NIC is replaced
       set-name: eth0
       addresses:
-        - 192.168.10.11/24    # MANET-facing address (HIF-004)
-        - 192.168.12.1/24     # FCC-facing address (HIF-002)
+        - 192.168.10.11/24    # MC_ETH_IP — sole address: FCC (HIF-002) + MANET (HIF-004)
       nameservers:
         addresses: []
 ```
@@ -266,9 +267,22 @@ network:
 
 ```
 MAV_0_CONFIG = 1000   (Ethernet)
-UXRCE_DDS_AG_IP = 3232238593   (= 192.168.12.1 as uint32 big-endian)
+UXRCE_DDS_AG_IP = -1062729205   (= MC_ETH_IP 192.168.10.11 as signed int32 big-endian)
 UXRCE_DDS_PORT_CFG = 8888
 ```
+
+`UXRCE_DDS_AG_IP` is `type: int32` in PX4 v1.17's `uxrce_dds_client` `module.yaml` ("192.168.1.2 is mapped to -1062731518"), so the agent (MC) address must be entered as a *signed* value — recompute it for a non-default `MC_ETH_IP`. (The previous value here, `3232238593`, was both for the retired `192.168.12.1` and unsigned — it doesn't fit an int32.)
+
+**Pixhawk Ethernet address (`/fs/microsd/net.cfg`):** the FCC's single address is set on its SD card, not by a PX4 parameter (factory default `192.168.0.3`):
+
+```
+DEVICE=eth0
+BOOTPROTO=static
+IPADDR=<FCC_ETH_IP>        # e.g. 192.168.10.31
+NETMASK=255.255.255.0
+```
+
+Reboot the FCC after editing, then confirm with `netman show` in the MAVLink console.
 
 **Micro XRCE-DDS Agent (Ethernet transport):**
 
@@ -280,7 +294,7 @@ MicroXRCEAgent udp4 --port 8888
 
 ```bash
 # fcc_bridge_node opens this directly — not routed through mavlink-router
-MAVLink 2/UDP  192.168.12.31:14555
+MAVLink 2/UDP  FCC_ETH_IP:14555
 ```
 
 ### 4.3 Transport Selection
@@ -305,7 +319,7 @@ Both processes run inside the single `mc-fcc-bridge` container and share its lif
 
 ![Diagram 25 — Network Interface Topology](docs/diagrams/25-hid-network-topology.png)
 
-*Diagram 25 — Network Interface Topology: IP addressing, subnets, and port map for HIF-002 (internal MC↔FCC subnet) and HIF-004 (MANET external subnet).*
+*Diagram 25 — Network Interface Topology: IP addressing and port map for HIF-002 (MC↔FCC) and HIF-004 (MANET), both on the single `192.168.10.x` subnet (§4.2 correction note).*
 
 ---
 
@@ -432,7 +446,7 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! \
 | Interface | IP Address | Subnet | Gateway |
 |---|---|---|---|
 | Jetson eth0 | `192.168.10.11` | 255.255.255.0 | `192.168.10.1` (AU routing) |
-| Pixhawk FCC (via baseboard) | `192.168.10.31` | 255.255.255.0 | — |
+| Pixhawk FCC (via baseboard) | `192.168.10.31` (`FCC_ETH_IP`, per-drone — same single address as §4.2) | 255.255.255.0 | — |
 | GCS laptop | `192.168.10.10` | 255.255.255.0 | — |
 | MANET AU (IP) | `192.168.10.1` | 255.255.255.0 | — |
 
@@ -454,7 +468,7 @@ All swarm peers use the same 192.168.10.x scheme with sequential `.11`, `.12`, `
 # Ping GCS
 ping -c 4 192.168.10.10
 
-# Ping FCC (Pixhawk Ethernet — only if HIF-002 also routed via switch)
+# Ping FCC (Pixhawk Ethernet, FCC_ETH_IP — same address HIF-002 uses, §4.2)
 ping -c 4 192.168.10.31
 
 # Check Ethernet link state
@@ -907,9 +921,10 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 
 ### 13.2 Software Configuration (one-time, per drone)
 
-- [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the dual-IP Netplan config (192.168.10.11/24 + 192.168.12.1/24 on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
+- [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the Netplan config (single `MC_ETH_IP`/24, default `192.168.10.11/24`, on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
 - [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600`, `UXRCE_DDS_PTCFG = 2` via QGroundControl, then reboot the FCC (§3.3 — without `PTCFG = 2` no `/fmu/*` topic reaches `fcc_bridge_node`).
-- [ ] **HIF-002** Set PX4 Ethernet IP: `UXRCE_DDS_AG_IP = 3232238593`, `UXRCE_DDS_PORT_CFG = 8888`.
+- [ ] **HIF-002** Set the Pixhawk's Ethernet address: edit `/fs/microsd/net.cfg` so `IPADDR` = this drone's `FCC_ETH_IP` (`BOOTPROTO=static`, `NETMASK=255.255.255.0`, §4.2), reboot the FCC, verify with `netman show` in the MAVLink console.
+- [ ] **HIF-002** Set PX4 agent IP: `UXRCE_DDS_AG_IP = -1062729205` (default `MC_ETH_IP` 192.168.10.11 as signed int32 — recompute for a non-default `MC_ETH_IP`, §4.2), `UXRCE_DDS_PORT_CFG = 8888`.
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
 - [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.10.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.10.11/24`.
@@ -918,7 +933,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 ### 13.3 Pre-Flight Verification (each flight)
 
 - [ ] **HIF-001** `ros2 topic hz /fmu/out/vehicle_status` — expect ≥ 5 Hz.
-- [ ] **HIF-002** (if Ethernet fallback active) `ping 192.168.12.31` from Jetson — expect < 1 ms RTT.
+- [ ] **HIF-002** (if Ethernet fallback active) `ping $FCC_ETH_IP` (default `192.168.10.31`) from Jetson — expect < 1 ms RTT.
 - [ ] **HIF-003** `gst-launch-1.0 nvarguscamerasrc sensor-id=0 num-buffers=10 ! fakesink` — no errors.
 - [ ] **HIF-004** `ping 192.168.10.10` from Jetson — GCS reachable.
 - [ ] **HIF-007** `ping 192.168.10.200` from Jetson — gimbal camera reachable; confirm RTSP stream per §9.5.

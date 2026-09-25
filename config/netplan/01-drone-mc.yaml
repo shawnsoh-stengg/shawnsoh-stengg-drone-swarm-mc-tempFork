@@ -1,4 +1,4 @@
-# /etc/netplan/01-drone-mc.yaml — Jetson dual-IP eth0 configuration.
+# /etc/netplan/01-drone-mc.yaml — Jetson eth0 configuration.
 # Installed by scripts/01-install-os.sh (TP-SM-001). HID-MC-001 §4.2 (HIF-002), §6.2 (HIF-004).
 #
 # The Jetson Orin NX built-in NIC does not enumerate as "eth0" — it gets a
@@ -20,17 +20,16 @@
 #
 # INFRA-008: this file is an envsubst template, not the file installed
 # directly — scripts/01-install-os.sh renders it against
-# /etc/drone-mc/environment's MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP
-# before installing to /etc/netplan/01-drone-mc.yaml. Provisioning a second
-# physical unit is: edit those three values in that drone's
+# /etc/drone-mc/environment's MC_ETH_MAC/MC_ETH_IP before installing to
+# /etc/netplan/01-drone-mc.yaml. Provisioning a second physical unit is:
+# edit those two values in that drone's
 # /etc/drone-mc/environment, re-run 01-install-os.sh — no hand-editing of
 # this file or the rendered netplan output.
 #
-# eth0 carries two subnets:
-#   MC_ETH_IP/24          — MANET-facing address (HIF-004): GCS, peer MCs
-#                            (192.168.10.11 by default)
-#   MC_ETH_INTERNAL_IP/24 — FCC-internal address (HIF-002): Pixhawk
-#                            Ethernet fallback (192.168.12.1 by default)
+# eth0 carries one address, MC_ETH_IP/24 (192.168.10.11 by default), on
+# the single 192.168.10.x subnet shared by the GCS, peer MCs (HIF-004) and
+# this drone's own Pixhawk (HIF-002, FCC_ETH_IP). There is no separate
+# MC<->FCC subnet: the Pixhawk's NuttX stack has only one IPv4 address.
 network:
   version: 2
   ethernets:
@@ -40,6 +39,5 @@ network:
       set-name: eth0
       addresses:
         - ${MC_ETH_IP}/24
-        - ${MC_ETH_INTERNAL_IP}/24
       nameservers:
         addresses: []

@@ -89,13 +89,13 @@ private:
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr pub_offboard_control_mode_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr pub_trajectory_setpoint_;
 
-  // Mission protocol — MAVLink 2/UDP, always 192.168.12.x:FCC_MISSION_PORT,
+  // Mission protocol — MAVLink 2/UDP, always FCC_ETH_IP:FCC_MISSION_PORT,
   // independent of FCC_TRANSPORT (ICD §3.1, IR-007). Not DDS.
   int mission_sock_fd_{-1};
   std::unique_ptr<MissionProtocolClient> mission_client_;
 
   // Optical-flow relay — a second, independent MAVLink 2/UDP channel, always
-  // 192.168.12.x:FCC_FLOW_PORT (ICD §3.3a, HID-MC-001 §10). Receive-only
+  // FCC_ETH_IP -> FCC_FLOW_PORT (ICD §3.3a, HID-MC-001 §10). Receive-only
   // (FCC -> MC), so unlike the mission channel this has no request/response
   // client and no socket contention to serialize against — its own thread,
   // own socket, own MAVLINK_COMM_2 parser state (distinct from

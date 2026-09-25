@@ -125,10 +125,9 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 
 | Node | IP Address | Role |
 |---|---|---|
-| Jetson MC | 192.168.10.11 | Mission Computer — this system |
-| Pixhawk FCC | 192.168.10.31 | Flight Control Computer |
+| Jetson MC | 192.168.10.11 | Mission Computer — this system (`MC_ETH_IP`, single eth0 address, per-drone) |
+| Pixhawk FCC | 192.168.10.31 | Flight Control Computer (`FCC_ETH_IP`, per-drone). Its only IPv4 address — PX4's NuttX stack supports one — so all MC↔FCC Ethernet traffic uses this same 192.168.10.x subnet; there is no separate internal subnet. |
 | QGC Laptop | 192.168.10.10 | Ground Control Station |
-| MC↔FCC internal | 192.168.12.x | Internal ethernet (also on MANET mesh) |
 | Peer MCs | 192.168.10.12+ | Other drone MCs in swarm |
 
 ### 2.4 MAVLink Channel Separation
@@ -139,7 +138,7 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 |---|---|---|
 | GCS → FCC | MAVLink 2/UDP | Standard PX4 autopilot channel. MC does not inject traffic. |
 | GCS → MC | MAVLink 2/UDP | Dedicated channel for mission upload and MC telemetry. Routed via mavlink-router on the MC. |
-| MC ↔ FCC | MAVLink 2/UDP | 192.168.12.x ethernet. Mission protocol channel (stock PX4 has no uXRCE-DDS-writable mission topic). |
+| MC ↔ FCC | MAVLink 2/UDP | Ethernet, to the FCC's single 192.168.10.x address (`FCC_ETH_IP`). Mission protocol channel (stock PX4 has no uXRCE-DDS-writable mission topic). |
 | MC ↔ FCC | uXRCE-DDS | Over ttyTHS1 serial. Not MAVLink. |
 
 ### 2.5 Mission Phases
@@ -301,13 +300,13 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
-| IR-001 | MUST | Test | The MC shall communicate with the FCC via uXRCE-DDS over ttyTHS1 serial (primary) and via MAVLink over 192.168.12.x ethernet link (for the mission protocol channel). The active transport shall be indicated in `/mc/health`. |
+| IR-001 | MUST | Test | The MC shall communicate with the FCC via uXRCE-DDS over ttyTHS1 serial (primary) and via MAVLink over the ethernet link to the FCC's single 192.168.10.x address (`FCC_ETH_IP`) (for the mission protocol channel). The active transport shall be indicated in `/mc/health`. |
 | IR-002 | MUST | Inspection | Transport selection (serial vs. ethernet) shall be controlled by a deployment-time configuration parameter without code changes. |
 | IR-003 | MUST | Inspection | The FccBackend interface shall expose transport-agnostic ROS 2 topics: subscribed topics for vehicle state (position, velocity, attitude, status, battery) and published topics for commands (mission upload, mission item update, vehicle_command). Application code shall interact with the FccBackend interface only. |
 | IR-004 | MUST | Inspection | The MC shall subscribe to the following PX4 uORB topics via uXRCE-DDS: `vehicle_local_position`, `vehicle_global_position`, `vehicle_status`, `battery_status`, `vehicle_attitude`, `vehicle_odometry`, `sensor_combined`. |
 | IR-005 | MUST | Inspection | The MC shall publish to the following PX4 uORB topics via uXRCE-DDS: `vehicle_command`. |
 | IR-006 | MUST | Test | End-to-end command latency from MC publishing `vehicle_command` to PX4 actuation confirmation shall be ≤ 100 ms. |
-| IR-007 | MUST | Test | The MC shall upload and replace FCC mission items using the standard MAVLink mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) over a dedicated UDP port on the 192.168.12.x link, independent of the `FCC_TRANSPORT` DDS transport selection (IR-002). A single-item replace (e.g. `FORMATION_SLOT`) re-runs this same full handshake against the last uploaded mission with one item changed, rather than `MISSION_WRITE_PARTIAL_LIST` — PX4 has no handler for that message at any known firmware version (FCC-010). This is the only MAVLink traffic on the MC↔FCC interface — uXRCE-DDS is otherwise used exclusively (stock PX4 has no DDS-writable mission topic). |
+| IR-007 | MUST | Test | The MC shall upload and replace FCC mission items using the standard MAVLink mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) over a dedicated UDP port (`:14555`) on the ethernet link to `FCC_ETH_IP`, independent of the `FCC_TRANSPORT` DDS transport selection (IR-002). A single-item replace (e.g. `FORMATION_SLOT`) re-runs this same full handshake against the last uploaded mission with one item changed, rather than `MISSION_WRITE_PARTIAL_LIST` — PX4 has no handler for that message at any known firmware version (FCC-010). This is the only MAVLink traffic on the MC↔FCC interface — uXRCE-DDS is otherwise used exclusively (stock PX4 has no DDS-writable mission topic). |
 
 #### 4.2.2 MC ↔ GCS
 

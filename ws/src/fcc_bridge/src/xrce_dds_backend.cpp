@@ -86,7 +86,7 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
 
   mission_sock_fd_ = open_mission_socket();
 
-  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.12.31");
+  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.10.31");
   const int mission_port = std::stoi(env_or("FCC_MISSION_PORT", "14555"));
   sockaddr_in target_addr{};
   target_addr.sin_family = AF_INET;
@@ -139,9 +139,9 @@ int XrceDdsBackend::open_mission_socket()
   constexpr int kReuseAddr = 1;
   ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &kReuseAddr, sizeof(kReuseAddr));
 
-  // Bind to the local side of the dedicated MC<->FCC ethernet link
-  // (192.168.12.1, HIF-002) so replies route back here regardless of which
-  // interface currently carries the DDS primary/secondary transport.
+  // Bind a fixed local port on the MC<->FCC ethernet link (eth0, HIF-002)
+  // so replies route back here regardless of which link currently carries
+  // the DDS primary/secondary transport.
   sockaddr_in local_addr{};
   local_addr.sin_family = AF_INET;
   local_addr.sin_port = htons(
@@ -167,7 +167,7 @@ int XrceDdsBackend::open_flow_socket()
   ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &kReuseAddr, sizeof(kReuseAddr));
 
   // Receive-only, so unlike open_mission_socket() this never needs to send —
-  // still binds locally (192.168.12.1-side, HIF-002) so the FCC's flow
+  // still binds a fixed local port (eth0, HIF-002) so the FCC's flow
   // MAVLink instance has a fixed destination to stream to.
   sockaddr_in local_addr{};
   local_addr.sin_family = AF_INET;

@@ -134,7 +134,7 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
   package "Hardware Interfaces" as HW #F0F0F8 {
     artifact "ttyTHS1\n(serial → FCC)" as TTY
     artifact "/dev/video*\n(CSI camera)" as VIDDEV
-    artifact "192.168.12.x\n(internal ethernet → FCC)" as ETH_INT
+    artifact "eth0 192.168.10.11\n(ethernet → FCC 192.168.10.31)" as ETH_INT
     artifact "192.168.10.x\n(MANET mesh)" as ETH_MESH
     artifact "192.168.10.200\n(gimbal camera, shared switch, HIF-007)" as ETH_GIMCAM
   }
@@ -183,7 +183,7 @@ VIDDEV --> SVC_CAM : "DeviceAllow /dev/video0"
 ETH_INT --> SVC_FCC
 ETH_GIMCAM .[#888888,dashed].> SVC_INGEST : "DeviceAllow (network_mode=host)\n(not built)"
 
-SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
+SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.10.31:8888"
 SVC_MLR --> GCS_HW : "MAVLink 2/UDP\nChannel A/B (+ Channel C\nfor SVC_ORCH below)"
 SVC_ORCH .[#4060C0].> GCS_HW : "MAVLink 2/UDP\nChannel C, routed via\nSVC_MLR — see diagram 05"
 SVC_FCC --> SVC_ORCH : "required by\n(GCS-006 unit dependency)"

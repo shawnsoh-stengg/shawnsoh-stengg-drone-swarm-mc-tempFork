@@ -25,10 +25,11 @@ import sys
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from mc_msgs.msg import GcsCommand, IndoorGnssSimStatus, OpticalFlow
+from mc_msgs.msg import FaultEvent, GcsCommand, IndoorGnssSimStatus, OpticalFlow
 from px4_msgs.msg import SensorGps
 
 MC_CMD_INDOOR_GNSS_SIM_ANCHOR = 50005
@@ -95,9 +96,12 @@ def run_anchor(node, lat, lon, alt):
 
 
 def run_watch(node):
-    latest = {"sim": None, "gps": None, "gps_rx": 0.0, "gps_n": 0}
+    latest = {"sim": None, "gps": None, "gps_rx": 0.0, "gps_n": 0, "lost": None}
 
     def on_sim(msg):
+        prev = latest["sim"]
+        if prev is not None and msg.time_since_anchor_s < prev.time_since_anchor_s:
+            latest["lost"] = None  # re-anchored -- gnss_sim_node cleared its latch too
         latest["sim"] = msg
 
     def on_gps(msg):
@@ -105,7 +109,16 @@ def run_watch(node):
         latest["gps_rx"] = time.time()
         latest["gps_n"] += 1
 
+    def on_fault(msg):
+        # IndoorGnssSimStatus.active stays true after IGS-005's watchdog
+        # latches, so the latch is only visible here -- and only if this
+        # watch was already running when it fired (edge-triggered, not
+        # latched on the topic). Cleared again by the next re-anchor.
+        if msg.fault_id == FaultEvent.INDOOR_GNSS_SIM_LOST:
+            latest["lost"] = msg.description
+
     node.create_subscription(IndoorGnssSimStatus, "/mc/indoor/gnss_sim_status", on_sim, 10)
+    node.create_subscription(FaultEvent, "/mc/fault", on_fault, 10)
     node.create_subscription(SensorGps, "/fmu/out/vehicle_gps_position", on_gps, PX4_QOS)
 
     def report():
@@ -126,6 +139,8 @@ def run_watch(node):
                      f"lon={gps.longitude_deg:.7f} src={src}(bus={bus_type}/{bus} "
                      f"sysid={address} devtype=0x{devtype:02X}) age={age:.1f}s n={latest['gps_n']}")
         print(f"{time.strftime('%H:%M:%S')}  {sim_s}  |  {gps_s}", flush=True)
+        if latest["lost"] is not None:
+            print(f"          LATCHED INDOOR_GNSS_SIM_LOST: {latest['lost']}", flush=True)
 
     node.create_timer(1.0, report)
     rclpy.spin(node)
@@ -147,8 +162,8 @@ def main():
             run_anchor(node, *sys.argv[2:5])
         else:
             run_watch(node)
-    except KeyboardInterrupt:
-        pass
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # Ctrl-C, or SIGTERM from `timeout N` -- both are normal exits
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

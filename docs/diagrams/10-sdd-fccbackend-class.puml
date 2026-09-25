@@ -119,7 +119,7 @@ class XrceDdsBackend #A8CCEE {
   - pub_offboard_control_mode_
   - pub_trajectory_setpoint_
   ' Mission protocol — MAVLink 2/UDP :14555 (FCC_MISSION_PORT),
-  ' always 192.168.12.x (not DDS; stock PX4 has no DDS-writable
+  ' always ethernet to FCC_ETH_IP (not DDS; stock PX4 has no DDS-writable
   ' mission topic, IR-007). Protocol logic itself lives in the
   ' shared MissionProtocolClient below, not in this class.
   - mission_sock_fd_ : int
@@ -280,7 +280,7 @@ end note
 note right of XrceDdsBackend
   Production.
   ttyTHS1  @921600 baud  (primary)
-  192.168.12.x  UDP:8888  (secondary)
+  192.168.10.31  UDP:8888  (secondary)
   Micro XRCE-DDS Agent bridges
   ROS 2 ↔ PX4 uORB topic bus.
   All 7 subscribed topics updated
@@ -289,7 +289,7 @@ note right of XrceDdsBackend
   upload_mission()/update_mission_item()
   do NOT use DDS — mission_sock_fd_ is a
   separate MAVLink 2/UDP socket to
-  192.168.12.31:14555, always active
+  192.168.10.31:14555, always active
   regardless of FCC_TRANSPORT.  [IR-007]
   ──────────────────────────────
   stream_offboard_setpoint() (FCC-009) DOES

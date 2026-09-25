@@ -51,7 +51,7 @@ participant "Gimbal\nIP Camera\n192.168.10.200" as GIMCAM #EDE0F8
 ' ═══════════════════════════════════════════════════
 ' IFD-001: MC ↔ FCC  (uXRCE-DDS)
 ' ═══════════════════════════════════════════════════
-== IFD-001 · MC ↔ FCC · uXRCE-DDS · ttyTHS1 921600 / 192.168.12.x UDP:8888 ==
+== IFD-001 · MC ↔ FCC · uXRCE-DDS · ttyTHS1 921600 / 192.168.10.31 UDP:8888 ==
 
 FCC -[#E07000]> MC : <color:#E07000>vehicle_local_position</color>  ≥10 Hz\n  x,y,z (NED m)  ·  vx,vy,vz (m/s)  ·  heading (rad)  ·  xy_valid, z_valid
 FCC -[#E07000]> MC : <color:#E07000>vehicle_global_position</color>  ≥5 Hz\n  lat,lon (degE7)  ·  alt_msl (m)  ·  eph,epv (m)
@@ -73,13 +73,13 @@ note over FCC, MC #FFF0E0
   vehicle_command, sole authority mission_manager_node  [FCC-009]
 end note
 
-== IFD-001b · MC ↔ FCC · Mission Protocol (MAVLink 2/UDP) · 192.168.12.31:14555 — always ethernet ==
+== IFD-001b · MC ↔ FCC · Mission Protocol (MAVLink 2/UDP) · 192.168.10.31:14555 — always ethernet ==
 
 note over FCC, MC #F5ECF5
   Stock PX4 has no DDS-writable mission topic — items live in FCC-side
   dataman, reachable only via the standard MAVLink mission protocol.
   This is the ONE MAVLink exception on the MC↔FCC link.  [IR-007]
-  Independent of FCC_TRANSPORT (§ above) — always active on 192.168.12.x.
+  Independent of FCC_TRANSPORT (§ above) — always active over eth0 to the FCC's single address.
 end note
 
 MC -[#C020A0]> FCC : <color:#C020A0>MISSION_COUNT</color>  →  <color:#C020A0>MISSION_ITEM_INT</color> ×N  →  <color:#C020A0>MISSION_ACK</color>\n  full upload, on mission change only  ·  search paths, ingress/muster legs (FR-013)\n  item: seq · frame=GLOBAL_INT · command (NAV_WAYPOINT=16) · lat,lon (degE7) · alt_msl (m) · acceptance_radius (m)

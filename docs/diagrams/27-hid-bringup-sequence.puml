@@ -120,8 +120,9 @@ udev/sysctl are all installed by 01-install-os.sh;
 
 :Configure Netplan on Jetson
 /etc/netplan/01-drone-mc.yaml:
-  eth0: 192.168.10.11/24  (MANET)
-         192.168.12.1/24  (FCC-internal)
+  eth0: 192.168.10.11/24  (single address —
+        GCS, peers and this drone's FCC
+        all share 192.168.10.x)
 netplan apply;
 
 :Apply Jetson-IO device tree overlay
@@ -142,7 +143,8 @@ Connect to Pixhawk on UDP:14550;
   Save and reboot Pixhawk;
 
 :Set PX4 parameters for HIF-002 Ethernet:
-  UXRCE_DDS_AG_IP  = 3232238593  (192.168.12.1)
+  Pixhawk Ethernet: 192.168.10.31/24  (its one address)
+  UXRCE_DDS_AG_IP  = -1062729205  (192.168.10.11, signed int32)
   UXRCE_DDS_PORT_CFG = 8888
   (Secondary transport — serial is primary);
 
