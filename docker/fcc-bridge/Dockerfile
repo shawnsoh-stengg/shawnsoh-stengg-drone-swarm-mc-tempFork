@@ -69,6 +69,9 @@ COPY --from=builder /opt/drone-mc/install /opt/drone-mc/install
 COPY --from=xrce_agent_builder /usr/local /usr/local
 RUN ldconfig
 COPY ws/src/fcc_bridge/params/default.yaml /etc/drone-mc/params/fcc_bridge.yaml
+# Outside /etc/drone-mc on purpose: the systemd unit bind-mounts the host's
+# /etc/drone-mc over the image's, which would hide a file baked in there.
+COPY docker/fcc-bridge/fastdds-agent.xml /usr/local/share/fcc-bridge/fastdds-agent.xml
 COPY docker/fcc-bridge/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

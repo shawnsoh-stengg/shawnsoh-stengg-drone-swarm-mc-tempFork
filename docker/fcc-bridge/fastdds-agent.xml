@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast-DDS profile for the Micro XRCE-DDS Agent only (FCC-008), loaded via
+  FASTRTPS_DEFAULT_PROFILES_FILE in entrypoint.sh — fcc_bridge_node and
+  every other MC node run rmw_cyclonedds_cpp and never read this file.
+
+  The Agent's DDS side is its own embedded Fast-DDS, not an RMW. Out of the
+  box it discovers peers by SPDP multicast (239.255.0.1) plus shared memory,
+  while docker/ros2-core/cyclonedds.xml runs CycloneDDS unicast-only on lo
+  (AllowMulticast=false, Peers=127.0.0.1). The two never met: on the real
+  orin-nx + Pixhawk bench pair, PX4 created all its /fmu/* topics through
+  the Agent and `ros2 topic list` showed them under rmw_fastrtps_cpp but
+  not under rmw_cyclonedds_cpp, so fcc_bridge_node received nothing.
+
+  A default profile alone does NOT fix it: with PX4's stock
+  UXRCE_DDS_PTCFG=0, the FCC creates its participant from an inline XML
+  string (uxrce_dds_client.cpp), and the Agent's create_by_xml() applies
+  that string's rtps attributes over the default QoS — resetting transports
+  and discovery right back to Fast-DDS's multicast built-ins. The FCC must
+  run UXRCE_DDS_PTCFG=2 ("Custom participant"), which makes it ask the
+  Agent for a participant by reference to the profile name
+  "px4_participant" instead (create_participant_with_profile()), so this
+  profile is the one that actually applies. HID-MC-001 §3.3 lists the param.
+
+  The profile puts the Agent on the same footing as cyclonedds.xml: UDPv4
+  on 127.0.0.1 only, no SHM, unicast discovery seeded with 127.0.0.1.
+  maxInitialPeersRange covers participant indices 0..32, matching
+  cyclonedds.xml's MaxAutoParticipantIndex, so the Agent's SPDP reaches
+  every CycloneDDS participant on this host whatever index it picked.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_lo</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList>
+        <address>127.0.0.1</address>
+      </interfaceWhiteList>
+      <maxInitialPeersRange>33</maxInitialPeersRange>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="px4_participant">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_lo</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+      <builtin>
+        <initialPeersList>
+          <locator>
+            <udpv4>
+              <address>127.0.0.1</address>
+            </udpv4>
+          </locator>
+        </initialPeersList>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>

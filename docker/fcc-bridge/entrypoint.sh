@@ -15,6 +15,12 @@ set -euo pipefail
 
 FCC_TRANSPORT="${FCC_TRANSPORT:-serial}"
 
+# The Agent's embedded Fast-DDS must discover over unicast lo, the same way
+# cyclonedds.xml does, or CycloneDDS nodes never see PX4's /fmu/* topics.
+# Exported for the Agent only; fcc_bridge_node (CycloneDDS) ignores it.
+# See fastdds-agent.xml for the full story.
+export FASTRTPS_DEFAULT_PROFILES_FILE=/usr/local/share/fcc-bridge/fastdds-agent.xml
+
 case "${FCC_TRANSPORT}" in
     serial)
         # No --rts-cts: PX4's uxrce_dds_client clears CRTSCTS on its own UART

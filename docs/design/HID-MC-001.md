@@ -175,9 +175,12 @@ Both Jetson and Pixhawk UART pins are 3.3 V — no level shifting is required.
 ```
 UXRCE_DDS_CFG = 102   (UART B / TELEM2)
 UXRCE_DDS_BAUD = 921600
+UXRCE_DDS_PTCFG = 2   (Custom participant — reboot required)
 ```
 
 Set via QGroundControl → Parameters → UXRCE_DDS_CFG and UXRCE_DDS_BAUD before first flight.
+
+`UXRCE_DDS_PTCFG = 2` is mandatory, not optional tuning. At the stock `0`, PX4 creates its Agent-side participant from an inline XML string that resets the Agent's Fast-DDS transports to their multicast defaults, and the MC's CycloneDDS (unicast-only on `lo`, `docker/ros2-core/cyclonedds.xml`) never discovers it: PX4 creates every `/fmu/*` topic, but `fcc_bridge_node` receives nothing (confirmed on the orin-nx + Pixhawk 6X bench pair, 2026-09-25). At `2`, PX4 asks the Agent for the `px4_participant` profile instead, which the fcc-bridge image ships in `docker/fcc-bridge/fastdds-agent.xml` (unicast on 127.0.0.1, matching the CycloneDDS config). The two must agree: with `PTCFG = 2` and no `px4_participant` profile loaded, the Agent can't create PX4's participant at all.
 
 **Jetson Linux device tree:**
 
@@ -202,8 +205,8 @@ After power-on, verify the link is operational:
 
 ```bash
 # On Jetson — check DDS bridge traffic
-ros2 topic hz /fmu/out/vehicle_status   # expect ≥5 Hz
-ros2 topic hz /fmu/out/vehicle_local_position   # expect ≥10 Hz
+ros2 topic hz /fmu/out/vehicle_status_v1   # expect ~2 Hz idle (5 Hz cap, faster on state change)
+ros2 topic hz /fmu/out/vehicle_local_position_v1   # expect ≥10 Hz
 ```
 
 If the topics are absent, check:
@@ -211,6 +214,7 @@ If the topics are absent, check:
 2. `ls /dev/ttyTHS1` — does the device node exist?
 3. PX4 parameter `UXRCE_DDS_CFG` — is it set to UART B?
 4. Check for serial framing errors in the Micro XRCE-DDS Agent log.
+5. Agent log shows `topic created` but `ros2 topic list` has no `/fmu/*` topics — PX4 parameter `UXRCE_DDS_PTCFG` is not `2` (see above).
 
 ---
 
@@ -904,7 +908,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 ### 13.2 Software Configuration (one-time, per drone)
 
 - [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the dual-IP Netplan config (192.168.10.11/24 + 192.168.12.1/24 on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
-- [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600` via QGroundControl.
+- [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600`, `UXRCE_DDS_PTCFG = 2` via QGroundControl, then reboot the FCC (§3.3 — without `PTCFG = 2` no `/fmu/*` topic reaches `fcc_bridge_node`).
 - [ ] **HIF-002** Set PX4 Ethernet IP: `UXRCE_DDS_AG_IP = 3232238593`, `UXRCE_DDS_PORT_CFG = 8888`.
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
