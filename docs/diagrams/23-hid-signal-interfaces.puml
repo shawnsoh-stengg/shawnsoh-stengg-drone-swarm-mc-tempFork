@@ -67,14 +67,14 @@ rectangle "Gimbal IP Camera\n192.168.10.200\nRTSP/H.265 · RJ45 via JST-GH pigta
 
 package "MC Assembly — Holybro Pixhawk Jetson Baseboard" as MC_PKG #E0EAF8 {
 
-  package "Jetson Orin NX 16GB  ·  192.168.10.11 / 192.168.12.1" as JET #D4E8F4 {
+  package "Jetson Orin NX 16GB  ·  192.168.10.11" as JET #D4E8F4 {
     rectangle "Software Stack\nUbuntu 22.04 · JetPack 6.2.2\nROS 2 Humble · Docker\ndrone-mc.target" as JET_SW #B8D4EC
     rectangle "Peripherals\nttyTHS1  ·  ttyTHS0\neth0  ·  CSI port 0\nUSB-C" as JET_HW #B8D4EC
   }
 
   rectangle "Baseboard\nPower regulator · Ethernet switch\nUART bridge (on-board trace)\nINA226 power monitor" as BB #C8D8E8
 
-  package "Pixhawk 6X  ·  192.168.10.31 / 192.168.12.31" as PX4 #F4EAD4 {
+  package "Pixhawk 6X  ·  192.168.10.31" as PX4 #F4EAD4 {
     rectangle "PX4 v1.14 / NuttX\nSTM32H7\nuXRCE-DDS client" as PX4_SW #E8D4A8
     rectangle "Peripherals\nUART B · Ethernet\nMicroSD · GPS · ESC\nRC · TELEM" as PX4_HW #E8D4A8
   }
@@ -93,10 +93,10 @@ note on link #E0E8F8
 end note
 
 ' ═══════════════════════════════════════════════════
-' HIF-002: INTERNAL ETHERNET (192.168.12.x)
+' HIF-002: ON-BOARD ETHERNET MC↔FCC (192.168.10.x)
 ' ═══════════════════════════════════════════════════
 
-BB <-[#208040,thickness=2]-> PX4_HW : **HIF-002**  100BASE-T (on-board)\n192.168.12.1 ↔ 192.168.12.31\nUDP:8888 uXRCE-DDS secondary
+BB <-[#208040,thickness=2]-> PX4_HW : **HIF-002**  100BASE-T (on-board switch)\n192.168.10.11 ↔ 192.168.10.31\nUDP:8888 uXRCE-DDS secondary\nUDP:14555 mission · :14556 flow relay\nUDP:14557 HIL_GPS · :14550 Channel A
 
 ' ═══════════════════════════════════════════════════
 ' HIF-003: CSI-2 CAMERA
@@ -131,13 +131,13 @@ note on link #E8F4E8
 end note
 
 ' ═══════════════════════════════════════════════════
-' HIF-007: GIMBAL IP CAMERA (shared internal switch)
+' HIF-007: GIMBAL IP CAMERA (shared on-board switch)
 ' ═══════════════════════════════════════════════════
 
 GIMCAM -[#20A070,thickness=2]-> BB : **HIF-007**  1000BASE-TX\nJST-GH 6-pin → RJ45 pigtail ≤ 2 m\n192.168.10.200 · RTSP/H.265 :8554
 
 note on link #E0F4EC
-  Shares the SAME internal Ethernet switch as
+  Shares the SAME on-board Ethernet switch as
   HIF-002/HIF-004 — not a second Jetson PHY.
   Reached via Jetson's existing eth0 (192.168.10.11).
   Link silence > 3 s → GIMBAL_LINK_LOST

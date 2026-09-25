@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 01-install-os.sh — Base OS configuration on the Jetson: dual-IP Netplan
+# 01-install-os.sh — Base OS configuration on the Jetson: eth0 Netplan
 # (HIF-002/HIF-004), the ttyTHS1 udev rule (HIF-001), and the CycloneDDS
 # socket buffer sysctl floor (INFRA-004).
 # Companion smoke test: 01b-smoke-test-os.sh
@@ -61,7 +61,7 @@ if ! command -v envsubst &>/dev/null; then
 fi
 
 # INFRA-008: config/netplan/01-drone-mc.yaml is an envsubst template
-# (MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP) — /etc/drone-mc/environment is
+# (MC_ETH_MAC/MC_ETH_IP) — /etc/drone-mc/environment is
 # this drone's source of truth for those values, so it must exist before
 # rendering. This mirrors 02-install-systemd-units.sh's own idempotent
 # provisioning of the same file: install the repo default only if this
@@ -73,13 +73,48 @@ if [[ -f /etc/drone-mc/environment ]]; then
 else
     install -m 644 "${REPO_ROOT}/config/environment" /etc/drone-mc/environment
     echo "    Installed default environment. Edit DRONE_ID/MC_ETH_MAC/MC_ETH_IP/" \
-         "MC_ETH_INTERNAL_IP/FCC_TRANSPORT for this vehicle, then re-run this" \
+         "FCC_ETH_IP/FCC_TRANSPORT for this vehicle, then re-run this" \
          "script to render netplan with the real values."
+fi
+
+# Single-IP FCC migration (2026-09-25): the Pixhawk's NuttX stack has
+# exactly one IPv4 address, so the old dual-homed layout (FCC_ETH_IP on a
+# 192.168.12.x internal subnet + FCC_GCS_IP on 192.168.10.x, and the MC's
+# own second MC_ETH_INTERNAL_IP) was never real. FCC_ETH_IP is now the one
+# FCC address. Fold an on-device FCC_GCS_IP into a still-192.168.12.x
+# FCC_ETH_IP and drop both retired variables — before the backfill below,
+# so it can't re-add them. Refuses to guess if the two disagree otherwise.
+ENV_FILE=/etc/drone-mc/environment
+old_fcc_eth="$(grep -E '^FCC_ETH_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2-)"
+old_fcc_gcs="$(grep -E '^FCC_GCS_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2-)"
+if [[ -n "${old_fcc_gcs}" ]]; then
+    if [[ -z "${old_fcc_eth}" || "${old_fcc_eth}" == 192.168.12.* ]]; then
+        sed -i '/^FCC_ETH_IP=/d' "${ENV_FILE}"
+        echo "FCC_ETH_IP=${old_fcc_gcs}" >> "${ENV_FILE}"
+        echo "    Migrated FCC_ETH_IP ${old_fcc_eth:-<unset>} -> ${old_fcc_gcs} (was FCC_GCS_IP; single-IP FCC)"
+    elif [[ "${old_fcc_eth}" != "${old_fcc_gcs}" ]]; then
+        echo "ERROR: ${ENV_FILE} has FCC_ETH_IP=${old_fcc_eth} and FCC_GCS_IP=${old_fcc_gcs}" \
+             "— the FCC has one address now (FCC_ETH_IP). Set FCC_ETH_IP to the Pixhawk's" \
+             "real address (\`netman show\`), delete FCC_GCS_IP, and re-run." >&2
+        exit 1
+    fi
+    sed -i '/^FCC_GCS_IP=/d' "${ENV_FILE}"
+    echo "    Retired FCC_GCS_IP from ${ENV_FILE}"
+fi
+if grep -qE '^FCC_ETH_IP=192\.168\.12\.' "${ENV_FILE}"; then
+    echo "ERROR: ${ENV_FILE}'s FCC_ETH_IP is still on the retired 192.168.12.x subnet and" \
+         "there's no FCC_GCS_IP to migrate from. Set it to the Pixhawk's real address" \
+         "(\`netman show\` in the MAVLink console) and re-run." >&2
+    exit 1
+fi
+if grep -q '^MC_ETH_INTERNAL_IP=' "${ENV_FILE}"; then
+    sed -i '/^MC_ETH_INTERNAL_IP=/d' "${ENV_FILE}"
+    echo "    Retired MC_ETH_INTERNAL_IP from ${ENV_FILE} (eth0 has a single address now)"
 fi
 
 # Per-variable migration: the file-level check above only seeds
 # /etc/drone-mc/environment once, so a repo change to config/environment
-# (e.g. INFRA-008 adding MC_ETH_MAC/MC_ETH_IP/MC_ETH_INTERNAL_IP/FCC_GCS_IP)
+# (e.g. INFRA-008 adding MC_ETH_MAC/MC_ETH_IP)
 # never reaches an already-provisioned Jetson on its own. Backfill any
 # variable present in the repo default but missing on-device, without
 # touching existing per-drone values.
@@ -91,12 +126,12 @@ while IFS='=' read -r key value; do
     fi
 done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${REPO_ROOT}/config/environment")
 
-echo "==> Rendering /etc/netplan/01-drone-mc.yaml (HIF-002/HIF-004 dual-IP eth0)"
+echo "==> Rendering /etc/netplan/01-drone-mc.yaml (HIF-002/HIF-004 eth0)"
 set -a
 # shellcheck disable=SC1091
 source /etc/drone-mc/environment
 set +a
-for var in MC_ETH_MAC MC_ETH_IP MC_ETH_INTERNAL_IP; do
+for var in MC_ETH_MAC MC_ETH_IP; do
     if [[ -z "${!var:-}" ]]; then
         echo "ERROR: ${var} is unset/empty in /etc/drone-mc/environment — envsubst would" \
              "silently render a blank value into netplan. Set it and re-run." >&2
@@ -142,7 +177,7 @@ fi
 
 RENDERED_NETPLAN="$(mktemp)"
 trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
-envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_INTERNAL_IP' \
+envsubst '$MC_ETH_MAC $MC_ETH_IP' \
     < "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" > "${RENDERED_NETPLAN}"
 install -m 600 "${RENDERED_NETPLAN}" /etc/netplan/01-drone-mc.yaml
 netplan apply

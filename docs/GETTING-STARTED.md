@@ -12,7 +12,8 @@ first, read `docs/ARCHITECTURE.md`.
   Manager (HID-MC-001 §8.1), booted to a login prompt. Steps 0+ below run
   directly on that Jetson.
 - A Pixhawk 6X (PX4 v1.17) wired per `HID-MC-001.md`, reachable over
-  `ttyTHS1` (921600 baud) or the `192.168.12.x` ethernet fallback.
+  `ttyTHS1` (921600 baud) or the ethernet fallback (the Pixhawk's single
+  `FCC_ETH_IP` address on the shared `192.168.10.x` subnet).
 - `sudo` access on the Jetson (the numbered scripts install udev rules,
   netplan config, sysctl floors, and systemd units).
 
@@ -27,7 +28,7 @@ run it right after the matching build step to catch problems early rather
 than at the end of the chain.
 
 ```bash
-# 0. One-time OS setup: Netplan dual-IP (eth0), ttyTHS1 udev rule, CycloneDDS sysctl floor
+# 0. One-time OS setup: Netplan single-IP (eth0, MC_ETH_IP), ttyTHS1 udev rule, CycloneDDS sysctl floor
 sudo ./scripts/01-install-os.sh
 sudo ./scripts/01b-smoke-test-os.sh
 

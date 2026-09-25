@@ -73,7 +73,7 @@ rectangle "Gimbal IP Camera\n192.168.10.200  ·  shared switch (HIF-007)" as GIM
 ' ═══════════════════════════════════════════════════
 package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as MC_PKG #E4EEF8 {
 
-  rectangle "IFD-001\nfcc_bridge_node\n[FccBackend]\n─────────────────\nttyTHS1  921600 baud\n192.168.12.x  UDP:8888  uXRCE-DDS Agent\n192.168.12.x  UDP:14555  mission protocol (MAVLink, always on)" as IFD001 #C0D8F0
+  rectangle "IFD-001\nfcc_bridge_node\n[FccBackend]\n─────────────────\nttyTHS1  921600 baud\n192.168.10.31  UDP:8888  uXRCE-DDS (ethernet fallback)\n192.168.10.31  UDP:14555  mission protocol (MAVLink, always on)" as IFD001 #C0D8F0
 
   rectangle "IFD-002\nmavlink-router v4\ngcs_mavlink_node\n─────────────────\nUDP :14552 (recv)  :14551 (send)\nsys_id = drone_id  comp_id = 191\n·····································\nMAVROS also runs in this container\n(separate OS process) but mirrors\nChannel A telemetry, GCS-005 — not\nan IFD-002/Channel B participant" as IFD002 #A8D0A8
 

@@ -21,7 +21,7 @@
 # /etc/drone-mc/mavlink-router-channel-*.conf files were actually rendered
 # from this drone's current /etc/drone-mc/environment — the template checks
 # above render an in-memory copy against a representative default and can't
-# catch a stale on-disk file left over from before FCC_GCS_IP/GCS_IP were
+# catch a stale on-disk file left over from before FCC_ETH_IP/GCS_IP were
 # last edited.
 #
 # Set LIVE_CHECK=1 to additionally start the built image against
@@ -61,13 +61,13 @@ check "channel-b.conf present"  test -f "${TMPL_B}"
 # exact same literal values as before this change.
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
-: "${FCC_GCS_IP:=192.168.10.31}"
+: "${FCC_ETH_IP:=192.168.10.31}"
 : "${GCS_IP:=192.168.10.10}"
-export FCC_GCS_IP GCS_IP
+export FCC_ETH_IP GCS_IP
 CONF_A="${RENDER_DIR}/mavlink-router-channel-a.conf"
 CONF_B="${RENDER_DIR}/mavlink-router-channel-b.conf"
 CONF_C="${RENDER_DIR}/mavlink-router-channel-c.conf"
-envsubst '$FCC_GCS_IP' < "${TMPL_A}" > "${CONF_A}"
+envsubst '$FCC_ETH_IP' < "${TMPL_A}" > "${CONF_A}"
 envsubst '$GCS_IP' < "${TMPL_B}" > "${CONF_B}"
 envsubst '$GCS_IP' < "${TMPL_C}" > "${CONF_C}"
 
@@ -151,7 +151,7 @@ check "install script provisions channel-c.conf" \
 # grep, not a container/tcpdump run): everything above only proves the
 # *template* has the right shape when rendered against a representative
 # default. It never looks at what's actually on this host, so it can't
-# catch e.g. FCC_GCS_IP/GCS_IP having been edited in
+# catch e.g. FCC_ETH_IP/GCS_IP having been edited in
 # /etc/drone-mc/environment without a follow-up
 # scripts/02-install-systemd-units.sh run to re-render the deployed
 # .conf files. Skipped on a plain dev checkout that was never provisioned.
@@ -161,11 +161,11 @@ LIVE_CONF_B="/etc/drone-mc/mavlink-router-channel-b.conf"
 LIVE_CONF_C="/etc/drone-mc/mavlink-router-channel-c.conf"
 if [[ -f "${LIVE_ENV}" ]]; then
     echo "==> Checking deployed configs on this host against /etc/drone-mc/environment"
-    LIVE_FCC_GCS_IP="$(grep -E '^FCC_GCS_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
+    LIVE_FCC_ETH_IP="$(grep -E '^FCC_ETH_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
     LIVE_GCS_IP="$(grep -E '^GCS_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
-    if [[ -n "${LIVE_FCC_GCS_IP}" && -f "${LIVE_CONF_A}" ]]; then
-        check "deployed channel-a.conf matches this drone's FCC_GCS_IP (${LIVE_FCC_GCS_IP})" \
-            grep -qE "Address = ${LIVE_FCC_GCS_IP//./\\.}\$" "${LIVE_CONF_A}"
+    if [[ -n "${LIVE_FCC_ETH_IP}" && -f "${LIVE_CONF_A}" ]]; then
+        check "deployed channel-a.conf matches this drone's FCC_ETH_IP (${LIVE_FCC_ETH_IP})" \
+            grep -qE "Address = ${LIVE_FCC_ETH_IP//./\\.}\$" "${LIVE_CONF_A}"
     fi
     if [[ -n "${LIVE_GCS_IP}" && -f "${LIVE_CONF_B}" ]]; then
         check "deployed channel-b.conf matches this drone's GCS_IP (${LIVE_GCS_IP})" \

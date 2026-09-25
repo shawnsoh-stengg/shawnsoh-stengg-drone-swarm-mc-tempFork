@@ -241,7 +241,7 @@ empty directory. `scripts/02-install-systemd-units.sh` provisions:
 | `/etc/drone-mc/environment` | `config/environment` | Only installed if absent — existing per-drone values are never overwritten. This is the one file an operator hand-edits; everything below is now rendered *from* it (`INFRA-008`) |
 | `/etc/drone-mc/cyclonedds.xml` | `docker/ros2-core/cyclonedds.xml` | Only installed if absent |
 | `/etc/drone-mc/zenoh-bridge-dds.json5` | `config/zenoh-bridge-dds.json5` (envsubst template) | Always regenerated from `config/fleet.yaml` + this drone's `DRONE_ID` — no longer hand-edited per drone |
-| `/etc/drone-mc/mavlink-router-channel-a.conf` | `config/mavlink-router-channel-a.conf` (envsubst template) | Always re-rendered against `FCC_GCS_IP` |
+| `/etc/drone-mc/mavlink-router-channel-a.conf` | `config/mavlink-router-channel-a.conf` (envsubst template) | Always re-rendered against `FCC_ETH_IP` |
 | `/etc/drone-mc/mavlink-router-channel-b.conf` | `config/mavlink-router-channel-b.conf` (envsubst template) | Always re-rendered against `GCS_IP` |
 | `/etc/drone-mc/mavlink-router-channel-c.conf` | `config/mavlink-router-channel-c.conf` (envsubst template) | Always re-rendered against `GCS_IP` |
 | `/etc/drone-mc/params/fcc_bridge.yaml` | `ws/src/fcc_bridge/params/default.yaml` | Only installed if absent |
@@ -255,7 +255,7 @@ it needs those values for:
 
 | File | Source | First-install behavior |
 |---|---|---|
-| `/etc/netplan/01-drone-mc.yaml` | `config/netplan/01-drone-mc.yaml` (envsubst template) | Always re-rendered against `MC_ETH_MAC`/`MC_ETH_IP`/`MC_ETH_INTERNAL_IP`, then `netplan apply` |
+| `/etc/netplan/01-drone-mc.yaml` | `config/netplan/01-drone-mc.yaml` (envsubst template) | Always re-rendered against `MC_ETH_MAC`/`MC_ETH_IP` (single eth0 address), then `netplan apply` |
 
 Every `docker/*/entrypoint.sh` passes `--params-file /etc/drone-mc/params/<name>.yaml`
 by that exact filename — each package only ever shipped its own
@@ -272,8 +272,10 @@ value.
 **Before first `systemctl start drone-mc.target` on a given vehicle**, edit
 `/etc/drone-mc/environment` — set `DRONE_ID`, `MC_VERSION` (image tag),
 `FCC_TRANSPORT` (`serial` for production ttyTHS1, `ethernet` for the
-192.168.12.x fallback), and this vehicle's own network identity
-(`MC_ETH_MAC`/`MC_ETH_IP`/`MC_ETH_INTERNAL_IP`, `FCC_GCS_IP`). Full
+UDP `:8888` fallback to `FCC_ETH_IP`), and this vehicle's own network identity
+(`MC_ETH_MAC`/`MC_ETH_IP`, `FCC_ETH_IP` — the Pixhawk's single 192.168.10.x
+address; the old `MC_ETH_INTERNAL_IP`/`FCC_GCS_IP` are retired and migrated
+automatically by `01-install-os.sh`/`02-install-systemd-units.sh`). Full
 variable reference in `config/environment`'s own comments. That one file
 is now the only thing to hand-edit — see "Bringing up drone N" below.
 
@@ -297,8 +299,8 @@ bringing up drone N is:
 3. Edit `/etc/drone-mc/environment` on drone N: `DRONE_ID`, `MC_ETH_MAC`
    (this unit's real NIC MAC — see the file that used to hardcode this,
    `config/netplan/01-drone-mc.yaml`, for why it must be matched by MAC
-   not interface name), `MC_ETH_IP`, `MC_ETH_INTERNAL_IP`, `FCC_GCS_IP`
-   (this unit's own Pixhawk address).
+   not interface name), `MC_ETH_IP`, `FCC_ETH_IP`
+   (this unit's own Pixhawk address — its only one, on 192.168.10.x).
 4. Re-run `01-install-os.sh` (renders + applies netplan with the real
    values) and `02-install-systemd-units.sh` (renders the mavlink-router
    confs and the zenoh peer list).

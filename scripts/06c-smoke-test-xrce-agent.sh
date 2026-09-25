@@ -6,7 +6,7 @@
 # Ref: HID-MC-001 §4.3, FCC-MISSION-CHANNEL-BACKLOG.md FCC-008.
 #
 # Runs entirely against the ethernet transport with loopback overrides — no
-# real Pixhawk or 192.168.12.x subnet required (mirrors
+# real Pixhawk required (mirrors
 # 08b-smoke-test-fcc-bridge.sh's FCC_ETH_IP=127.0.0.1 pattern). The
 # serial-transport branch is exercised on real hardware by
 # 06b-smoke-test-fcc-links.sh's LIVE_CHECK path instead, since that needs

@@ -38,42 +38,23 @@ skinparam arrow {
 }
 
 ' ═══════════════════════════════════════════════════
-' SUBNET: 192.168.12.x  (Internal MC↔FCC)
+' SUBNET: 192.168.10.x  (single subnet — MANET + on-board MC↔FCC)
 ' ═══════════════════════════════════════════════════
 
-package "Internal Subnet  192.168.12.0/24\n(on-board Ethernet switch — not MANET-routed)" as INT_NET #FFF4E4 {
+package "Subnet  192.168.10.0/24\n(single subnet — L2 bridge via MANET Air Units; GCS, all MCs and each drone's FCC share it)" as EXT_NET #E8F4E8 {
 
-  rectangle "Jetson eth0\n192.168.12.1\n(HIF-002 internal address)\nListens: UDP:8888 (XRCE-DDS Agent)\nListens: UDP:14555 (mission protocol, always on)" as JET_INT #A8CCEE
+  package "Drone assembly — on-board Ethernet switch (baseboard fabric)" as INT_NET #FFF4E4 {
 
-  rectangle "Pixhawk 6X Ethernet\n192.168.12.31\n(HIF-002 FCC address)\nConnects: UDP:8888 (XRCE-DDS Client)\nConnects: UDP:14555 (mission protocol, always on)" as PX4_INT #FFD4A8
+    rectangle "Jetson eth0\n192.168.10.11  (MC_ETH_IP)\nsingle address (HIF-002 / HIF-004)\nUDP:8888 XRCE-DDS Agent (ethernet fallback)\nUDP:14555 mission protocol → FCC\nUDP:14556 flow relay ← FCC\nUDP:14557 HIL_GPS → FCC" as JET_EXT #A8CCEE
 
-  rectangle "On-board Ethernet Switch\n100BASE-T\n(baseboard fabric — no ext. cable)" as INT_SW #D0D8E8
-}
+    rectangle "Pixhawk 6X Ethernet\n192.168.10.31  (FCC_ETH_IP)\nsingle address (NuttX: one IPv4)\nUDP:8888 XRCE-DDS Client\nUDP:14555 mission protocol\nUDP:14556 flow relay (send)\nUDP:14557 HIL_GPS (recv)\nUDP:14550 Channel A (GCS, via mavlink-router)" as PX4_EXT #FFD4A8
 
-JET_INT <-[#208040,thickness=2]-> INT_SW : 100BASE-T\n(on-board trace)
-PX4_INT <-[#208040,thickness=2]-> INT_SW : 100BASE-T\n(on-board trace)
+    rectangle "On-board Ethernet Switch\n10/100/1000\n(baseboard fabric — single switch)" as INT_SW #D0D8E8
 
-note bottom of INT_NET
-  HIF-002: Ethernet fallback for uXRCE-DDS.
-  UDP:8888 only used when FCC_TRANSPORT=ethernet.
-  Default DDS transport is HIF-001 (ttyTHS1 serial).
-  UDP:14555 (mission protocol) is ALWAYS active here,
-  regardless of FCC_TRANSPORT — stock PX4 has no
-  DDS-writable mission topic (ICD IR-007).
-  This subnet is NOT accessible from the MANET.
-end note
+    rectangle "MANET Air Unit\n(on-drone, gateway)\n192.168.10.1\nRJ45 → wireless mesh" as AU_DUT #C8E0C8
 
-' ═══════════════════════════════════════════════════
-' SUBNET: 192.168.10.x  (MANET External)
-' ═══════════════════════════════════════════════════
-
-package "MANET Subnet  192.168.10.0/24\n(L2 bridge via MANET Air Units — all peers share this subnet)" as EXT_NET #E8F4E8 {
-
-  rectangle "Jetson eth0\n192.168.10.11\n(HIF-004 external address)" as JET_EXT #A8CCEE
-
-  rectangle "Pixhawk 6X\n192.168.10.31\n(GCS direct MAVLink)" as PX4_EXT #FFD4A8
-
-  rectangle "MANET Air Unit\n(on-drone, gateway)\n192.168.10.1\nRJ45 → wireless mesh" as AU_DUT #C8E0C8
+    rectangle "Gimbal IP Camera\n192.168.10.200\n(HIF-007, shared switch)\nRTSP/H.265 :8554" as GIMCAM #EDE0F8
+  }
 
   rectangle "GCS Laptop\n192.168.10.10\nQGroundControl\nSends MAVLink 2/UDP" as GCS #B8DCA8
 
@@ -86,14 +67,25 @@ package "MANET Subnet  192.168.10.0/24\n(L2 bridge via MANET Air Units — all p
   rectangle "Peer AU #2\n(Drone 2 Air Unit)" as AU2 #C8E0C8
 
   rectangle "Peer AU #3\n(Drone 3 Air Unit)" as AU3 #C8E0C8
-
-  rectangle "Gimbal IP Camera\n192.168.10.200\n(HIF-007, shared switch)\nRTSP/H.265 :8554" as GIMCAM #EDE0F8
 }
 
 ' ── Wired connections on drone assembly ──────────
-JET_EXT <-[#208040,thickness=2]-> AU_DUT  : 1000BASE-T · Cat 5e · ≤ 3 m\nJ3 RJ45 (HIF-004)
-PX4_EXT <-[#208040,dashed]-> AU_DUT       : (optional: FCC Ethernet\nvia baseboard switch)
-JET_EXT <-[#20A070,thickness=2]-> GIMCAM  : 1000BASE-TX · JST-GH→RJ45 ≤2m\nJ15 (HIF-007, shared switch)
+JET_EXT <-[#208040,thickness=2]-> INT_SW : eth0\n(on-board trace)
+PX4_EXT <-[#208040,thickness=2]-> INT_SW : 100BASE-T\n(on-board trace, HIF-002)
+INT_SW  <-[#208040,thickness=2]-> AU_DUT : 1000BASE-T · Cat 5e · ≤ 3 m\nJ3 RJ45 (HIF-004)
+GIMCAM  <-[#20A070,thickness=2]-> INT_SW : 1000BASE-TX · JST-GH→RJ45 ≤2m\nJ15 (HIF-007, shared switch)
+
+note bottom of INT_NET
+  HIF-002: MC↔FCC Ethernet runs over the same
+  192.168.10.x switch — no separate subnet. PX4's
+  NuttX stack gives the Pixhawk ONE IPv4 address.
+  UDP:8888 only used when FCC_TRANSPORT=ethernet.
+  Default DDS transport is HIF-001 (ttyTHS1 serial).
+  UDP:14555 (mission protocol), :14556 (flow relay)
+  and :14557 (HIL_GPS) are ALWAYS active,
+  regardless of FCC_TRANSPORT — stock PX4 has no
+  DDS-writable mission topic (ICD IR-007).
+end note
 
 ' ── MANET wireless links ─────────────────────────
 AU_DUT  <-[#408040,thickness=2,dashed]-> AU_GCS  : MANET mesh\n(wireless)
@@ -112,6 +104,8 @@ PEER3   <-[#208040]-> AU3
 ' ═══════════════════════════════════════════════════
 
 package "UDP Port Map  (on 192.168.10.x)" as PORTS #F4F8FF {
+  rectangle "MC ↔ FCC  (HIF-002, on-board)\nFCC 192.168.10.31: :8888 uXRCE-DDS (fallback)\n:14555 mission · :14556 flow relay (FCC→MC)\n:14557 HIL_GPS (MC→FCC)\nNot routed by mavlink-router" as PMF #F5ECF5
+
   rectangle "GCS → FCC  (Channel A)\nDst: 192.168.10.31:14550\nStandard PX4 MAVLink autopilot channel\nMC does NOT inject on this channel" as PA #F4EAD4
 
   rectangle "GCS → MC  (Channel B recv)\nDst: 192.168.10.11:14551\nMC_CMD_* commands · MISSION_COUNT\nHEARTBEAT · COMMAND_LONG" as PB1 #D4E8D4
@@ -158,12 +152,11 @@ end note
 ' ═══════════════════════════════════════════════════
 
 note right of JET_EXT
-  Jetson eth0 carries two IP addresses
-  simultaneously (Netplan):
-    192.168.10.11 / 24  → MANET subnet
-    192.168.12.1  / 24  → internal FCC subnet
-  Same physical port, same NIC.
-  Linux IP aliases handle the routing.
+  Jetson eth0 carries ONE IP address (Netplan):
+    192.168.10.11 / 24  (MC_ETH_IP)
+  GCS, peer MCs and this drone's own Pixhawk
+  (192.168.10.31, FCC_ETH_IP) are all reached on
+  this one subnet through the on-board switch.
   ─────────────────────────────────
   The gimbal camera (192.168.10.200) is just
   another host on the 192.168.10.0/24 segment,
@@ -176,11 +169,9 @@ legend right
   | <#208040><b>───</b> | Wired Ethernet (1000BASE-T) |
   | <#20A070><b>───</b> | Gimbal camera (shared switch, HIF-007) |
   | <#408040><b>- - -</b> | MANET wireless (L2 bridge) |
-  | <#3D5A80><b>- - -</b> | Optional / fallback link |
   | Dashed gray card | Design-only port — no code implements it yet (scaffold node) |
 endlegend
 
-INT_NET -down[hidden]-> EXT_NET
 EXT_NET -down[hidden]-> PORTS
 
 @enduml

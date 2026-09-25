@@ -190,7 +190,7 @@ package "health-monitor" as C_HEALTH #F0F0F0 {
 ' ═══════════════════════════════════════════════════
 ' EXTERNAL ↔ INTERNAL CONNECTIONS
 ' ═══════════════════════════════════════════════════
-UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.12.x"
+UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.10.31:8888"
 QGC <--> MLR : "MAVLink 2/UDP\nChannel A (autopilot,\nno ROS 2 node consumer)"
 QGC <--> MLR_B : "MAVLink 2/UDP\nChannel B"
 MLR <--> MAVROS_NODE : "MAVLink 2/UDP :14553\n(MAVROS_CHANNEL_A endpoint)"

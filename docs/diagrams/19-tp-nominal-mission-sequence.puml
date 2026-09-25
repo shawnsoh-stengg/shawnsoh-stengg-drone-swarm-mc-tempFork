@@ -57,9 +57,12 @@ note over TEST, FCC2 #FFE0E0
   and pass. test_03 through test_09 — everything from TAKEOFF→INGRESS
   onward, including MUSTER, ISR_SELECTION, VORONOI_PARTITION, SEARCH, and
   RETURN/LAND below — are all @unittest.skip'd, blocked on a real PX4 defect
-  this harness discovered: PX4 never replies to the FORMATION_SLOT partial
-  mission-item update with MISSION_REQUEST_INT, so mission_manager_node
-  times out and escalates to FAULT before reaching INGRESS. ISR election
+  this harness discovered (FCC-010: PX4 never replies to the FORMATION_SLOT
+  partial mission-item update with MISSION_REQUEST_INT, at any known
+  firmware version). Fixed 2026-09-14 at the fcc_bridge/mission_exec code
+  level (full mission re-upload replaces the partial write, cadence
+  lowered to >=2 Hz) but still skipped here pending a real PX4 SITL re-run
+  to confirm test_03 onward actually pass now. ISR election
   and Voronoi partitioning are also not really exercised even in the
   skipped tests' design — swarm_coordinator_node/formation_controller_node/
   search_planner_node are still scaffolds; a mock_swarm_coord_node publishes
@@ -167,7 +170,7 @@ MC1 --> GCS : MC_STATUS: mission_phase = INGRESS
 
 note over TEST #C8EEC8
   ASSERT: Both at INGRESS within 10 s of command.
-  ASSERT: formation_controller mission-item update rate ≥ 5 Hz
+  ASSERT: formation_controller mission-item update rate ≥ 2 Hz (FCC-010)
   on /mc/fcc/mission_item_update (Drone 2).
 end note
 

@@ -9,35 +9,39 @@ MC_VERSION=dev
 
 # --- MC's own network identity (INFRA-008) ---
 # Per-drone: unique per physical unit. Rendered into
-# config/netplan/01-drone-mc.yaml's ${MC_ETH_MAC}/${MC_ETH_IP}/
-# ${MC_ETH_INTERNAL_IP} placeholders by scripts/01-install-os.sh — edit
-# these three values (and re-run that script) rather than hand-editing the
-# rendered /etc/netplan/01-drone-mc.yaml when provisioning a new unit.
+# config/netplan/01-drone-mc.yaml's ${MC_ETH_MAC}/${MC_ETH_IP} placeholders
+# by scripts/01-install-os.sh — edit these two values (and re-run that
+# script) rather than hand-editing the rendered /etc/netplan/01-drone-mc.yaml
+# when provisioning a new unit. eth0 has this single address: the MANET/GCS
+# peers and this drone's own Pixhawk all share the 192.168.10.x subnet
+# (HID-MC-001 §4.2).
 MC_ETH_MAC=4c:bb:47:c4:2d:6e
 MC_ETH_IP=192.168.10.11
-MC_ETH_INTERNAL_IP=192.168.12.1
 
 # --- FCC transport (SDD §3, ICD §9.4) ---
 # serial: ttyTHS1 via uXRCE-DDS (production default, HID §HIF-001)
-# ethernet: 192.168.12.x UDP (fallback, HID §HIF-002)
+# ethernet: UDP to FCC_ETH_IP (fallback, HID §HIF-002)
 FCC_TRANSPORT=serial
 FCC_SERIAL_DEVICE=/dev/ttyTHS1
 FCC_SERIAL_BAUD=921600
-FCC_ETH_IP=192.168.12.31
 FCC_ETH_PORT=8888
 
-# The FCC is dual-homed: FCC_ETH_IP above is its 192.168.12.x-internal
-# address (mission protocol/HIL_GPS, always active). FCC_GCS_IP is its
-# separate 192.168.10.x GCS-facing address, used only by
-# mavlink-router-channel-a.conf's Channel A pass-through target
-# (per-drone: this drone's own Pixhawk, INFRA-008).
-FCC_GCS_IP=192.168.10.31
+# This drone's own Pixhawk's single Ethernet address (per-drone,
+# INFRA-008) — the only FCC address. PX4's NuttX network stack gives the
+# Pixhawk exactly one IPv4 address (/fs/microsd/net.cfg IPADDR, `netman
+# show`), so every MC<->FCC Ethernet channel targets it: the uXRCE-DDS
+# fallback above, the mission protocol, the optical-flow relay, the HIL_GPS
+# sender, and mavlink-router-channel-a.conf's Channel A pass-through. (Until
+# 2026-09-25 the FCC was documented as dual-homed on a separate 192.168.12.x
+# internal subnet plus a FCC_GCS_IP on 192.168.10.x — never true of real
+# hardware; the orin-nx bench Pixhawk only answered on 192.168.10.19.)
+FCC_ETH_IP=192.168.10.31
 
-# Mission protocol (MAVLink, always on 192.168.12.x — independent of
+# Mission protocol (MAVLink to FCC_ETH_IP, always on — independent of
 # FCC_TRANSPORT above; stock PX4 has no DDS-writable mission topic, IR-007)
 FCC_MISSION_PORT=14555
 
-# HIF-008 optical-flow relay (MAVLink, always on 192.168.12.x — independent
+# HIF-008 optical-flow relay (MAVLink from FCC_ETH_IP, always on — independent
 # of FCC_TRANSPORT above; stock PX4 doesn't bridge sensor_optical_flow/
 # distance_sensor to the companion computer over DDS, HID-MC-001 §10 /
 # ICD §3.3a)
