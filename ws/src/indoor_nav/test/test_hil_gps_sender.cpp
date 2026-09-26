@@ -31,6 +31,7 @@
 #include <cstdlib>
 #include <string>
 
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
 #include <mc_msgs/msg/optical_flow.hpp>
@@ -147,7 +148,7 @@ TEST_F(HilGpsSenderTest, SendsCorrectHilGpsFrameFromKnownFix)
   constexpr double kLatDeg = 1.5;
   constexpr double kLonDeg = 103.8;
   constexpr float kAltMsl0 = 50.0F;
-  constexpr float kAltMsl1 = 45.0F;  // climbed 5 m since anchor
+  constexpr float kAltMsl1 = 45.0F;  // descended 5 m since anchor
 
   // IGS-005: real_gps_ok_ starts true (fail-safe default) until a real
   // /mc/fcc/vehicle_state sample proves otherwise -- vs0's default
@@ -156,8 +157,12 @@ TEST_F(HilGpsSenderTest, SendsCorrectHilGpsFrameFromKnownFix)
   mc_msgs::msg::VehicleState vs0;
   vs0.header.stamp = stamp_at(1000.0);
   vs0.q = {1.0F, 0.0F, 0.0F, 0.0F};  // identity: body frame == local NED frame
-  vs0.alt_msl = kAltMsl0;
   node_->on_vehicle_state(vs0);
+
+  mc_msgs::msg::BaroAltitude baro0;
+  baro0.header.stamp = stamp_at(1000.0);
+  baro0.alt_m = kAltMsl0;
+  node_->on_baro_altitude(baro0);
 
   mc_msgs::msg::GcsCommand anchor;
   anchor.header.stamp = stamp_at(1000.0);
@@ -179,11 +184,10 @@ TEST_F(HilGpsSenderTest, SendsCorrectHilGpsFrameFromKnownFix)
   flow1.vy = 0.0F;
   node_->on_optical_flow(flow1);  // integrates x_ += 2.0 * 1.0 s = 2.0 m north
 
-  mc_msgs::msg::VehicleState vs1;
-  vs1.header.stamp = stamp_at(1001.0);
-  vs1.q = {1.0F, 0.0F, 0.0F, 0.0F};
-  vs1.alt_msl = kAltMsl1;  // -> z_ = 5.0 m down, vz_ = 5.0 m/s
-  node_->on_vehicle_state(vs1);
+  mc_msgs::msg::BaroAltitude baro1;
+  baro1.header.stamp = stamp_at(1001.0);
+  baro1.alt_m = kAltMsl1;  // -> z_ = 5.0 m down, vz_ = 5.0 m/s
+  node_->on_baro_altitude(baro1);
 
   const indoor_nav::GnssSimNode::WgsFix fix = node_->wgs84_fix();
   ASSERT_TRUE(fix.valid);

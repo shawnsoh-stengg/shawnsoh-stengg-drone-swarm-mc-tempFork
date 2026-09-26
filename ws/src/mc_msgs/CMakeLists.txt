@@ -36,6 +36,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GcsCommandAck.msg"
   "msg/OpticalFlow.msg"
   "msg/IndoorGnssSimStatus.msg"
+  "msg/BaroAltitude.msg"
   DEPENDENCIES std_msgs geometry_msgs geographic_msgs
 )
 

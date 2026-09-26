@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/fault_event.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
@@ -34,30 +35,27 @@ constexpr uint32_t kMcCmdIndoorGnssSimAnchor = 50005;
 
 // IGS-001: dead-reckoning fusion core. Integrates optical-flow-derived
 // body-frame horizontal velocity (rotated into a local nav frame using FCC
-// attitude), corrects the vertical axis directly from FCC baro-derived
+// attitude), corrects the vertical axis directly from FCC raw baro
 // altitude, and publishes the result on /mc/indoor/local_estimate for bench
 // validation. No camera dependency. WGS-84 conversion (IGS-003) and
 // HIL_GPS injection (IGS-004) are later extensions of this same class,
 // documented further down.
 //
 // Open Item 3 resolution (attitude/baro source, INDOOR-GNSS-SIMULATION-
-// BACKLOG.md): /mc/fcc/vehicle_state already carries both signals this
-// fusion core needs and nothing else does --
+// BACKLOG.md):
 //   - attitude: VehicleState.q (PX4's attitude estimator output: gyro +
 //     accel + mag, no GPS dependency, so it stays valid indoors) -- used
 //     here to rotate flow-derived body-frame velocity into the local frame.
-//   - vertical: VehicleState.alt_msl. Not a raw-baro topic (it is PX4's
-//     global-position estimate, which *can* blend GPS altitude in when a
-//     fix exists), but indoors there is no GPS altitude to blend -- baro is
-//     the dominant, effectively only, vertical aiding source EKF2 has
-//     available, so alt_msl is a faithful proxy in exactly the regime this
-//     module targets. A new fcc_bridge raw-baro relay (vehicle_air_data)
-//     would be more precise but is not needed for this ticket's fusion
-//     approach, which never differentiates/integrates IMU accelerometer
-//     data -- flagged here rather than silently assumed, per this ticket's
-//     own AC.
-// This node therefore does not add any new fcc_bridge topic. It does still
-// need *a* horizontal-velocity input: HIF-008's optical-flow sensor
+//   - vertical: /mc/sensors/baro_altitude (mc_msgs/BaroAltitude), raw baro
+//     relayed by fcc_bridge from MAVLink ALTITUDE.altitude_monotonic.
+//     Correction (FT-006, 2026-09-26): this used VehicleState.alt_msl, on
+//     the premise that indoors EKF2 has no GPS altitude to blend. That
+//     premise is false once PX4 accepts this node's own HIL_GPS: EKF2 fuses
+//     the injected altitude back into alt_msl, which fed the next HIL_GPS
+//     altitude -- a closed loop that ran PX4's altitude estimate ~42 km off
+//     on the orin-nx bench. The vertical input must be independent of the
+//     estimator this node feeds.
+// It does still need *a* horizontal-velocity input: HIF-008's optical-flow sensor
 // (IGS-002) doesn't exist yet, so it subscribes to a new, explicitly
 // provisional mc_msgs/OpticalFlow message on /mc/sensors/optical_flow (see
 // that message's own header comment) to develop and test the fusion core
@@ -149,6 +147,7 @@ public:
   // deterministically. Production code only reaches these via the
   // subscription callbacks wired in the constructor.
   void on_vehicle_state(const mc_msgs::msg::VehicleState & msg);
+  void on_baro_altitude(const mc_msgs::msg::BaroAltitude & msg);
   void on_optical_flow(const mc_msgs::msg::OpticalFlow & msg);
   void on_gcs_command(const mc_msgs::msg::GcsCommand & msg);
   // IGS-005: caches the latest uploaded mission for
@@ -231,6 +230,7 @@ private:
   void update_real_gps_lockout(const mc_msgs::msg::VehicleState & msg, const rclcpp::Time & stamp);
 
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
+  rclcpp::Subscription<mc_msgs::msg::BaroAltitude>::SharedPtr sub_baro_altitude_;
   rclcpp::Subscription<mc_msgs::msg::OpticalFlow>::SharedPtr sub_optical_flow_;
   rclcpp::Subscription<mc_msgs::msg::GcsCommand>::SharedPtr sub_gcs_command_;
   rclcpp::Subscription<mc_msgs::msg::MissionUpload>::SharedPtr sub_mission_upload_;
@@ -253,12 +253,15 @@ private:
   std::array<float, 4> attitude_q_{1.0F, 0.0F, 0.0F, 0.0F};
   bool has_attitude_{false};
 
-  // Vertical channel: alt_msl is applied directly (never integrated), so
-  // z_ always reflects the latest baro sample, anchored at the first one
-  // received so the estimate starts at z=0 -- and re-anchored again on each
-  // IGS-003 reanchor() call, see that method's own doc comment.
-  std::optional<float> alt_msl_anchor_;
-  std::optional<float> last_alt_msl_;  // rebaseline target for reanchor()
+  // Vertical channel: raw baro altitude is applied directly (never
+  // integrated), so z_ always reflects the latest baro sample, anchored at
+  // the first one received so the estimate starts at z=0 -- and re-anchored
+  // again on each IGS-003 reanchor() call, see that method's own doc
+  // comment. Only differences matter (pressure altitude, no QNH).
+  std::optional<float> baro_alt_anchor_;
+  std::optional<float> last_baro_alt_;  // rebaseline target for reanchor()
+  std::optional<rclcpp::Time> last_baro_stamp_;
+  // Attitude + real-GPS lockout input; IGS-005 staleness still covers it.
   std::optional<rclcpp::Time> last_vehicle_state_stamp_;
   float z_{0.0F};
   float vz_{0.0F};

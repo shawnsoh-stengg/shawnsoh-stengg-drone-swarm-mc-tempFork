@@ -29,6 +29,20 @@ rclcpp::QoS px4_qos()
   return qos;
 }
 
+// PX4's device::Device::DeviceId packing (src/lib/drivers/device/Device.hpp)
+// and the values handle_message_hil_gps() stamps on a HIL_GPS-sourced
+// sensor_gps (mavlink_receiver.cpp: bus_type=MAVLINK, devtype=
+// DRV_GPS_DEVTYPE_SIM) -- both confirmed against the real v1.17.0 tag.
+constexpr uint32_t kDeviceBusTypeMavlink = 6;
+constexpr uint32_t kDrvGpsDevtypeSim = 0xAF;
+
+bool is_hil_gps_device(uint32_t device_id)
+{
+  const uint32_t bus_type = device_id & 0x07U;
+  const uint32_t devtype = (device_id >> 16) & 0xFFU;
+  return bus_type == kDeviceBusTypeMavlink && devtype == kDrvGpsDevtypeSim;
+}
+
 std::string env_or(const char * name, const std::string & fallback)
 {
   const char * v = std::getenv(name);
@@ -72,6 +86,11 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
   sub_imu_ = node_->create_subscription<px4_msgs::msg::SensorCombined>(
     "/fmu/out/sensor_combined", qos,
     [this](px4_msgs::msg::SensorCombined::SharedPtr msg) {on_imu(msg);});
+
+  // SensorGps is still v0 at v1.17.0 -- plain topic name (see above).
+  sub_gps_ = node_->create_subscription<px4_msgs::msg::SensorGps>(
+    "/fmu/out/vehicle_gps_position", qos,
+    [this](px4_msgs::msg::SensorGps::SharedPtr msg) {on_gps(msg);});
 
   pub_vehicle_command_ =
     node_->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", qos);
@@ -279,6 +298,27 @@ void XrceDdsBackend::on_imu(const px4_msgs::msg::SensorCombined::SharedPtr /*msg
   touch_link_alive();
 }
 
+void XrceDdsBackend::on_gps(const px4_msgs::msg::SensorGps::SharedPtr msg)
+{
+  std::scoped_lock lock(state_mtx_);
+  if (is_hil_gps_device(msg->device_id)) {
+    // See the header doc comment. Known limit: vehicle_gps_position is
+    // PX4's *selected* receiver only (per-instance sensor_gps isn't
+    // bridged over DDS at v1.17.0), so a real receiver PX4 isn't
+    // currently selecting over HIL_GPS is invisible here.
+    state_.fix_type = 0;
+    state_.hdop = 0.0F;
+    state_.vdop = 0.0F;
+    state_.gnss_ok = false;
+  } else {
+    state_.fix_type = msg->fix_type;
+    state_.hdop = msg->hdop;
+    state_.vdop = msg->vdop;
+    state_.gnss_ok = is_gnss_ok(msg->fix_type, msg->hdop);
+  }
+  last_fcc_msg_time_ = node_->now();
+}
+
 bool XrceDdsBackend::upload_mission(const std::vector<MissionItem> & items)
 {
   const bool accepted = mission_client_->upload_mission(items);
@@ -379,6 +419,11 @@ VehicleState XrceDdsBackend::get_vehicle_state() const
 OpticalFlowSample XrceDdsBackend::get_optical_flow() const
 {
   return flow_relay_.get_sample();
+}
+
+BaroAltitudeSample XrceDdsBackend::get_baro_altitude() const
+{
+  return flow_relay_.get_baro_altitude();
 }
 
 bool XrceDdsBackend::is_link_alive(double timeout_s) const

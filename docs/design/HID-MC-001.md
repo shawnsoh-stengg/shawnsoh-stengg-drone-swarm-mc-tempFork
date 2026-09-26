@@ -928,7 +928,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
 - [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.10.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.10.11/24`.
-- [ ] **HIF-008** Set the PX4 DroneCAN/EKF2 parameters listed in §10.4 (`UAVCAN_SUB_FLOW`, `UAVCAN_SUB_RNG`, `EKF2_OF_CTRL`, height/rate limits, `EKF2_OF_POS_X/Y/Z` offsets) via QGroundControl and reboot the FCC. Also start a second MAVLink instance on the FCC streaming `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` to the MC on `FCC_FLOW_PORT` (`:14556` by default, ICD §3.3a) — no MC-side config needed, `fcc_bridge` binds this port automatically.
+- [ ] **HIF-008** Set the PX4 DroneCAN/EKF2 parameters listed in §10.4 (`UAVCAN_SUB_FLOW`, `UAVCAN_SUB_RNG`, `EKF2_OF_CTRL`, height/rate limits, `EKF2_OF_POS_X/Y/Z` offsets) via QGroundControl and reboot the FCC. Also start a second MAVLink instance on the FCC streaming `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR`/`ALTITUDE` (raw baro for `gnss_sim_node`'s vertical channel, ~10 Hz — FT-006) to the MC on `FCC_FLOW_PORT` (`:14556` by default, ICD §3.3a) — no MC-side config needed, `fcc_bridge` binds this port automatically.
 
 ### 13.3 Pre-Flight Verification (each flight)
 

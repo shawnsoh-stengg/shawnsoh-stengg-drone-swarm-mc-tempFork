@@ -17,6 +17,7 @@
 #include <cmath>
 #include <vector>
 
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
 #include <mc_msgs/msg/optical_flow.hpp>
@@ -84,6 +85,8 @@ protected:
       "/mc/fcc/vehicle_state", rclcpp::QoS(10));
     pub_optical_flow_ = harness_->create_publisher<mc_msgs::msg::OpticalFlow>(
       "/mc/sensors/optical_flow", rclcpp::QoS(10));
+    pub_baro_altitude_ = harness_->create_publisher<mc_msgs::msg::BaroAltitude>(
+      "/mc/sensors/baro_altitude", rclcpp::QoS(10));
     pub_gcs_command_ = harness_->create_publisher<mc_msgs::msg::GcsCommand>(
       "/mc/gcs/command", rclcpp::QoS(10));
     sub_local_estimate_ = harness_->create_subscription<nav_msgs::msg::Odometry>(
@@ -107,6 +110,14 @@ protected:
     msg.header.stamp = stamp_at(t_s);
     msg.alt_msl = alt_msl;
     msg.q = q;
+    return msg;
+  }
+
+  mc_msgs::msg::BaroAltitude make_baro(double t_s, float alt_m)
+  {
+    mc_msgs::msg::BaroAltitude msg;
+    msg.header.stamp = stamp_at(t_s);
+    msg.alt_m = alt_m;
     return msg;
   }
 
@@ -135,6 +146,7 @@ protected:
   rclcpp::Node::SharedPtr harness_;
   rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
   rclcpp::Publisher<mc_msgs::msg::OpticalFlow>::SharedPtr pub_optical_flow_;
+  rclcpp::Publisher<mc_msgs::msg::BaroAltitude>::SharedPtr pub_baro_altitude_;
   rclcpp::Publisher<mc_msgs::msg::GcsCommand>::SharedPtr pub_gcs_command_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_local_estimate_;
   rclcpp::Subscription<mc_msgs::msg::IndoorGnssSimStatus>::SharedPtr sub_gnss_sim_status_;
@@ -198,13 +210,12 @@ TEST_F(GnssSimNodeTest, YawedAttitudeRotatesFlowIntoLocalFrame)
 // as z decreasing by 1 m (NED down) and vz of about -1 m/s.
 TEST_F(GnssSimNodeTest, BaroAltitudeChangeUpdatesVerticalPositionAndRate)
 {
-  const std::array<float, 4> level_q{1.0F, 0.0F, 0.0F, 0.0F};
-  pub_vehicle_state_->publish(make_vehicle_state(0.0, 100.0F, level_q));
+  pub_baro_altitude_->publish(make_baro(0.0, 100.0F));
   ASSERT_TRUE(
     spin_until(
       {node_, harness_}, [this] {return !estimates_.empty();}, std::chrono::seconds(3)));
 
-  pub_vehicle_state_->publish(make_vehicle_state(1.0, 101.0F, level_q));
+  pub_baro_altitude_->publish(make_baro(1.0, 101.0F));
   ASSERT_TRUE(
     spin_until(
       {node_, harness_}, [this] {return estimates_.size() >= 2U;}, std::chrono::seconds(3)));
@@ -212,6 +223,27 @@ TEST_F(GnssSimNodeTest, BaroAltitudeChangeUpdatesVerticalPositionAndRate)
   const auto & last = *estimates_.back();
   EXPECT_NEAR(last.pose.pose.position.z, -1.0, 0.01);
   EXPECT_NEAR(last.twist.twist.linear.z, -1.0, 0.01);
+}
+
+// FT-006 regression: VehicleState.alt_msl is EKF2 output, which fuses this
+// node's own HIL_GPS altitude -- it must not move the vertical estimate, or
+// the two close a loop (PX4's altitude ran ~42 km off on the bench).
+TEST_F(GnssSimNodeTest, VehicleStateAltMslDoesNotDriveVerticalEstimate)
+{
+  const std::array<float, 4> level_q{1.0F, 0.0F, 0.0F, 0.0F};
+  pub_baro_altitude_->publish(make_baro(0.0, 100.0F));
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return !estimates_.empty();}, std::chrono::seconds(3)));
+
+  pub_vehicle_state_->publish(make_vehicle_state(1.0, -41975.0F, level_q));
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return estimates_.size() >= 2U;}, std::chrono::seconds(3)));
+
+  const auto & last = *estimates_.back();
+  EXPECT_NEAR(last.pose.pose.position.z, 0.0, 1e-6);
+  EXPECT_NEAR(last.twist.twist.linear.z, 0.0, 1e-6);
 }
 
 // A flow sample gap wider than max_flow_dt_s_ (default 0.5 s) must not be

@@ -10,6 +10,7 @@
 
 #include "rclcpp/node.hpp"
 
+#include "fcc_bridge/baro_altitude_sample.hpp"
 #include "fcc_bridge/mission_item.hpp"
 #include "fcc_bridge/offboard_setpoint.hpp"
 #include "fcc_bridge/optical_flow_sample.hpp"
@@ -61,6 +62,11 @@ public:
   // frame has been received -- MavlinkUdpBackend (SITL) has no simulated
   // H-Flow and always reports invalid.
   virtual OpticalFlowSample get_optical_flow() const = 0;
+
+  // Latest raw barometric altitude (MAVLink ALTITUDE.altitude_monotonic),
+  // relayed over the same flow MAVLink channel (ICD §3.3a) -- never EKF2
+  // output. BaroAltitudeSample::valid is false until the first frame.
+  virtual BaroAltitudeSample get_baro_altitude() const = 0;
 
   // True if the FCC link has produced a message within the last
   // timeout_s seconds.

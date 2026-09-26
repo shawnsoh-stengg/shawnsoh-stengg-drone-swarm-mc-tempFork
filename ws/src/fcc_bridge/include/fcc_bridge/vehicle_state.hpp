@@ -11,6 +11,18 @@
 namespace fcc_bridge
 {
 
+// mc_msgs/VehicleState.msg's own documented gnss_ok definition: "fix_type
+// >= 3 AND hdop < threshold". 2.0 matches ICD-MC-001 §10.8's GNSS_DEGRADED
+// fault trigger ("GNSS fix lost or HDOP > 2.0"), the only other place this
+// project already draws the same line. Shared by both backends.
+constexpr uint8_t kGnssFixType3d = 3;
+constexpr float kGnssHdopOkThreshold = 2.0F;
+
+inline bool is_gnss_ok(uint8_t fix_type, float hdop)
+{
+  return fix_type >= kGnssFixType3d && hdop < kGnssHdopOkThreshold;
+}
+
 // Aggregated FCC vehicle state (SDD §3.2). Populated by FccBackend
 // implementations from whatever transport-specific messages they receive;
 // application nodes never see the underlying transport types.
@@ -47,8 +59,11 @@ struct VehicleState
   // GNSS quality (TEST-002 addition -- see mavlink_udp_backend.hpp's
   // handle_gps_raw_int() doc comment for why this was missing before).
   // fix_type/hdop/vdop default to "no fix"/"unknown" until a real
-  // GPS_RAW_INT arrives, matching mc_msgs/VehicleState.msg's own
-  // documented gnss_ok semantics (fix_type >= 3 AND hdop < threshold).
+  // GPS_RAW_INT (SITL) / vehicle_gps_position (uXRCE-DDS) arrives, matching
+  // mc_msgs/VehicleState.msg's own documented gnss_ok semantics (fix_type
+  // >= 3 AND hdop < threshold). "Real" is literal: XrceDdsBackend reports
+  // no fix while PX4's selected receiver is gnss_sim_node's own injected
+  // HIL_GPS stream (see its on_gps() doc comment).
   uint8_t fix_type{0};
   float hdop{0.0F};
   float vdop{0.0F};

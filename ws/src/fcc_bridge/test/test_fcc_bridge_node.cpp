@@ -27,6 +27,7 @@
 #include <mc_msgs/msg/fcc_mission_ack.hpp>
 #include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/fcc_offboard_setpoint.hpp>
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/optical_flow.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
 #include <px4_msgs/msg/vehicle_global_position.hpp>
@@ -104,6 +105,9 @@ protected:
     sub_optical_flow_ = harness_->create_subscription<mc_msgs::msg::OpticalFlow>(
       "/mc/sensors/optical_flow", rclcpp::QoS(10),
       [this](mc_msgs::msg::OpticalFlow::SharedPtr msg) {optical_flow_msgs_.push_back(msg);});
+    sub_baro_altitude_ = harness_->create_subscription<mc_msgs::msg::BaroAltitude>(
+      "/mc/sensors/baro_altitude", rclcpp::QoS(10),
+      [this](mc_msgs::msg::BaroAltitude::SharedPtr msg) {baro_altitude_msgs_.push_back(msg);});
 
     flow_peer_fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     flow_peer_addr_.sin_family = AF_INET;
@@ -132,6 +136,20 @@ protected:
     mavlink_msg_optical_flow_rad_pack(
       1, 1, &msg, 0, 0, /*integration_time_us=*/ 100000, /*integrated_x=*/ 0.0F,
       /*integrated_y=*/ 0.0F, 0.0F, 0.0F, 0.0F, 0, /*quality=*/ 200, 0, /*distance=*/ 1.0F);
+    send_to_flow_port(msg);
+  }
+
+  // One ALTITUDE frame on the same channel (raw baro, FT-006 finding).
+  void send_altitude_frame(float altitude_monotonic)
+  {
+    mavlink_message_t msg;
+    mavlink_msg_altitude_pack(
+      1, 1, &msg, 0, altitude_monotonic, /*altitude_amsl=*/ NAN, NAN, NAN, NAN, NAN);
+    send_to_flow_port(msg);
+  }
+
+  void send_to_flow_port(const mavlink_message_t & msg)
+  {
     uint8_t buf[MAVLINK_MAX_PACKET_LEN];
     const uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     ::sendto(
@@ -146,9 +164,11 @@ protected:
   rclcpp::Subscription<mc_msgs::msg::VehicleState>::SharedPtr sub_vehicle_state_;
   rclcpp::Subscription<mc_msgs::msg::FaultEvent>::SharedPtr sub_fault_;
   rclcpp::Subscription<mc_msgs::msg::OpticalFlow>::SharedPtr sub_optical_flow_;
+  rclcpp::Subscription<mc_msgs::msg::BaroAltitude>::SharedPtr sub_baro_altitude_;
   std::vector<mc_msgs::msg::VehicleState::SharedPtr> vehicle_state_msgs_;
   std::vector<mc_msgs::msg::FaultEvent::SharedPtr> fault_msgs_;
   std::vector<mc_msgs::msg::OpticalFlow::SharedPtr> optical_flow_msgs_;
+  std::vector<mc_msgs::msg::BaroAltitude::SharedPtr> baro_altitude_msgs_;
   int flow_peer_fd_{-1};
   sockaddr_in flow_peer_addr_{};
 };
@@ -255,6 +275,41 @@ TEST_F(FccBridgeNodeTest, RepublishesOpticalFlowOnceFrameArrives)
   EXPECT_EQ(optical_flow_msgs_.back()->quality, 200);
 }
 
+// A stalled flow stream must look stalled downstream: the last sample is
+// not re-published every tick (it used to be, which hid the stall from
+// gnss_sim_node's IGS-005 staleness watchdog).
+TEST_F(FccBridgeNodeTest, StopsPublishingOpticalFlowWhenFramesStop)
+{
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {
+        send_flow_frame();
+        return !optical_flow_msgs_.empty();
+      }, std::chrono::seconds(3)));
+
+  // Let anything already in flight land, then watch 5+ publish ticks (10 Hz).
+  spin_until({node_, harness_}, [] {return false;}, std::chrono::milliseconds(200));
+  optical_flow_msgs_.clear();
+  spin_until({node_, harness_}, [] {return false;}, std::chrono::milliseconds(600));
+
+  EXPECT_TRUE(optical_flow_msgs_.empty())
+    << optical_flow_msgs_.size() << " repeat(s) of a stale flow sample published";
+}
+
+TEST_F(FccBridgeNodeTest, PublishesBaroAltitudeFromAltitudeFrame)
+{
+  ASSERT_TRUE(baro_altitude_msgs_.empty()) << "nothing should publish before any frame arrives";
+
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {
+        send_altitude_frame(123.5F);
+        return !baro_altitude_msgs_.empty();
+      }, std::chrono::seconds(3)));
+
+  EXPECT_FLOAT_EQ(baro_altitude_msgs_.back()->alt_m, 123.5F);
+}
+
 TEST_F(FccBridgeNodeTest, ConstructsWithExpectedName)
 {
   EXPECT_STREQ(node_->get_name(), "fcc_bridge_node");
@@ -314,6 +369,11 @@ public:
   {
     std::scoped_lock lock(mtx_);
     return flow_sample_;
+  }
+
+  fcc_bridge::BaroAltitudeSample get_baro_altitude() const override
+  {
+    return fcc_bridge::BaroAltitudeSample{};
   }
 
   bool is_link_alive(double /*timeout_s*/) const override {return true;}

@@ -21,6 +21,7 @@
 #include <string>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/fault_event.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
@@ -110,12 +111,19 @@ protected:
   // A "no real fix" sample -- fix_type/hdop default-constructed to 0/0.0,
   // which is deliberately NOT gnss_ok() (fix_type >= 3 required), so this
   // also clears the real-GPS lockout's fail-safe-locked startup default.
-  mc_msgs::msg::VehicleState no_real_fix_vehicle_state(double t_s, float alt_msl = 50.0F)
+  mc_msgs::msg::VehicleState no_real_fix_vehicle_state(double t_s)
   {
     mc_msgs::msg::VehicleState msg;
     msg.header.stamp = stamp_at(t_s);
     msg.q = {1.0F, 0.0F, 0.0F, 0.0F};
-    msg.alt_msl = alt_msl;
+    return msg;
+  }
+
+  mc_msgs::msg::BaroAltitude baro(double t_s, float alt_m = 50.0F)
+  {
+    mc_msgs::msg::BaroAltitude msg;
+    msg.header.stamp = stamp_at(t_s);
+    msg.alt_m = alt_m;
     return msg;
   }
 
@@ -130,12 +138,13 @@ protected:
     return msg;
   }
 
-  // Anchors the node at t_s using a preceding no-real-fix vehicle_state --
-  // the common "get to a streaming baseline" setup every test below starts
-  // from.
+  // Anchors the node at t_s using a preceding no-real-fix vehicle_state
+  // and baro sample -- the common "get to a streaming baseline" setup every
+  // test below starts from.
   void anchor_at(double t_s)
   {
     node_->on_vehicle_state(no_real_fix_vehicle_state(t_s));
+    node_->on_baro_altitude(baro(t_s));
     node_->on_gcs_command(anchor_command(t_s));
     ASSERT_TRUE(node_->wgs84_fix().valid);
   }
@@ -216,6 +225,27 @@ TEST_F(SelfSupervisionTest, ForcedStalenessPublishesFaultAndStopsStream)
   node_->on_vehicle_state(no_real_fix_vehicle_state(2010.0));
   node_->on_gcs_command(anchor_command(2010.0));
   EXPECT_FALSE(node_->gps_sim_lost()) << "reanchor() must clear a latched staleness fault";
+}
+
+// FT-006: the vertical input (raw baro) is supervised like the others -- a
+// frozen altitude must stop the stream, not hold HIL_GPS altitude constant.
+TEST_F(SelfSupervisionTest, StaleBaroAloneFaults)
+{
+  anchor_at(4000.0);
+  for (double t = 4000.0; t <= 4003.0; t += 0.5) {
+    mc_msgs::msg::OpticalFlow flow;
+    flow.header.stamp = stamp_at(t);
+    node_->on_optical_flow(flow);
+    node_->on_vehicle_state(no_real_fix_vehicle_state(t));
+  }
+
+  node_->check_self_supervision(stamp_at(4003.0));
+
+  EXPECT_TRUE(node_->gps_sim_lost());
+  const auto fault = node_->latest_fault();
+  ASSERT_TRUE(fault.has_value());
+  EXPECT_NE(fault->description.find("/mc/sensors/baro_altitude"), std::string::npos)
+    << fault->description;
 }
 
 // --- Waypoint-deviation sanity bound (AC 3) -------------------------------

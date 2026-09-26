@@ -18,6 +18,11 @@ struct OpticalFlowSample
   float vy{0.0F};                // m/s, body FRD Y (right)
   float ground_distance{0.0F};  // m, paired rangefinder height AGL
   uint8_t quality{0};           // 0-255, sensor-reported confidence
+  // Increments on every decoded OPTICAL_FLOW_RAD frame, so fcc_bridge_node
+  // publishes each frame once instead of re-publishing the last one forever
+  // after the stream stops (which would hide the stall from gnss_sim_node's
+  // IGS-005 staleness watchdog).
+  uint32_t seq{0};
   // False until at least one OPTICAL_FLOW_RAD frame has been decoded.
   // MavlinkUdpBackend (SITL) has no simulated H-Flow and always reports
   // false here.
