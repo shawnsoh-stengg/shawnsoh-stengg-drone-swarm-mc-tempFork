@@ -31,7 +31,7 @@
 #include <cstdlib>
 #include <string>
 
-ud#include <mc_msgs/msg/baro_altitude.hpp>
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
 #include <mc_msgs/msg/optical_flow.hpp>
@@ -186,7 +186,7 @@ TEST_F(HilGpsSenderTest, SendsCorrectHilGpsFrameFromKnownFix)
 
   mc_msgs::msg::BaroAltitude baro1;
   baro1.header.stamp = stamp_at(1001.0);
-  baro1.alt_m = kAltMsl1;  // -> z_ = 5.0 m down, vz_ = 5.0 m/s
+  baro1.alt_m = kAltMsl1;  // -> z_ = 5.0 m down, vz_ low-passed toward 5.0 m/s
   node_->on_baro_altitude(baro1);
 
   const indoor_nav::GnssSimNode::WgsFix fix = node_->wgs84_fix();

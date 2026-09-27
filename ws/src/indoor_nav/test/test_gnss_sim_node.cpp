@@ -13,8 +13,10 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 #include <mc_msgs/msg/baro_altitude.hpp>
@@ -206,10 +208,13 @@ TEST_F(GnssSimNodeTest, YawedAttitudeRotatesFlowIntoLocalFrame)
   EXPECT_NEAR(last.pose.pose.position.y, 1.8, 0.05);
 }
 
-// Baro-derived vertical: a 1 m altitude gain (climb) over 1 s should read
-// as z decreasing by 1 m (NED down) and vz of about -1 m/s.
+// Baro-derived vertical, filter disabled (baro_vz_filter_tau_s = 0): a 1 m
+// altitude gain (climb) over 1 s should read as z decreasing by 1 m (NED
+// down) and vz of exactly the raw -1 m/s difference.
 TEST_F(GnssSimNodeTest, BaroAltitudeChangeUpdatesVerticalPositionAndRate)
 {
+  node_ = std::make_shared<indoor_nav::GnssSimNode>(
+    rclcpp::NodeOptions().parameter_overrides({{"baro_vz_filter_tau_s", 0.0}}));
   pub_baro_altitude_->publish(make_baro(0.0, 100.0F));
   ASSERT_TRUE(
     spin_until(
@@ -223,6 +228,60 @@ TEST_F(GnssSimNodeTest, BaroAltitudeChangeUpdatesVerticalPositionAndRate)
   const auto & last = *estimates_.back();
   EXPECT_NEAR(last.pose.pose.position.z, -1.0, 0.01);
   EXPECT_NEAR(last.twist.twist.linear.z, -1.0, 0.01);
+}
+
+// Default filter: a steady 1 m/s climb at the real 10 Hz baro rate still
+// converges on the true rate (3 s = 6 time constants), and z is unfiltered.
+TEST_F(GnssSimNodeTest, FilteredBaroRateConvergesToSteadyClimbRate)
+{
+  for (int i = 0; i <= 30; ++i) {
+    node_->on_baro_altitude(make_baro(0.1 * i, 100.0F + 0.1F * static_cast<float>(i)));
+  }
+
+  const nav_msgs::msg::Odometry est = node_->local_estimate();
+  EXPECT_NEAR(est.pose.pose.position.z, -3.0, 1e-4);
+  EXPECT_NEAR(est.twist.twist.linear.z, -1.0, 0.02);
+}
+
+// FT-006 regression: a stationary vehicle with ~±0.15 m of baro jitter (the
+// spread seen on the orin-nx bench) made the raw difference swing ~1 m/s,
+// which reached PX4 as HIL_GPS vd and failed its "vertical velocity
+// unstable" preflight check. The filtered rate must stay small.
+TEST_F(GnssSimNodeTest, StationaryBaroJitterDoesNotProduceLargeVerticalRate)
+{
+  // Deterministic pseudo-random jitter, uniform in [-0.15, 0.15] m.
+  uint32_t lcg = 12345U;
+  auto jitter = [&lcg]() {
+      lcg = lcg * 1664525U + 1013904223U;
+      return (static_cast<float>(lcg >> 8) / static_cast<float>(1U << 24) - 0.5F) * 0.3F;
+    };
+
+  double raw_sq = 0.0;
+  double filt_sq = 0.0;
+  float max_abs = 0.0F;
+  int n = 0;
+  float prev_alt = 50.0F;
+  node_->on_baro_altitude(make_baro(0.0, prev_alt));
+  for (int i = 1; i <= 200; ++i) {
+    const float alt = 50.0F + jitter();
+    node_->on_baro_altitude(make_baro(0.1 * i, alt));
+    if (i > 20) {  // past the 2 s start-up transient
+      const float raw_vz = -(alt - prev_alt) / 0.1F;
+      const float vz = static_cast<float>(node_->local_estimate().twist.twist.linear.z);
+      raw_sq += static_cast<double>(raw_vz * raw_vz);
+      filt_sq += static_cast<double>(vz * vz);
+      max_abs = std::max(max_abs, std::abs(vz));
+      ++n;
+    }
+    prev_alt = alt;
+  }
+
+  const double raw_rms = std::sqrt(raw_sq / n);
+  const double filt_rms = std::sqrt(filt_sq / n);
+  EXPECT_GT(raw_rms, 1.0);  // the jitter really is bad enough to matter unfiltered
+  EXPECT_LT(filt_rms, 0.25);
+  EXPECT_LT(filt_rms, 0.2 * raw_rms);
+  EXPECT_LT(max_abs, 0.6F);
 }
 
 // FT-006 regression: VehicleState.alt_msl is EKF2 output, which fuses this

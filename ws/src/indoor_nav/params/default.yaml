@@ -7,6 +7,12 @@ gnss_sim_node:
     # staleness *fault*; this is just the fusion core's own sanity bound.
     max_flow_dt_s: 0.5
 
+    # FT-006: first-order low-pass time constant on the baro-derived
+    # vertical rate (vz_, sent as HIL_GPS vd). Unfiltered, ~0.1 m of baro
+    # jitter at 10 Hz became ~1 m/s of vd and failed PX4's "vertical
+    # velocity unstable" preflight check. <= 0 disables the filter.
+    baro_vz_filter_tau_s: 0.5
+
     # IGS-004: HIL_GPS sender (ICD-MC-001.md §3.3b). 5 Hz is comfortably
     # inside PX4 EKF2's own GNSS timing bounds (confirmed against the real
     # v1.14.4 src/modules/ekf2/EKF/common.h's GNSS_MAX_INTERVAL = 500 ms) --

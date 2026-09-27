@@ -393,7 +393,7 @@ So this channel relies on the second arm, not full HIL mode (which would disable
 | `lat`, `lon` | `int32` | 1e7 deg | IGS-003's `wgs84_fix()` |
 | `alt` | `int32` | mm MSL | IGS-003's `wgs84_fix().alt_msl` |
 | `eph`, `epv` | `uint16` | cm | IGS-003's growing uncertainty model (`IndoorGnssSimStatus.eph`/`.epv`) — never a fixed value |
-| `vel`, `vn`, `ve`, `vd` | `uint16`/`int16` | cm/s | `gnss_sim_node`'s local NED velocity estimate (IGS-001) |
+| `vel`, `vn`, `ve`, `vd` | `uint16`/`int16` | cm/s | `gnss_sim_node`'s local NED velocity estimate (IGS-001). `vd` is the baro-derived rate, first-order low-passed (`baro_vz_filter_tau_s`, default 0.5 s). The raw 10 Hz difference failed PX4's "vertical velocity unstable" preflight check on the FT-006 bench, and PX4 hardcodes `vel_ned_valid = true` for `HIL_GPS`, so the noise can't be flagged as unknown instead |
 | `cog` | `uint16` | 1e2 deg | Derived from `vn`/`ve` |
 | `satellites_visible` | `uint8` | — | Degrades linearly from 10 to 4 as `eph` grows from its at-anchor floor toward PX4's own `EKF2_REQ_EPH` default (3.0 m, confirmed against v1.17.0's `src/modules/ekf2/params_gnss.yaml` — at v1.14.4 the same default lived in `src/modules/ekf2/ekf2_params.c`, before PX4 migrated EKF2 params to YAML) — this ticket's own AC: never a fixed "great accuracy" placeholder. `EKF2_REQ_NSATS` defaults to 6 (same file, unchanged value), so this also ties satellite-count and accuracy-gate rejection to the same honest timescale |
 | `id`, `yaw` | `uint8`, `uint16` | — | `0` (single GPS instance; heading unknown) |

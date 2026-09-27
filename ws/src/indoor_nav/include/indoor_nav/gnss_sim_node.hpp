@@ -264,7 +264,15 @@ private:
   // Attitude + real-GPS lockout input; IGS-005 staleness still covers it.
   std::optional<rclcpp::Time> last_vehicle_state_stamp_;
   float z_{0.0F};
+  // Low-pass filtered baro rate (on_baro_altitude()), not the raw sample
+  // difference -- it goes out as HIL_GPS vd, which PX4 always treats as
+  // valid (handle_message_hil_gps() hardcodes vel_ned_valid = true), so
+  // this node is the only place the noise can be removed.
   float vz_{0.0F};
+  // First-order time constant for vz_. 0.5 s cuts stationary noise ~10x
+  // (from ~1 m/s at 0.1 m baro jitter) while lagging a real climb rate by
+  // well under a second. <= 0 disables the filter (raw difference).
+  double baro_vz_filter_tau_s_{0.5};
 
   // Horizontal channel: integrated from consecutive optical-flow samples.
   std::optional<rclcpp::Time> last_flow_stamp_;
