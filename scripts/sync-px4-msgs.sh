@@ -58,3 +58,22 @@ if [[ "${PX4_MSGS_HEAD}" != "${PX4_MSGS_PIN}" ]]; then
     exit 1
 fi
 echo "==> px4_msgs: ${PX4_MSGS_HEAD} @ $(px4_git log -1 --format='%h %s')"
+
+# Schema floor, checked against the msg files themselves rather than the pin
+# above: the org-repo port of DEP-009 (NEAR-684) carried the v1.17 fcc_bridge
+# code but dropped the ws/px4_msgs.repos line, so this script faithfully
+# synced every rebuild back to release/1.14 and nothing failed. fcc_bridge's
+# XrceDdsBackend and mission_exec's pre-arm checks assume PX4 v1.17's
+# VehicleStatus (2-value ARMING_STATE_DISARMED/ARMED enum, v1.17 nav_state
+# table). NAVIGATION_STATE_ALTITUDE_CRUISE first appears in release/1.17 --
+# absent from 1.14, 1.15 and 1.16 -- so it marks the minimum schema.
+VEHICLE_STATUS_MSG="${PX4_MSGS_DIR}/msg/VehicleStatus.msg"
+for marker in ARMING_STATE_DISARMED NAVIGATION_STATE_ALTITUDE_CRUISE; do
+    if ! grep -qw "${marker}" "${VEHICLE_STATUS_MSG}"; then
+        echo "==> ERROR: ${VEHICLE_STATUS_MSG} has no ${marker} — px4_msgs is older than" >&2
+        echo "    release/1.17, which fcc_bridge requires (DEP-009). Check the 'version:' line" >&2
+        echo "    in ${REPOS_FILE} (currently '${PX4_MSGS_PIN}')." >&2
+        exit 1
+    fi
+done
+echo "==> px4_msgs schema check: VehicleStatus has the v1.17 markers"
