@@ -110,6 +110,7 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
 : Node("gnss_sim_node", options)
 {
   max_flow_dt_s_ = declare_parameter("max_flow_dt_s", max_flow_dt_s_);
+  baro_vz_filter_tau_s_ = declare_parameter("baro_vz_filter_tau_s", baro_vz_filter_tau_s_);
   eph_at_anchor_m_ = declare_parameter("eph_at_anchor_m", eph_at_anchor_m_);
   epv_at_anchor_m_ = declare_parameter("epv_at_anchor_m", epv_at_anchor_m_);
   eph_growth_rate_m_per_s_ =
@@ -240,7 +241,18 @@ void GnssSimNode::on_baro_altitude(const mc_msgs::msg::BaroAltitude & msg)
   const float new_z = -(msg.alt_m - *baro_alt_anchor_);
   const double dt = (stamp - *last_baro_stamp_).seconds();
   if (dt > 0.0) {
-    vz_ = static_cast<float>((new_z - z_) / dt);
+    // FT-006: the raw 10 Hz baro difference turns ~0.1 m of sample jitter
+    // into ~1 m/s of vertical velocity, which HIL_GPS carries as vd -- on the
+    // bench that tripped PX4's "vertical velocity unstable" preflight check
+    // and blocked arming. Low-pass it (dt-aware first order, so irregular
+    // sample spacing is handled); z_ itself stays the unfiltered reading.
+    const float raw_vz = static_cast<float>((new_z - z_) / dt);
+    if (baro_vz_filter_tau_s_ > 0.0) {
+      const float alpha = static_cast<float>(1.0 - std::exp(-dt / baro_vz_filter_tau_s_));
+      vz_ += alpha * (raw_vz - vz_);
+    } else {
+      vz_ = raw_vz;
+    }
   }
   z_ = new_z;
   last_baro_stamp_ = stamp;
