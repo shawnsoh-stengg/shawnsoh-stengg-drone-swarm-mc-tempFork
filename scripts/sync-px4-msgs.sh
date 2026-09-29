@@ -47,8 +47,19 @@ else
         echo "==> WARNING: ${PX4_MSGS_DIR} has local changes — building it as-is, not updating" >&2
     else
         echo "==> Updating px4_msgs to origin/${PX4_MSGS_PIN}"
-        px4_git fetch origin "+refs/heads/${PX4_MSGS_PIN}:refs/remotes/origin/${PX4_MSGS_PIN}"
-        px4_git checkout -B "${PX4_MSGS_PIN}" --track "origin/${PX4_MSGS_PIN}"
+        if px4_git fetch origin "+refs/heads/${PX4_MSGS_PIN}:refs/remotes/origin/${PX4_MSGS_PIN}"; then
+            px4_git checkout -B "${PX4_MSGS_PIN}" --track "origin/${PX4_MSGS_PIN}"
+        elif [[ "$(px4_git rev-parse --abbrev-ref HEAD)" == "${PX4_MSGS_PIN}" ]]; then
+            # Bench Jetsons often have no internet (static netplan, no
+            # gateway/DNS). Already on the pin: build what's there -- the
+            # schema check below still rejects anything older than 1.17.
+            echo "==> WARNING: fetch failed (offline?) — building the existing ${PX4_MSGS_PIN} checkout without updating" >&2
+        else
+            echo "==> ERROR: fetch failed and ${PX4_MSGS_DIR} is on '$(px4_git rev-parse --abbrev-ref HEAD)', not '${PX4_MSGS_PIN}'." >&2
+            echo "    Give this host internet access, or copy a ${PX4_MSGS_PIN} checkout of px4_msgs" >&2
+            echo "    from a machine that has it into ${PX4_MSGS_DIR} and re-run." >&2
+            exit 1
+        fi
     fi
 fi
 
