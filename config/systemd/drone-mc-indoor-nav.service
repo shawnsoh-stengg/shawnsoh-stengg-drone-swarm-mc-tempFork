@@ -1,0 +1,46 @@
+# drone-mc-indoor-nav.service — gnss_sim_node (indoor_nav): synthetic
+# indoor GNSS fix streamed to the FCC as HIL_GPS (ICD §3.3b), for indoor /
+# HITL-bench flights only.
+#
+# START-ON-DEMAND, deliberately NOT part of drone-mc.target's boot set:
+# there is no [Install] section, and 02-install-systemd-units.sh skips it
+# when enabling units, so it never comes up on its own for an outdoor
+# flight. Start it for an indoor session with
+#   sudo systemctl start drone-mc-indoor-nav
+# PartOf=drone-mc.target still stops/restarts it with the target.
+#
+# Nothing is sent to the FCC until an operator anchors the false origin,
+# IGS-005 rejects the anchor while a real GPS fix is present, and PX4 drops
+# HIL_GPS unless MAV_USEHILGPS=1 and MAV_SYS_ID == DRONE_ID — so a stray
+# start outdoors (or in SITL) is inert, not dangerous.
+#
+# Requires fcc-bridge: every input (/mc/sensors/optical_flow,
+# /mc/sensors/baro_altitude, /mc/fcc/vehicle_state) comes from it, and
+# IGS-005 latches INDOOR_GNSS_SIM_LOST within 1 s without them. gcs-comms
+# (the Channel B anchor command) is After= only — the FT-006 bench helper
+# can anchor straight onto /mc/gcs/command without it.
+# Installed by scripts/02-install-systemd-units.sh.
+[Unit]
+Description=Drone MC — Indoor GNSS simulation (gnss_sim_node, HIL_GPS)
+PartOf=drone-mc.target
+After=docker.service drone-mc-fcc-bridge.service drone-mc-gcs-comms.service
+Requires=docker.service drone-mc-fcc-bridge.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Slice=be.slice
+EnvironmentFile=/etc/drone-mc/environment
+ExecStart=/usr/bin/docker run --rm --name mc-indoor-nav \
+  --network=host \
+  --mount type=bind,src=/opt/drone-mc/install,dst=/opt/drone-mc/install \
+  --mount type=bind,src=/etc/drone-mc,dst=/etc/drone-mc,readonly \
+  --env-file /etc/drone-mc/environment \
+  ghcr.io/drone-mc/indoor-nav:${MC_VERSION}
+ExecStop=/usr/bin/docker stop mc-indoor-nav
+Restart=on-failure
+RestartSec=5s
+MemoryMax=256M
+CPUQuota=25%
+PrivateTmp=yes
+ProtectSystem=strict

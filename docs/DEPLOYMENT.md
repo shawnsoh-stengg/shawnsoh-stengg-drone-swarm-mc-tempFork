@@ -13,7 +13,7 @@ lifecycle, restart policy, and resource limits are all owned by `systemd`
 
 ## Implementation status
 
-Three different states exist among the 9 service units in
+Three different states exist among the 10 boot-set service units in
 `config/systemd/`, and it matters which one you're looking at before you
 try to run something:
 
@@ -40,6 +40,7 @@ try to run something:
 | `drone-mc-mission-exec` | `mission_exec` (`mission_manager_node` + `search_planner_node`) | ✅ |
 | `drone-mc-health-monitor` | `health_monitor` | ✅ (HEALTH-004) |
 | `drone-mc-swarm-coord` | `swarm_coord` | ✅ (`DEP-001`, 2026-08-19 — image builds; `swarm_coordinator_node`/`formation_controller_node` are still §2.4/§5/§6 scaffolds, tracked separately under Track A) |
+| `drone-mc-indoor-nav` | `indoor_nav` (`gnss_sim_node`) | ✅ **start-on-demand only**. Not part of the boot set (see below) |
 | `drone-mc-vision` | `vision` | 🧭 (`ghcr.io/drone-mc/vision`, no `docker/vision/` yet) |
 | `drone-mc-camera` | (gscam2 capture, no ROS 2 package of its own yet) | 🧭 (`ghcr.io/drone-mc/camera`, no `docker/camera/` yet) |
 | — | `video_downlink` (`perception_front_node`, `video_mux_node`) | ⛔ — no `drone-mc-video-ingest`/`drone-mc-video-downlink` unit exists; `CLAUDE.md`'s repo-layout note flags this as SDD §12.4 design only |
@@ -49,6 +50,33 @@ deliberately **not** part of `drone-mc-gcs-comms.service` — it's out of
 scope for that container per its own header comment. As of `GCS-006`
 (2026-08-26) it has its own unit/container instead, `drone-mc-mission-
 orchestrator`, listed in the table above.
+
+### Start-on-demand: `drone-mc-indoor-nav`
+
+`gnss_sim_node` streams a synthetic GPS fix to the FCC as `HIL_GPS`
+(`:14557`, ICD §3.3b), so it must only ever run because an operator started
+it for an indoor or HITL-bench session. Its unit has **no `[Install]`
+section**, and `02-install-systemd-units.sh` installs it but skips
+enabling it. Earlier installs are actively `disable`d via
+`ON_DEMAND_UNITS`. `drone-mc.target` never brings it up. Its
+`PartOf=drone-mc.target` still stops it with the target.
+
+```bash
+sudo ./scripts/16-build-indoor-nav-image.sh     # once / after indoor_nav changes
+sudo ./scripts/02-install-systemd-units.sh      # installs unit + /etc/drone-mc/params/indoor_nav.yaml
+sudo systemctl start drone-mc-indoor-nav        # Requires= pulls in fcc-bridge
+journalctl -fu drone-mc-indoor-nav
+```
+
+A stray start is inert, not dangerous. Nothing is sent until an operator
+anchors the false origin (`MC_CMD_INDOOR_GNSS_SIM_ANCHOR`). IGS-005 refuses
+the anchor while `vehicle_state` shows a real 3D fix, which includes SITL's
+simulated GPS. PX4 also drops `HIL_GPS` unless `MAV_USEHILGPS=1` and
+`MAV_SYS_ID == DRONE_ID`. The node reads only `FCC_ETH_IP`, `DRONE_ID` and
+`FCC_GPS_INPUT_PORT` (default 14557) from `/etc/drone-mc/environment`.
+`scripts/16b-smoke-test-indoor-nav.sh` checks the wiring and the
+on-demand-only property. `02b` asserts the unit is installed but **not**
+enabled.
 
 ## Topology and startup order
 
@@ -343,6 +371,18 @@ constants (same value on every drone) and are not per-drone inputs.
   QGroundControl would need a QGC-side dialect plugin, out of scope for
   this MC-side repo (same class of "another team's app" boundary as the
   Mission Orchestrator App, GCS-004).
+- **Bench Jetsons often have no internet** (static netplan, no
+  gateway/DNS). `scripts/sync-px4-msgs.sh`, run by both `05-build-workspace.sh`
+  and `08-build-fcc-bridge-image.sh`, falls back to the existing
+  `ws/src/px4_msgs` checkout when its `git fetch` fails, but **only** if
+  that checkout is already on the pinned branch. The v1.17 schema floor check
+  still runs, so a stale 1.14 checkout is still rejected. `05` then builds
+  fully offline, inside the existing `ros2-core` image. Every `NN-build-*-
+  image.sh` that `apt-get`s or `git clone`s still needs real network,
+  including `08` (Micro XRCE-DDS Agent source) and `04`. Their DNS pre-flight
+  check fails fast. Either give the Jetson a route out (temporary default
+  route + resolver via the GCS laptop's NAT), or build images where
+  there is network and `docker save`/`docker load` them across.
 - **`video_downlink` has no deployment story yet at all** — no unit file,
   no Dockerfile, no build script for `perception_front_node` or
   `video_mux_node`.
@@ -357,6 +397,10 @@ sudo systemctl stop drone-mc.target
 # Status of the whole target and its dependency graph
 systemctl status drone-mc.target
 systemctl list-dependencies drone-mc.target --no-pager
+
+# Indoor/HITL session only (start-on-demand, never in the boot set)
+sudo systemctl start drone-mc-indoor-nav
+sudo systemctl stop drone-mc-indoor-nav
 
 # One service
 sudo systemctl restart drone-mc-fcc-bridge.service

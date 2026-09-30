@@ -47,10 +47,20 @@ echo "==> Installing drone-mc.target"
 install -m 644 "${UNIT_SRC_DIR}/drone-mc.target" "${UNIT_DST_DIR}/drone-mc.target"
 
 echo "==> Installing service units"
+# Start-on-demand units: installed, but never enabled into drone-mc.target's
+# boot set. indoor-nav streams a synthetic GPS fix to the FCC (HIL_GPS) and
+# must only ever run because an operator started it for an indoor session.
+ON_DEMAND_UNITS=(drone-mc-indoor-nav.service)
 SERVICE_UNITS=()
 for unit_path in "${UNIT_SRC_DIR}"/drone-mc-*.service; do
     unit_name="$(basename "${unit_path}")"
     install -m 644 "${unit_path}" "${UNIT_DST_DIR}/${unit_name}"
+    if [[ " ${ON_DEMAND_UNITS[*]} " == *" ${unit_name} "* ]]; then
+        echo "    ${unit_name} (on demand — not enabled; sudo systemctl start ${unit_name%.service})"
+        # A unit enabled by an earlier install run stays enabled otherwise.
+        systemctl disable "${unit_name}" &>/dev/null || true
+        continue
+    fi
     SERVICE_UNITS+=("${unit_name}")
     echo "    ${unit_name}"
 done
@@ -200,6 +210,7 @@ PARAMS_SOURCES=(
     "mission_exec/params/default.yaml:mission_exec.yaml"
     "health_monitor/params/default.yaml:health_monitor.yaml"
     "swarm_coord/params/default.yaml:swarm_coord.yaml"
+    "indoor_nav/params/default.yaml:indoor_nav.yaml"
 )
 for entry in "${PARAMS_SOURCES[@]}"; do
     src="${entry%%:*}"

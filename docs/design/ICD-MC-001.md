@@ -423,7 +423,8 @@ Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_m
 |---|---|---|---|
 | `MAV_CMD_COMPONENT_ARM_DISARM` | 400 | Arm / Disarm | param1: 1=arm, 0=disarm |
 | `MAV_CMD_DO_SET_MODE` | 176 | Set flight mode | param1: MAV_MODE_FLAG; param2: PX4 custom mode |
-| `MAV_CMD_NAV_TAKEOFF` | 22 | Takeoff | param7: altitude (m MSL) |
+| `MAV_CMD_NAV_TAKEOFF` | 22 | Takeoff | param4: yaw (NaN = current); param5/6: lat/lon — **must be NaN** to climb in place (PX4 v1.17 `navigator_main.cpp` treats any finite pair, including `0, 0`, as an explicit target — Null Island); param7: altitude (m MSL) |
+| `MAV_CMD_NAV_LAND` | 21 | Land | param5/6: NaN (current position; PX4 v1.17 ignores them for LAND, but `0, 0` is never "unset") |
 | `MAV_CMD_NAV_RETURN_TO_LAUNCH` | 20 | RTL | — |
 | `MAV_CMD_NAV_LOITER_UNLIM` | 17 | HOLD (loiter) | — |
 

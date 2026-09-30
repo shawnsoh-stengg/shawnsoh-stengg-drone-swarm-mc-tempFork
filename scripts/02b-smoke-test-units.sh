@@ -85,6 +85,14 @@ for unit in "${SERVICES[@]}"; do
     check "${unit} Restart=on-failure/RestartSec=5s" unit_restart_policy "${unit}"
 done
 
+# indoor-nav (HIL_GPS fake-GPS source) is start-on-demand: installed, but
+# must never be enabled into the boot set or carry a WantedBy=.
+check "drone-mc-indoor-nav.service installed" test -f "${UNIT_DIR}/drone-mc-indoor-nav.service"
+check "drone-mc-indoor-nav.service NOT enabled (on demand only)" \
+    bash -c "! systemctl is-enabled --quiet drone-mc-indoor-nav.service"
+check "drone-mc-indoor-nav.service has no WantedBy=" \
+    bash -c "! grep -qE '^WantedBy=' ${UNIT_DIR}/drone-mc-indoor-nav.service"
+
 # SDD §12.3: fcc-bridge and swarm-coord are the only rt.slice members.
 check "fcc-bridge in rt.slice"         grep -qE "^Slice=rt.slice$" "${UNIT_DIR}/drone-mc-fcc-bridge.service"
 check "swarm-coord in rt.slice"        grep -qE "^Slice=rt.slice$" "${UNIT_DIR}/drone-mc-swarm-coord.service"

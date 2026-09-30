@@ -373,7 +373,11 @@ void MissionManagerNode::action_send_takeoff()
   mc_msgs::msg::FccCommand cmd;
   cmd.header.stamp = now();
   cmd.cmd = kMavCmdNavTakeoff;
-  cmd.params = {0.F, 0.F, 0.F, NAN, 0.F, 0.F, static_cast<float>(takeoff_altitude_m_)};
+  // param5/6 (lat/lon) must be NaN, not 0: PX4 v1.17 navigator_main.cpp
+  // only takes off in place when both are non-finite -- a finite (0, 0) is
+  // an explicit target at Null Island, and on the bench the vehicle armed,
+  // made no thrust, and auto-disarmed ~11 s later.
+  cmd.params = {0.F, 0.F, 0.F, NAN, NAN, NAN, static_cast<float>(takeoff_altitude_m_)};
   pub_send_command_->publish(cmd);
 }
 
@@ -482,7 +486,10 @@ void MissionManagerNode::action_send_land()
   mc_msgs::msg::FccCommand cmd;
   cmd.header.stamp = now();
   cmd.cmd = kMavCmdNavLand;
-  cmd.params = {0.F, 0.F, 0.F, NAN, 0.F, 0.F, 0.F};
+  // NaN lat/lon = "current position" per MAVLink. PX4 v1.17 ignores LAND's
+  // param5/6 anyway, but (0, 0) would mean Null Island to anything that
+  // doesn't -- same trap as action_send_takeoff().
+  cmd.params = {0.F, 0.F, 0.F, NAN, NAN, NAN, 0.F};
   pub_send_command_->publish(cmd);
 }
 

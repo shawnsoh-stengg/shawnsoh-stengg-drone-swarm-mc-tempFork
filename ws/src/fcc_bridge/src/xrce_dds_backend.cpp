@@ -383,9 +383,11 @@ void XrceDdsBackend::send_command(uint32_t cmd, const std::array<float, 7> & par
   // signature (inherited from SDD §3.1, predating this ticket) loses that
   // precision. None of the commands currently issued by
   // mission_manager_node/health_monitor_node (ARM_DISARM, DO_SET_MODE,
-  // TAKEOFF, RTL, HOLD)
-  // use param5/6 as coordinates, so this is latent, not active, and is
-  // flagged here rather than silently widening the abstract interface.
+  // TAKEOFF, LAND, RTL, HOLD) sends real coordinates in param5/6, so this is
+  // latent, not active, and is flagged here rather than silently widening
+  // the abstract interface. TAKEOFF/LAND do *read* them: callers must send
+  // NaN ("current position"), which survives float32 -> float64 intact --
+  // a 0.0 there is a real Null Island target to PX4.
   msg.param5 = params[4];
   msg.param6 = params[5];
   msg.param7 = params[6];
