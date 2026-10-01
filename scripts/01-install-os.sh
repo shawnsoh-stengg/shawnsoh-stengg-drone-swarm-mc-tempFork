@@ -173,6 +173,43 @@ if [[ "${ALLOW_NON_JETSON:-0}" -ne 1 ]]; then
              "dev-workstation dry run." >&2
         exit 1
     fi
+
+    # Other network config claiming the same NIC: netplan apply only adds
+    # 01-drone-mc.yaml's address, it never removes ones another source
+    # (a hand-made NetworkManager profile, a second netplan file) puts on
+    # the same interface — observed on a bench unit as eth0 carrying a
+    # stale 192.168.10.11 + 192.168.12.2 pair from an NM profile alongside
+    # MC_ETH_IP, failing 01b's single-address check. Warn rather than
+    # delete: the other config may be what this SSH session rides on.
+    mc_iface="${iface}"
+    claimants=()
+    for f in /etc/netplan/*.yaml; do
+        [[ -f "${f}" && "${f}" != /etc/netplan/01-drone-mc.yaml ]] || continue
+        if grep -qiF "${MC_ETH_MAC}" "${f}" ||
+           grep -qE "^[[:space:]]*(eth0|${mc_iface}):|name:[[:space:]]*\"?(eth0|${mc_iface})\"?[[:space:]]*$" "${f}"; then
+            claimants+=("netplan file ${f}")
+        fi
+    done
+    if command -v nmcli &>/dev/null && nmcli -t general status &>/dev/null; then
+        while IFS=: read -r nm_name nm_device nm_file; do
+            # netplan's own NM rendering of 01-drone-mc.yaml, not a rival.
+            [[ "${nm_file}" == */netplan-* ]] && continue
+            if [[ "${nm_device}" == "${mc_iface}" || "${nm_device}" == eth0 ]] ||
+               { [[ -f "${nm_file}" ]] &&
+                 grep -qiE "^(mac-address=${MC_ETH_MAC}|interface-name=(eth0|${mc_iface}))$" "${nm_file}"; }; then
+                claimants+=("NetworkManager profile '${nm_name}' (${nm_file:-in-memory})")
+            fi
+        done < <(nmcli -t -f NAME,DEVICE,FILENAME connection show 2>/dev/null || true)
+    fi
+    if [[ "${#claimants[@]}" -gt 0 ]]; then
+        echo "WARNING: other network config also claims ${mc_iface} (MC_ETH_MAC=${MC_ETH_MAC})" \
+             "— its addresses will sit alongside MC_ETH_IP=${MC_ETH_IP} and fail" \
+             "01b-smoke-test-os.sh's single-address check:" >&2
+        for c in "${claimants[@]}"; do echo "    ${c}" >&2; done
+        echo "    Remove it (\`nmcli connection delete <name>\` / delete the extra netplan" \
+             "file), then \`ip addr flush dev ${mc_iface}\` + re-run, or reboot. Do this from" \
+             "the console if this session is on ${mc_iface}." >&2
+    fi
 fi
 
 RENDERED_NETPLAN="$(mktemp)"
@@ -181,6 +218,21 @@ envsubst '$MC_ETH_MAC $MC_ETH_IP' \
     < "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" > "${RENDERED_NETPLAN}"
 install -m 600 "${RENDERED_NETPLAN}" /etc/netplan/01-drone-mc.yaml
 netplan apply
+
+# Even with no rival config left, netplan apply doesn't drop addresses a
+# since-deleted profile already put on the live interface — name any
+# that remain so the 01b failure isn't a surprise.
+if [[ -n "${mc_iface:-}" ]]; then
+    live_iface=eth0
+    ip link show eth0 &>/dev/null || live_iface="${mc_iface}"
+    stale_addrs="$(ip -4 -o addr show dev "${live_iface}" 2>/dev/null |
+        awk '{print $4}' | grep -vxF "${MC_ETH_IP}/24" || true)"
+    if [[ -n "${stale_addrs}" ]]; then
+        echo "WARNING: ${live_iface} still carries address(es) other than MC_ETH_IP=${MC_ETH_IP}:" \
+             "${stale_addrs//$'\n'/ } — reboot or \`ip addr flush dev ${live_iface}\` +" \
+             "\`netplan apply\` to clear them." >&2
+    fi
+fi
 
 echo "==> Installing /etc/udev/rules.d/99-drone-mc.rules (HIF-001 ttyTHS1 permissions)"
 install -m 644 "${REPO_ROOT}/config/udev/99-drone-mc.rules" /etc/udev/rules.d/99-drone-mc.rules
