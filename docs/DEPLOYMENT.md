@@ -380,9 +380,11 @@ constants (same value on every drone) and are not per-drone inputs.
   fully offline, inside the existing `ros2-core` image. Every `NN-build-*-
   image.sh` that `apt-get`s or `git clone`s still needs real network,
   including `08` (Micro XRCE-DDS Agent source) and `04`. Their DNS pre-flight
-  check fails fast. Either give the Jetson a route out (temporary default
-  route + resolver via the GCS laptop's NAT), or build images where
-  there is network and `docker save`/`docker load` them across.
+  check fails fast. Either give the Jetson a route out, or build images where
+  there is network and `docker save`/`docker load` them across. For a
+  persistent route out, set `MC_ETH_GATEWAY` (e.g. `192.168.10.1`) and
+  `MC_ETH_DNS` (e.g. `8.8.8.8,1.1.1.1`) in `/etc/drone-mc/environment` and
+  re-run `01-install-os.sh`. Leave both empty on flight units.
 - **`video_downlink` has no deployment story yet at all** — no unit file,
   no Dockerfile, no build script for `perception_front_node` or
   `video_mux_node`.

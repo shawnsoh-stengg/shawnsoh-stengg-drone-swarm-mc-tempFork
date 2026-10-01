@@ -212,9 +212,45 @@ if [[ "${ALLOW_NON_JETSON:-0}" -ne 1 ]]; then
     fi
 fi
 
+# Optional default route + DNS (bench internet). Both empty is the flight
+# default: no route out, no resolver. envsubst has no conditionals, so
+# the routes block is built here and substituted whole (or as nothing).
+ipv4_re='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+MC_ETH_GATEWAY="${MC_ETH_GATEWAY:-}"
+MC_ETH_DNS="${MC_ETH_DNS:-}"
+if [[ -n "${MC_ETH_GATEWAY}" && ! "${MC_ETH_GATEWAY}" =~ ${ipv4_re} ]]; then
+    echo "ERROR: MC_ETH_GATEWAY=${MC_ETH_GATEWAY} in /etc/drone-mc/environment is not" \
+         "an IPv4 address. Fix or empty it and re-run." >&2
+    exit 1
+fi
+MC_ETH_DNS_LIST=""
+if [[ -n "${MC_ETH_DNS}" ]]; then
+    IFS=',' read -ra dns_servers <<<"${MC_ETH_DNS// /}"
+    for dns in "${dns_servers[@]}"; do
+        [[ -z "${dns}" ]] && continue
+        if [[ ! "${dns}" =~ ${ipv4_re} ]]; then
+            echo "ERROR: MC_ETH_DNS entry '${dns}' in /etc/drone-mc/environment is not" \
+                 "an IPv4 address (expected a comma-separated list). Fix and re-run." >&2
+            exit 1
+        fi
+        MC_ETH_DNS_LIST+="${MC_ETH_DNS_LIST:+, }${dns}"
+    done
+fi
+MC_ETH_ROUTES_YAML=""
+if [[ -n "${MC_ETH_GATEWAY}" ]]; then
+    MC_ETH_ROUTES_YAML="      routes:
+        - to: default
+          via: ${MC_ETH_GATEWAY}"
+    echo "    eth0 default route via ${MC_ETH_GATEWAY}, DNS [${MC_ETH_DNS_LIST:-none}]"
+elif [[ -n "${MC_ETH_DNS_LIST}" ]]; then
+    echo "    NOTE: MC_ETH_DNS is set but MC_ETH_GATEWAY is empty — names will only" \
+         "resolve if the DNS server is on 192.168.10.x itself."
+fi
+export MC_ETH_DNS_LIST MC_ETH_ROUTES_YAML
+
 RENDERED_NETPLAN="$(mktemp)"
 trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
-envsubst '$MC_ETH_MAC $MC_ETH_IP' \
+envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_DNS_LIST $MC_ETH_ROUTES_YAML' \
     < "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" > "${RENDERED_NETPLAN}"
 install -m 600 "${RENDERED_NETPLAN}" /etc/netplan/01-drone-mc.yaml
 netplan apply
