@@ -161,8 +161,8 @@ LIVE_CONF_B="/etc/drone-mc/mavlink-router-channel-b.conf"
 LIVE_CONF_C="/etc/drone-mc/mavlink-router-channel-c.conf"
 if [[ -f "${LIVE_ENV}" ]]; then
     echo "==> Checking deployed configs on this host against /etc/drone-mc/environment"
-    LIVE_FCC_ETH_IP="$(grep -E '^FCC_ETH_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
-    LIVE_GCS_IP="$(grep -E '^GCS_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2-)"
+    LIVE_FCC_ETH_IP="$(grep -E '^FCC_ETH_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2- || true)"
+    LIVE_GCS_IP="$(grep -E '^GCS_IP=' "${LIVE_ENV}" | tail -n1 | cut -d= -f2- || true)"
     if [[ -n "${LIVE_FCC_ETH_IP}" && -f "${LIVE_CONF_A}" ]]; then
         check "deployed channel-a.conf matches this drone's FCC_ETH_IP (${LIVE_FCC_ETH_IP})" \
             grep -qE "Address = ${LIVE_FCC_ETH_IP//./\\.}\$" "${LIVE_CONF_A}"

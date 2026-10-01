@@ -85,8 +85,8 @@ fi
 # FCC_ETH_IP and drop both retired variables — before the backfill below,
 # so it can't re-add them. Refuses to guess if the two disagree otherwise.
 ENV_FILE=/etc/drone-mc/environment
-old_fcc_eth="$(grep -E '^FCC_ETH_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2-)"
-old_fcc_gcs="$(grep -E '^FCC_GCS_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2-)"
+old_fcc_eth="$(grep -E '^FCC_ETH_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+old_fcc_gcs="$(grep -E '^FCC_GCS_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
 if [[ -n "${old_fcc_gcs}" ]]; then
     if [[ -z "${old_fcc_eth}" || "${old_fcc_eth}" == 192.168.12.* ]]; then
         sed -i '/^FCC_ETH_IP=/d' "${ENV_FILE}"
