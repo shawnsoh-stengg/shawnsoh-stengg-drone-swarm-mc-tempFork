@@ -29,13 +29,6 @@ constexpr uint8_t kTargetComponent = 1;           // PX4 SITL default component 
 constexpr uint8_t kArmingStateDisarmed = 1;  // ICD-MC-001 §10.2
 constexpr uint8_t kArmingStateArmed = 2;     // ICD-MC-001 §10.2
 
-// mc_msgs/VehicleState.msg's own documented gnss_ok definition: "fix_type
-// >= 3 AND hdop < threshold". 2.0 matches ICD-MC-001 §10.8's GNSS_DEGRADED
-// fault trigger ("GNSS fix lost or HDOP > 2.0"), the only other place this
-// project already draws the same line.
-constexpr uint8_t kGnssFixType3d = 3;
-constexpr float kGnssHdopOkThreshold = 2.0F;
-
 uint8_t drone_id()
 {
   return static_cast<uint8_t>(std::stoi(env_or("DRONE_ID", "1")));
@@ -140,9 +133,10 @@ void MavlinkUdpBackend::dispatch(const mavlink_message_t & msg)
       break;
     case MAVLINK_MSG_ID_OPTICAL_FLOW_RAD:
     case MAVLINK_MSG_ID_DISTANCE_SENSOR:
-      // HIF-008 flow relay (OpticalFlowRelay's own doc comment) — only ever
-      // populated if PX4 SITL's own simulated flow sensor sends these on
-      // this connection.
+    case MAVLINK_MSG_ID_ALTITUDE:
+      // HIF-008 flow relay (OpticalFlowRelay's own doc comment) — flow is
+      // only ever populated if PX4 SITL's own simulated flow sensor sends
+      // these on this connection; ALTITUDE is in PX4's default stream set.
       flow_relay_.handle_frame(msg);
       break;
     default:
@@ -277,7 +271,7 @@ void MavlinkUdpBackend::handle_gps_raw_int(const mavlink_message_t & msg)
   if (gps.epv != UINT16_MAX) {
     state_.vdop = static_cast<float>(gps.epv) / 100.0F;
   }
-  state_.gnss_ok = gps.fix_type >= kGnssFixType3d && state_.hdop < kGnssHdopOkThreshold;
+  state_.gnss_ok = is_gnss_ok(gps.fix_type, state_.hdop);
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
 }
@@ -403,6 +397,11 @@ VehicleState MavlinkUdpBackend::get_vehicle_state() const
 OpticalFlowSample MavlinkUdpBackend::get_optical_flow() const
 {
   return flow_relay_.get_sample();
+}
+
+BaroAltitudeSample MavlinkUdpBackend::get_baro_altitude() const
+{
+  return flow_relay_.get_baro_altitude();
 }
 
 bool MavlinkUdpBackend::is_link_alive(double timeout_s) const

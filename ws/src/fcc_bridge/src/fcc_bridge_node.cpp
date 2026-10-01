@@ -36,6 +36,8 @@ FccBridgeNode::FccBridgeNode(
     create_publisher<mc_msgs::msg::FccMissionAck>("/mc/fcc/mission_ack", rclcpp::QoS(10));
   pub_optical_flow_ =
     create_publisher<mc_msgs::msg::OpticalFlow>("/mc/sensors/optical_flow", rclcpp::QoS(10));
+  pub_baro_altitude_ =
+    create_publisher<mc_msgs::msg::BaroAltitude>("/mc/sensors/baro_altitude", rclcpp::QoS(10));
 
   // Mutually-exclusive group: periodic publish stays serialized against
   // itself (threading model, SDD §2.1) even once other timers are added.
@@ -147,8 +149,18 @@ void FccBridgeNode::on_publish_timer()
   pub_vehicle_state_->publish(to_msg(state, link_alive));
 
   const OpticalFlowSample flow = backend_->get_optical_flow();
-  if (flow.valid) {
+  if (flow.valid && flow.seq != last_flow_seq_) {
+    last_flow_seq_ = flow.seq;
     pub_optical_flow_->publish(to_flow_msg(flow, now()));
+  }
+
+  const BaroAltitudeSample baro = backend_->get_baro_altitude();
+  if (baro.valid && baro.seq != last_baro_seq_) {
+    last_baro_seq_ = baro.seq;
+    mc_msgs::msg::BaroAltitude msg;
+    msg.header.stamp = now();
+    msg.alt_m = baro.alt_m;
+    pub_baro_altitude_->publish(msg);
   }
 
   if (link_was_alive_ && !link_alive) {
@@ -185,8 +197,8 @@ mc_msgs::msg::VehicleState FccBridgeNode::to_msg(const VehicleState & state, boo
   msg.battery_pct = state.battery_remaining;
   msg.fcc_link_ok = link_alive;
   // TEST-002: the "backend enhancement" this comment used to defer --
-  // MavlinkUdpBackend now aggregates these (handle_gps_raw_int()).
-  // XrceDdsBackend's own equivalent remains a separate, still-open gap.
+  // MavlinkUdpBackend aggregates these from GPS_RAW_INT, XrceDdsBackend
+  // from vehicle_gps_position (FT-006 finding, HIL_GPS fixes excluded).
   msg.fix_type = state.fix_type;
   msg.hdop = state.hdop;
   msg.vdop = state.vdop;

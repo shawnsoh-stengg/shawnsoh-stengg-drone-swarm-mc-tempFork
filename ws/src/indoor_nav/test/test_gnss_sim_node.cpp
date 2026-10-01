@@ -13,10 +13,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
+#include <mc_msgs/msg/baro_altitude.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
 #include <mc_msgs/msg/optical_flow.hpp>
@@ -84,6 +87,8 @@ protected:
       "/mc/fcc/vehicle_state", rclcpp::QoS(10));
     pub_optical_flow_ = harness_->create_publisher<mc_msgs::msg::OpticalFlow>(
       "/mc/sensors/optical_flow", rclcpp::QoS(10));
+    pub_baro_altitude_ = harness_->create_publisher<mc_msgs::msg::BaroAltitude>(
+      "/mc/sensors/baro_altitude", rclcpp::QoS(10));
     pub_gcs_command_ = harness_->create_publisher<mc_msgs::msg::GcsCommand>(
       "/mc/gcs/command", rclcpp::QoS(10));
     sub_local_estimate_ = harness_->create_subscription<nav_msgs::msg::Odometry>(
@@ -107,6 +112,14 @@ protected:
     msg.header.stamp = stamp_at(t_s);
     msg.alt_msl = alt_msl;
     msg.q = q;
+    return msg;
+  }
+
+  mc_msgs::msg::BaroAltitude make_baro(double t_s, float alt_m)
+  {
+    mc_msgs::msg::BaroAltitude msg;
+    msg.header.stamp = stamp_at(t_s);
+    msg.alt_m = alt_m;
     return msg;
   }
 
@@ -135,6 +148,7 @@ protected:
   rclcpp::Node::SharedPtr harness_;
   rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
   rclcpp::Publisher<mc_msgs::msg::OpticalFlow>::SharedPtr pub_optical_flow_;
+  rclcpp::Publisher<mc_msgs::msg::BaroAltitude>::SharedPtr pub_baro_altitude_;
   rclcpp::Publisher<mc_msgs::msg::GcsCommand>::SharedPtr pub_gcs_command_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_local_estimate_;
   rclcpp::Subscription<mc_msgs::msg::IndoorGnssSimStatus>::SharedPtr sub_gnss_sim_status_;
@@ -194,17 +208,19 @@ TEST_F(GnssSimNodeTest, YawedAttitudeRotatesFlowIntoLocalFrame)
   EXPECT_NEAR(last.pose.pose.position.y, 1.8, 0.05);
 }
 
-// Baro-derived vertical: a 1 m altitude gain (climb) over 1 s should read
-// as z decreasing by 1 m (NED down) and vz of about -1 m/s.
+// Baro-derived vertical, filter disabled (baro_vz_filter_tau_s = 0): a 1 m
+// altitude gain (climb) over 1 s should read as z decreasing by 1 m (NED
+// down) and vz of exactly the raw -1 m/s difference.
 TEST_F(GnssSimNodeTest, BaroAltitudeChangeUpdatesVerticalPositionAndRate)
 {
-  const std::array<float, 4> level_q{1.0F, 0.0F, 0.0F, 0.0F};
-  pub_vehicle_state_->publish(make_vehicle_state(0.0, 100.0F, level_q));
+  node_ = std::make_shared<indoor_nav::GnssSimNode>(
+    rclcpp::NodeOptions().parameter_overrides({{"baro_vz_filter_tau_s", 0.0}}));
+  pub_baro_altitude_->publish(make_baro(0.0, 100.0F));
   ASSERT_TRUE(
     spin_until(
       {node_, harness_}, [this] {return !estimates_.empty();}, std::chrono::seconds(3)));
 
-  pub_vehicle_state_->publish(make_vehicle_state(1.0, 101.0F, level_q));
+  pub_baro_altitude_->publish(make_baro(1.0, 101.0F));
   ASSERT_TRUE(
     spin_until(
       {node_, harness_}, [this] {return estimates_.size() >= 2U;}, std::chrono::seconds(3)));
@@ -212,6 +228,81 @@ TEST_F(GnssSimNodeTest, BaroAltitudeChangeUpdatesVerticalPositionAndRate)
   const auto & last = *estimates_.back();
   EXPECT_NEAR(last.pose.pose.position.z, -1.0, 0.01);
   EXPECT_NEAR(last.twist.twist.linear.z, -1.0, 0.01);
+}
+
+// Default filter: a steady 1 m/s climb at the real 10 Hz baro rate still
+// converges on the true rate (3 s = 6 time constants), and z is unfiltered.
+TEST_F(GnssSimNodeTest, FilteredBaroRateConvergesToSteadyClimbRate)
+{
+  for (int i = 0; i <= 30; ++i) {
+    node_->on_baro_altitude(make_baro(0.1 * i, 100.0F + 0.1F * static_cast<float>(i)));
+  }
+
+  const nav_msgs::msg::Odometry est = node_->local_estimate();
+  EXPECT_NEAR(est.pose.pose.position.z, -3.0, 1e-4);
+  EXPECT_NEAR(est.twist.twist.linear.z, -1.0, 0.02);
+}
+
+// FT-006 regression: a stationary vehicle with ~±0.15 m of baro jitter (the
+// spread seen on the orin-nx bench) made the raw difference swing ~1 m/s,
+// which reached PX4 as HIL_GPS vd and failed its "vertical velocity
+// unstable" preflight check. The filtered rate must stay small.
+TEST_F(GnssSimNodeTest, StationaryBaroJitterDoesNotProduceLargeVerticalRate)
+{
+  // Deterministic pseudo-random jitter, uniform in [-0.15, 0.15] m.
+  uint32_t lcg = 12345U;
+  auto jitter = [&lcg]() {
+      lcg = lcg * 1664525U + 1013904223U;
+      return (static_cast<float>(lcg >> 8) / static_cast<float>(1U << 24) - 0.5F) * 0.3F;
+    };
+
+  double raw_sq = 0.0;
+  double filt_sq = 0.0;
+  float max_abs = 0.0F;
+  int n = 0;
+  float prev_alt = 50.0F;
+  node_->on_baro_altitude(make_baro(0.0, prev_alt));
+  for (int i = 1; i <= 200; ++i) {
+    const float alt = 50.0F + jitter();
+    node_->on_baro_altitude(make_baro(0.1 * i, alt));
+    if (i > 20) {  // past the 2 s start-up transient
+      const float raw_vz = -(alt - prev_alt) / 0.1F;
+      const float vz = static_cast<float>(node_->local_estimate().twist.twist.linear.z);
+      raw_sq += static_cast<double>(raw_vz * raw_vz);
+      filt_sq += static_cast<double>(vz * vz);
+      max_abs = std::max(max_abs, std::abs(vz));
+      ++n;
+    }
+    prev_alt = alt;
+  }
+
+  const double raw_rms = std::sqrt(raw_sq / n);
+  const double filt_rms = std::sqrt(filt_sq / n);
+  EXPECT_GT(raw_rms, 1.0);  // the jitter really is bad enough to matter unfiltered
+  EXPECT_LT(filt_rms, 0.25);
+  EXPECT_LT(filt_rms, 0.2 * raw_rms);
+  EXPECT_LT(max_abs, 0.6F);
+}
+
+// FT-006 regression: VehicleState.alt_msl is EKF2 output, which fuses this
+// node's own HIL_GPS altitude -- it must not move the vertical estimate, or
+// the two close a loop (PX4's altitude ran ~42 km off on the bench).
+TEST_F(GnssSimNodeTest, VehicleStateAltMslDoesNotDriveVerticalEstimate)
+{
+  const std::array<float, 4> level_q{1.0F, 0.0F, 0.0F, 0.0F};
+  pub_baro_altitude_->publish(make_baro(0.0, 100.0F));
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return !estimates_.empty();}, std::chrono::seconds(3)));
+
+  pub_vehicle_state_->publish(make_vehicle_state(1.0, -41975.0F, level_q));
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return estimates_.size() >= 2U;}, std::chrono::seconds(3)));
+
+  const auto & last = *estimates_.back();
+  EXPECT_NEAR(last.pose.pose.position.z, 0.0, 1e-6);
+  EXPECT_NEAR(last.twist.twist.linear.z, 0.0, 1e-6);
 }
 
 // A flow sample gap wider than max_flow_dt_s_ (default 0.5 s) must not be

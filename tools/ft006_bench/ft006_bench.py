@@ -20,6 +20,13 @@ gcs_mavlink_node emits for a decoded Channel B COMMAND_LONG — Channel B's
 own decode/ACK path is FT-001 AC2's scope, not this ticket's. The header
 stamp matters: gnss_sim_node measures time_since_anchor (and so eph/epv
 growth) from it, which is why this isn't a plain `ros2 topic pub`.
+
+gnss_sim_node's vertical input is /mc/sensors/baro_altitude, which
+fcc_bridge relays from the FCC's MAVLink ALTITUDE stream on the flow
+instance (:14556) -- not mocked here. If `watch` shows `baro: none`, add
+ALTITUDE to that instance's streams on the FCC, or IGS-005's watchdog
+latches INDOOR_GNSS_SIM_LOST ("baro_altitude input stale") right after
+the anchor.
 """
 import sys
 import time
@@ -29,7 +36,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
-from mc_msgs.msg import FaultEvent, GcsCommand, IndoorGnssSimStatus, OpticalFlow
+from mc_msgs.msg import BaroAltitude, FaultEvent, GcsCommand, IndoorGnssSimStatus, OpticalFlow
 from px4_msgs.msg import SensorGps
 
 MC_CMD_INDOOR_GNSS_SIM_ANCHOR = 50005
@@ -96,7 +103,8 @@ def run_anchor(node, lat, lon, alt):
 
 
 def run_watch(node):
-    latest = {"sim": None, "gps": None, "gps_rx": 0.0, "gps_n": 0, "lost": None}
+    latest = {"sim": None, "gps": None, "gps_rx": 0.0, "gps_n": 0, "lost": None,
+              "baro": None, "baro_rx": 0.0}
 
     def on_sim(msg):
         prev = latest["sim"]
@@ -109,6 +117,10 @@ def run_watch(node):
         latest["gps_rx"] = time.time()
         latest["gps_n"] += 1
 
+    def on_baro(msg):
+        latest["baro"] = msg
+        latest["baro_rx"] = time.time()
+
     def on_fault(msg):
         # IndoorGnssSimStatus.active stays true after IGS-005's watchdog
         # latches, so the latch is only visible here -- and only if this
@@ -119,6 +131,7 @@ def run_watch(node):
 
     node.create_subscription(IndoorGnssSimStatus, "/mc/indoor/gnss_sim_status", on_sim, 10)
     node.create_subscription(FaultEvent, "/mc/fault", on_fault, 10)
+    node.create_subscription(BaroAltitude, "/mc/sensors/baro_altitude", on_baro, 10)
     node.create_subscription(SensorGps, "/fmu/out/vehicle_gps_position", on_gps, PX4_QOS)
 
     def report():
@@ -138,7 +151,10 @@ def run_watch(node):
                      f"sats={gps.satellites_used} lat={gps.latitude_deg:.7f} "
                      f"lon={gps.longitude_deg:.7f} src={src}(bus={bus_type}/{bus} "
                      f"sysid={address} devtype=0x{devtype:02X}) age={age:.1f}s n={latest['gps_n']}")
-        print(f"{time.strftime('%H:%M:%S')}  {sim_s}  |  {gps_s}", flush=True)
+        baro = latest["baro"]
+        baro_s = ("baro: none" if baro is None else
+                  f"baro={baro.alt_m:.2f}m age={time.time() - latest['baro_rx']:.1f}s")
+        print(f"{time.strftime('%H:%M:%S')}  {sim_s}  |  {baro_s}  |  {gps_s}", flush=True)
         if latest["lost"] is not None:
             print(f"          LATCHED INDOOR_GNSS_SIM_LOST: {latest['lost']}", flush=True)
 

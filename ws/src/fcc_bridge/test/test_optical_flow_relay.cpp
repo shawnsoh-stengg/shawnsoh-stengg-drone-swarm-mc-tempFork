@@ -16,6 +16,8 @@
 
 #include <mavlink/v2.0/common/mavlink.h>
 
+#include <cmath>
+
 #include "fcc_bridge/optical_flow_relay.hpp"
 
 namespace
@@ -139,4 +141,53 @@ TEST(OpticalFlowRelay, IgnoresUnrelatedMessageTypes)
   relay.handle_frame(heartbeat);
 
   EXPECT_FALSE(relay.get_sample().valid);
+}
+
+// FT-006 finding: raw baro from ALTITUDE.altitude_monotonic, carried on the
+// same channel as gnss_sim_node's other input.
+namespace
+{
+mavlink_message_t pack_altitude(float altitude_monotonic, float altitude_amsl)
+{
+  mavlink_message_t msg;
+  mavlink_msg_altitude_pack(
+    1, 1, &msg, /*time_usec=*/ 0, altitude_monotonic, altitude_amsl,
+    /*altitude_local=*/ NAN, /*altitude_relative=*/ NAN, /*altitude_terrain=*/ NAN,
+    /*bottom_clearance=*/ NAN);
+  return msg;
+}
+}  // namespace
+
+TEST(OpticalFlowRelay, DecodesBaroAltitudeFromAltitudeMonotonicNotAmsl)
+{
+  fcc_bridge::OpticalFlowRelay relay;
+  EXPECT_FALSE(relay.get_baro_altitude().valid);
+
+  // altitude_amsl is EKF2's estimate -- exactly the input that must not be
+  // used; give it a different value so a mix-up fails loudly.
+  relay.handle_frame(pack_altitude(/*altitude_monotonic=*/ 31.5F, /*altitude_amsl=*/ -41975.0F));
+
+  const auto baro = relay.get_baro_altitude();
+  EXPECT_TRUE(baro.valid);
+  EXPECT_FLOAT_EQ(baro.alt_m, 31.5F);
+  EXPECT_FALSE(relay.get_sample().valid) << "ALTITUDE must not mark a flow sample valid";
+}
+
+TEST(OpticalFlowRelay, IgnoresNanBaroAltitudeBeforeAirDataExists)
+{
+  fcc_bridge::OpticalFlowRelay relay;
+  relay.handle_frame(pack_altitude(NAN, 10.0F));
+
+  EXPECT_FALSE(relay.get_baro_altitude().valid);
+}
+
+TEST(OpticalFlowRelay, SeqAdvancesOncePerDecodedFrame)
+{
+  fcc_bridge::OpticalFlowRelay relay;
+  relay.handle_frame(pack_optical_flow_rad(100000, 0.0F, 0.0F, 0.0F, 0.0F, 200, 1.0F));
+  relay.handle_frame(pack_optical_flow_rad(100000, 0.0F, 0.0F, 0.0F, 0.0F, 200, 1.0F));
+  relay.handle_frame(pack_altitude(5.0F, NAN));
+
+  EXPECT_EQ(relay.get_sample().seq, 2U);
+  EXPECT_EQ(relay.get_baro_altitude().seq, 1U);
 }

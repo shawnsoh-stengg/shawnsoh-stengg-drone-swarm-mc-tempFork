@@ -16,6 +16,7 @@
 #include <px4_msgs/msg/battery_status.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/sensor_combined.hpp>
+#include <px4_msgs/msg/sensor_gps.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
@@ -50,6 +51,7 @@ public:
   void publish_visual_odometry(const VisualOdometry & vo) override;
   VehicleState get_vehicle_state() const override;
   OpticalFlowSample get_optical_flow() const override;
+  BaroAltitudeSample get_baro_altitude() const override;
   bool is_link_alive(double timeout_s = 1.0) const override;
 
 private:
@@ -60,6 +62,13 @@ private:
   void on_attitude(const px4_msgs::msg::VehicleAttitude::SharedPtr msg);
   void on_odometry(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
   void on_imu(const px4_msgs::msg::SensorCombined::SharedPtr msg);
+  // PX4's selected GNSS receiver -> VehicleState fix_type/hdop/vdop/gnss_ok.
+  // A fix PX4 got from HIL_GPS (gnss_sim_node's own injected stream, IGS-004)
+  // is reported as "no fix": VehicleState's GNSS fields mean a *real*
+  // receiver, and gnss_sim_node's real-GPS lockout (IGS-005) reads them --
+  // counting its own stream would lock it out of itself (PX4 also leaves
+  // HIL_GPS's hdop at 0, so it would always pass the threshold).
+  void on_gps(const px4_msgs::msg::SensorGps::SharedPtr msg);
 
   void touch_link_alive();
   int open_mission_socket();
@@ -77,6 +86,7 @@ private:
   rclcpp::Subscription<px4_msgs::msg::VehicleAttitude>::SharedPtr sub_attitude_;
   rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr sub_odometry_;
   rclcpp::Subscription<px4_msgs::msg::SensorCombined>::SharedPtr sub_imu_;
+  rclcpp::Subscription<px4_msgs::msg::SensorGps>::SharedPtr sub_gps_;
 
   // Publishers  /fmu/in/  (uXRCE-DDS)
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr pub_vehicle_command_;

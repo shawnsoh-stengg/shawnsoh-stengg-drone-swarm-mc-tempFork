@@ -45,6 +45,7 @@ public:
   void publish_visual_odometry(const VisualOdometry & vo) override;
   VehicleState get_vehicle_state() const override;
   OpticalFlowSample get_optical_flow() const override;
+  BaroAltitudeSample get_baro_altitude() const override;
   bool is_link_alive(double timeout_s = 1.0) const override;
 
 private:
@@ -78,9 +79,9 @@ private:
   // has no gnss_ok/hdop/vdop/fix_type line at all) -- so PREFLIGHT could
   // never reach ARMING via a live backend, only ever in unit tests that
   // construct a synthetic VehicleState with gnss_ok set directly. Fixed
-  // here for MavlinkUdpBackend/SITL only; XrceDdsBackend's own equivalent
-  // (presumably a vehicle_gps_position DDS topic) is a separate, still-open
-  // gap -- see PROJECT-PLAN-5-MONTH.md's TEST-002 entry.
+  // here for MavlinkUdpBackend/SITL; XrceDdsBackend's equivalent
+  // (vehicle_gps_position, XrceDdsBackend::on_gps()) landed later, as an
+  // FT-006 bench finding.
   void handle_gps_raw_int(const mavlink_message_t & msg);
   void note_peer(const sockaddr_in & addr);
 

@@ -3,6 +3,8 @@
 
 #include "fcc_bridge/optical_flow_relay.hpp"
 
+#include <cmath>
+
 namespace fcc_bridge
 {
 
@@ -14,6 +16,9 @@ void OpticalFlowRelay::handle_frame(const mavlink_message_t & msg)
       break;
     case MAVLINK_MSG_ID_DISTANCE_SENSOR:
       handle_distance_sensor(msg);
+      break;
+    case MAVLINK_MSG_ID_ALTITUDE:
+      handle_altitude(msg);
       break;
     default:
       break;
@@ -61,6 +66,7 @@ void OpticalFlowRelay::handle_optical_flow_rad(const mavlink_message_t & msg)
   sample_.vy = range * flow_comp_x / flow_dt_s;   // body FRD Y (right)
   sample_.ground_distance = range;
   sample_.quality = flow.quality;
+  ++sample_.seq;
   sample_.valid = true;
 }
 
@@ -70,6 +76,29 @@ void OpticalFlowRelay::handle_distance_sensor(const mavlink_message_t & msg)
   mavlink_msg_distance_sensor_decode(&msg, &dist);
 
   last_distance_sensor_m_ = static_cast<float>(dist.current_distance) * 1e-2F;  // cm -> m
+}
+
+void OpticalFlowRelay::handle_altitude(const mavlink_message_t & msg)
+{
+  mavlink_altitude_t alt{};
+  mavlink_msg_altitude_decode(&msg, &alt);
+
+  // PX4 sends NaN until vehicle_air_data has published at least once
+  // (streams/ALTITUDE.hpp) -- no baro yet, not an altitude of zero.
+  if (!std::isfinite(alt.altitude_monotonic)) {
+    return;
+  }
+
+  std::scoped_lock lock(mtx_);
+  baro_.alt_m = alt.altitude_monotonic;
+  ++baro_.seq;
+  baro_.valid = true;
+}
+
+BaroAltitudeSample OpticalFlowRelay::get_baro_altitude() const
+{
+  std::scoped_lock lock(mtx_);
+  return baro_;
 }
 
 OpticalFlowSample OpticalFlowRelay::get_sample() const

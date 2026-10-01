@@ -50,9 +50,12 @@ public:
 
   fcc_bridge::OpticalFlowSample get_optical_flow() const override {return flow_sample_;}
 
+  fcc_bridge::BaroAltitudeSample get_baro_altitude() const override {return baro_sample_;}
+
   bool is_link_alive(double /*timeout_s*/) const override {return link_alive_;}
 
   fcc_bridge::OpticalFlowSample flow_sample_{};
+  fcc_bridge::BaroAltitudeSample baro_sample_{};
   fcc_bridge::VehicleState state_{};
   bool link_alive_{true};
   bool upload_result_{true};
@@ -163,6 +166,18 @@ TEST(FccBackendContract, GetOpticalFlowReachesImplementationThroughBasePointer)
   const auto sample = backend->get_optical_flow();
   EXPECT_TRUE(sample.valid);
   EXPECT_FLOAT_EQ(sample.vx, 1.5F);
+}
+
+TEST(FccBackendContract, GetBaroAltitudeReachesImplementationThroughBasePointer)
+{
+  FakeBackend fake;
+  fake.baro_sample_.alt_m = 42.0F;
+  fake.baro_sample_.valid = true;
+  fcc_bridge::FccBackend * backend = &fake;
+
+  const auto sample = backend->get_baro_altitude();
+  EXPECT_TRUE(sample.valid);
+  EXPECT_FLOAT_EQ(sample.alt_m, 42.0F);
 }
 
 TEST(FccBackendContract, IsLinkAliveReflectsImplementation)

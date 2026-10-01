@@ -779,26 +779,33 @@ gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
 
 ### 10.4 Configuration
 
-PX4-side DroneCAN + EKF2 fusion parameters (Holybro H-Flow PX4 setup guide, `docs.holybro.com`):
+PX4-side DroneCAN + EKF2 fusion parameters (Holybro H-Flow PX4 setup guide, `docs.holybro.com`). Every parameter name, default and reboot flag below was checked against the real PX4 **v1.17.0** tag (`src/drivers/uavcan/uavcan_params.c`, `src/modules/sensors/sensor_params_flow.c`, `src/modules/ekf2/params_*.yaml`) on 2026-09-27:
 
 ```
-UAVCAN_SUB_FLOW = 1        # enable optical-flow DroneCAN subscription
-UAVCAN_SUB_RNG = 1         # enable rangefinder DroneCAN subscription
-EKF2_OF_CTRL = 1           # enable EKF2 optical-flow fusion
-UAVCAN_RNG_MIN = 0.08      # m — matches the sensor's 80 mm minimum range
-UAVCAN_RNG_MAX = 30        # m
-EKF2_RNG_A_HMAX = 10       # m — EKF2 rangefinder aiding altitude ceiling
-EKF2_RNG_QLTY_T = 0.2
-SENS_FLOW_MINHGT = 0.08    # m
-SENS_FLOW_MAXHGT = 30      # m
-SENS_FLOW_MAXR = 7.4       # rad/s, matches the sensor's max angular rate
+UAVCAN_ENABLE = 2          # default 0 (disabled), reboot required. 2 = "Sensors Automatic
+                           # Config" (dynamic node ID allocation). Without this the DroneCAN
+                           # driver never starts and every UAVCAN_SUB_* below is inert.
+                           # Missing from this list before 2026-09-27. Don't use 3 unless
+                           # the ESCs are DroneCAN (3 also moves motor outputs to CAN).
+UAVCAN_SUB_FLOW = 1        # default 0, reboot required — optical-flow DroneCAN subscription
+UAVCAN_SUB_RNG = 1         # default 0, reboot required — rangefinder DroneCAN subscription
+EKF2_OF_CTRL = 1           # already the v1.17.0 default — EKF2 optical-flow fusion
+UAVCAN_RNG_MIN = 0.08      # m (default 0.0) — matches the sensor's 80 mm minimum range
+UAVCAN_RNG_MAX = 30        # m (default 999)
+EKF2_RNG_A_HMAX = 10       # m (default 5, max 10) — conditional range-aid ceiling;
+                           # only applies with EKF2_RNG_CTRL = 1 (the default)
+EKF2_RNG_QLTY_T = 0.2      # s (default 1.0) — how long range quality must be non-zero
+                           # before EKF2 accepts the rangefinder
+SENS_FLOW_MINHGT = 0.08    # m (already the default)
+SENS_FLOW_MAXHGT = 30      # m (default 100)
+SENS_FLOW_MAXR = 7.4       # rad/s (default 8) — matches the sensor's max angular rate
 SENS_FLOW_ROT = 0          # default: connectors mounted toward the rear of the vehicle
 EKF2_OF_POS_X/Y/Z          # sensor offset from vehicle CG — measure and set per airframe
-EKF2_GPS_CTRL = 0          # only if intentionally disabling GPS aiding indoors — verify
-                           # this doesn't conflict with IGS's own GNSS-lockout design
-                           # (INDOOR-GNSS-SIMULATION-BACKLOG.md Safety Considerations §3)
-                           # before setting on a real airframe
 ```
+
+> **Do not set `EKF2_GPS_CTRL = 0` on an IGS airframe.** This section used to list it as an optional "disable GPS aiding indoors" setting. In v1.17.0 `EKF2_GPS_CTRL` is a bitmask (default `7` = lat/lon + altitude + 3D velocity), and `0` turns off EKF2's GNSS fusion entirely. `gnss_sim_node`'s synthetic `HIL_GPS` fix (`ICD-MC-001.md` §3.3b) reaches EKF2 through that same GNSS path, so `0` would silently throw the whole IGS feed away, and FT-006's positive-path check would fail for a reason that has nothing to do with the MC. Leave it at `7`. The indoor/outdoor interlock belongs to `gnss_sim_node`'s real-GPS lockout (IGS-005), not to this parameter.
+
+> **Open design question, not a confirmed defect:** with `EKF2_OF_CTRL = 1`, EKF2 fuses the H-Flow directly *and* fuses `HIL_GPS`, which `gnss_sim_node` dead-reckons from that same flow. EKF2 treats the two as independent measurements when they aren't. Decide deliberately before TP-FT-002 whether to keep both on, rather than inheriting both defaults by accident.
 
 **Mounting:** connectors toward the rear of the vehicle (matches `SENS_FLOW_ROT = 0`'s default assumption — a different mount orientation needs a different value), downward-facing, lens axis normal to the ground plane. Measure and set `EKF2_OF_POS_X/Y/Z` (offset from vehicle center of gravity) per airframe.
 
@@ -813,7 +820,7 @@ EKF2_GPS_CTRL = 0          # only if intentionally disabling GPS aiding indoors 
 # Confirm current_distance is non-zero and updating.
 ```
 
-**MC-side (requires the FCC's flow MAVLink instance to be configured and streaming — a deployment step, not yet part of any smoke-test script):**
+**MC-side (requires the FCC's flow MAVLink instance to be configured and streaming — §10.6 step D; not yet part of any smoke-test script):**
 
 ```
 ros2 topic echo /mc/sensors/optical_flow
@@ -822,6 +829,81 @@ ros2 topic echo /mc/sensors/optical_flow
 ```
 
 **Bench validation:** see `test-results/IGS-002-hif-008-bench-validation.md` for the current status — the wire-decode/velocity-math layer (`OpticalFlowRelay`) is unit- and integration-tested without hardware; physical bench validation is still blocked on procuring a real H-Flow unit and rig.
+
+### 10.6 Bring-up Checklist
+
+This is the order to follow on a real Pixhawk 6X, from bare hardware to data arriving on the MC. Each step ends with a check. Don't move on until it passes, because every later check depends on the earlier ones.
+
+Parameter names, defaults, `mavlink` CLI flags and stream contents were checked against the real PX4 **v1.17.0** source on 2026-09-27. The procedure itself **has not yet been run on a real H-Flow** (no unit procured, `test-results/IGS-002-hif-008-bench-validation.md`). Record whatever the first real run shows, and correct this section where it differs.
+
+Run PX4 shell commands from QGC's MAVLink Console or `mavlink_shell.py`.
+
+**A. Hardware (FCC unpowered)**
+
+- [ ] Check the cable's pin order against Holybro's current H-Flow pinout figure (§10.2 note). Don't rely on the table in §10.2 alone.
+- [ ] Mount the sensor facing down, lens axis normal to the ground, connectors toward the rear of the vehicle (matches `SENS_FLOW_ROT = 0`). On the bench, point it at a textured surface at a known height of 0.3–1 m. A plain uniform surface won't track.
+- [ ] Connect to Pixhawk **CAN1**.
+- [ ] Termination: exactly one terminator at each end of the bus. With H-Flow the only node, that means its software termination on plus the Pixhawk end (§10.1). Record which ends are terminated: `______`
+- [ ] Record the supply voltage and current from the unit's silkscreen or datasheet (§10.3, unpublished): `______`
+
+**B. Bring up DroneCAN**
+
+- [ ] `param set UAVCAN_ENABLE 2`, `param set UAVCAN_SUB_FLOW 1`, `param set UAVCAN_SUB_RNG 1`. All three need a reboot, so reboot the FCC once after setting them.
+- [ ] `uavcan status`: the driver is running and the H-Flow node appears with a dynamically allocated node ID.
+- [ ] `listener sensor_optical_flow`: updating, `quality > 0` over texture.
+- [ ] `listener distance_sensor`: `current_distance` matches a tape measure to within a few cm.
+
+**C. Sensor and EKF2 parameters**
+
+- [ ] Set the rest of §10.4: range limits, `EKF2_RNG_*`, `SENS_FLOW_*`, `EKF2_OF_POS_X/Y/Z` measured on this airframe. **Leave `EKF2_GPS_CTRL` at `7`** (§10.4 warning).
+- [ ] `listener vehicle_optical_flow`: updating, with `distance_m` finite. Move the sensor by hand and confirm the `pixel_flow` sign changes with direction. Record its publish rate from `uorb top vehicle_optical_flow`, because step D's stream rate depends on it: `______ Hz`
+- [ ] QGC → MAVLink Inspector → `DISTANCE_SENSOR`: non-zero and updating (§10.5, FCC side).
+
+**D. FCC → MC relay instance (`:14556`, `ICD-MC-001.md` §3.3a)**
+
+None of the `MAV_n_*` parameters can set a fixed destination IP. On its own, a PX4 UDP instance only sends to the address it last received from, or broadcasts in non-onboard modes. The MC never sends on this channel, so PX4 would never learn where to send. The fix is `mavlink start -t <partner-ip>`, which fixes the destination at startup (`mavlink_main.cpp`, v1.17.0). That flag only exists on the command line, so it goes in the SD card's addon script, `/fs/microsd/etc/extras.txt`. `rcS` sources that file on every boot.
+
+A `custom` mode instance starts with no streams, which avoids onboard mode's long default stream list. The three streams the relay needs are then added explicitly:
+
+```
+# /fs/microsd/etc/extras.txt — MC<->FCC MAVLink exceptions (HID-MC-001 §10.6)
+# PER-DRONE FILE: -t must be this drone's MC_ETH_IP (default 192.168.10.11).
+
+# Optical-flow + baro relay, FCC -> MC only (ICD-MC-001 §3.3a).
+mavlink start -u 14556 -o 14556 -t 192.168.10.11 -m custom -r 10000
+mavlink stream -u 14556 -s OPTICAL_FLOW_RAD -r 20
+mavlink stream -u 14556 -s DISTANCE_SENSOR -r 10
+mavlink stream -u 14556 -s ALTITUDE -r 10
+```
+
+- [ ] `OPTICAL_FLOW_RAD` rate is at least the `vehicle_optical_flow` rate recorded in step C. The stream sends only the newest sample at each tick (`streams/OPTICAL_FLOW_RAD.hpp`, `update()`), so frames in between are skipped, not merged. Raise both `-r 20` and the instance's byte budget `-r 10000` if needed.
+- [ ] `ALTITUDE` is present. It is `gnss_sim_node`'s raw-baro vertical input (FT-006 finding, 2026-09-26). Without it, IGS-005 latches `INDOOR_GNSS_SIM_LOST` right after anchoring.
+- [ ] After a reboot, `mavlink status` lists the instance as UDP `14556`, remote port `14556`. `mavlink status streams` shows the three streams at the requested rates. PX4 caps the number of MAVLink instances (`MAVLINK_COMM_NUM_BUFFERS = 6` in the v1.17.0 source), shared with Channel A, TELEM/USB and the mission-protocol instance. If this one didn't start, check the boot log for an instance-limit error.
+
+**E. `HIL_GPS` receive instance (`:14557`, `ICD-MC-001.md` §3.3b)**
+
+This isn't part of H-Flow itself, but it lives in the same file and FT-006 needs it:
+
+```
+# HIL_GPS from gnss_sim_node, MC -> FCC only (ICD-MC-001 §3.3b).
+mavlink start -u 14557 -m custom -r 1000
+```
+
+- [ ] `mavlink status` lists UDP `14557`.
+- [ ] `MAV_USEHILGPS` and `MAV_SYS_ID` are set per FT-006's procedure (`test-results/FT-006-mc-igs-bench-integration.md` §3.1–3.2). Leave `MAV_USEHILGPS` at `0` until FT-006's negative-path check has run.
+
+**F. MC side**
+
+- [ ] `sudo tcpdump -ni eth0 udp port 14556 and src host $FCC_ETH_IP`: packets arriving, about 40/s at the rates above.
+- [ ] `ros2 topic hz /mc/sensors/optical_flow` and `ros2 topic hz /mc/sensors/baro_altitude`: both near their stream rates. `fcc_bridge_node` publishes each frame once (§3.3a publish rule).
+- [ ] `ros2 topic echo /mc/sensors/optical_flow`: `quality > 0`, `ground_distance` matches step B's tape measure, and `vx`/`vy` near 0 while stationary, changing sign with hand motion.
+- [ ] `tools/ft006_bench/ft006_bench.py watch` shows `baro=…m age<1s`.
+
+**G. Record**
+
+- [ ] Save a copy of this drone's `extras.txt` and `param show -c` dump with the IGS-002 or FT-006 test log. The SD card file is per-drone state that nothing in this repo deploys.
+
+Known gap, not covered here: the FCC-side instance for the mission-protocol channel (`:14555`, `ICD-MC-001.md` §3.1) isn't documented either. It probably belongs in the same `extras.txt`, but it's outside HIF-008.
 
 ---
 
@@ -928,7 +1010,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
 - [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.10.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.10.11/24`.
-- [ ] **HIF-008** Set the PX4 DroneCAN/EKF2 parameters listed in §10.4 (`UAVCAN_SUB_FLOW`, `UAVCAN_SUB_RNG`, `EKF2_OF_CTRL`, height/rate limits, `EKF2_OF_POS_X/Y/Z` offsets) via QGroundControl and reboot the FCC. Also start a second MAVLink instance on the FCC streaming `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` to the MC on `FCC_FLOW_PORT` (`:14556` by default, ICD §3.3a) — no MC-side config needed, `fcc_bridge` binds this port automatically.
+- [ ] **HIF-008** Set the PX4 DroneCAN/EKF2 parameters listed in §10.4 (`UAVCAN_SUB_FLOW`, `UAVCAN_SUB_RNG`, `EKF2_OF_CTRL`, height/rate limits, `EKF2_OF_POS_X/Y/Z` offsets) via QGroundControl and reboot the FCC. Also start a second MAVLink instance on the FCC streaming `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR`/`ALTITUDE` (raw baro for `gnss_sim_node`'s vertical channel, ~10 Hz — FT-006) to the MC on `FCC_FLOW_PORT` (`:14556` by default, ICD §3.3a) — no MC-side config needed, `fcc_bridge` binds this port automatically.
 
 ### 13.3 Pre-Flight Verification (each flight)
 

@@ -1164,7 +1164,7 @@ WantedBy=drone-mc.target
 ```
 
 Services in `rt.slice`: `fcc-bridge`, `swarm-coord`  
-Services in `be.slice`: `mavlink-router`, `zenoh-bridge`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-ingest`, `video-downlink`
+Services in `be.slice`: `mavlink-router`, `zenoh-bridge`, `gcs-comms`, `mission-exec`, `vision`, `health-monitor`, `video-ingest`, `video-downlink`, `indoor-nav` (start-on-demand, see §12.4)
 
 ### 12.4 Startup Ordering
 
@@ -1180,7 +1180,12 @@ drone-mc.target
   └── vision.service            (after fcc-bridge)
   └── video-ingest.service       (no dependencies — HIF-007 is a separate physical link)
   └── video-downlink.service     (no dependencies — independent of video-ingest, FR-086)
+
+on demand only (not WantedBy= drone-mc.target, never enabled):
+  indoor-nav.service            (requires fcc-bridge, after gcs-comms)
 ```
+
+`indoor-nav.service` (`gnss_sim_node`, `INDOOR-GNSS-SIMULATION-BACKLOG.md`) is deliberately **not** in the boot set. It injects a synthetic GPS fix into PX4 as `HIL_GPS` (ICD §3.3b), so it runs only when an operator starts it for an indoor/HITL session (`sudo systemctl start drone-mc-indoor-nav`). Its unit has no `[Install]` section, and `scripts/02-install-systemd-units.sh` installs but never enables it. `PartOf=drone-mc.target` still stops it with the target. It `Requires=` fcc-bridge because all of its inputs come from there (flow, baro, `vehicle_state`). gcs-comms is `After=` only, since the anchor command can also be published straight onto `/mc/gcs/command`. See `docs/DEPLOYMENT.md`.
 
 `mission_orchestrator_node` (§11.4, GCS-004) has its own systemd unit and container as of `GCS-006` (2026-08-26, `PROJECT-PLAN-5-MONTH.md` Phase 3) — `config/systemd/drone-mc-mission-orchestrator.service` runs `ghcr.io/drone-mc/mission-orchestrator`, separate from `gcs-comms.service` per GCS-005's (2026-08-06) explicit exclusion (§11.1, §12.1). `mavlink-router-channel-c.conf` (§12.5) now has a corresponding running `mavlink-routerd` process too — `docker/mavlink-router/entrypoint.sh` launches it as a third independent process alongside Channel A/B's own two, same isolation pattern. The plan library at `/var/drone-mc/mission_plans/` is bind-mounted read-write from the host for persistence across container restarts. See `GCS-006`'s own ticket entry for the full deliverable list.
 

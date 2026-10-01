@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -419,6 +420,11 @@ TEST_F(MissionManagerNodeTest, ArmingToTakeoff_GuardTrueSendsTakeoffCommand)
       std::chrono::seconds(2)));
   ASSERT_FALSE(send_commands_.empty());
   EXPECT_EQ(send_commands_.back()->cmd, kMavCmdNavTakeoff);
+  // Regression: finite lat/lon (the old 0, 0) sends PX4 to Null Island
+  // instead of climbing in place.
+  EXPECT_TRUE(std::isnan(send_commands_.back()->params[4]));
+  EXPECT_TRUE(std::isnan(send_commands_.back()->params[5]));
+  EXPECT_FLOAT_EQ(send_commands_.back()->params[6], 10.0F);
 }
 
 // --- TAKEOFF -> INGRESS (mission-channel, ack-blocking) ---

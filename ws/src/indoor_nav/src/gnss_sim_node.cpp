@@ -110,6 +110,7 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
 : Node("gnss_sim_node", options)
 {
   max_flow_dt_s_ = declare_parameter("max_flow_dt_s", max_flow_dt_s_);
+  baro_vz_filter_tau_s_ = declare_parameter("baro_vz_filter_tau_s", baro_vz_filter_tau_s_);
   eph_at_anchor_m_ = declare_parameter("eph_at_anchor_m", eph_at_anchor_m_);
   epv_at_anchor_m_ = declare_parameter("epv_at_anchor_m", epv_at_anchor_m_);
   eph_growth_rate_m_per_s_ =
@@ -140,6 +141,9 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
   sub_vehicle_state_ = create_subscription<mc_msgs::msg::VehicleState>(
     "/mc/fcc/vehicle_state", rclcpp::QoS(10),
     [this](mc_msgs::msg::VehicleState::SharedPtr msg) {on_vehicle_state(*msg);});
+  sub_baro_altitude_ = create_subscription<mc_msgs::msg::BaroAltitude>(
+    "/mc/sensors/baro_altitude", rclcpp::QoS(10),
+    [this](mc_msgs::msg::BaroAltitude::SharedPtr msg) {on_baro_altitude(*msg);});
   sub_optical_flow_ = create_subscription<mc_msgs::msg::OpticalFlow>(
     "/mc/sensors/optical_flow", rclcpp::QoS(10),
     [this](mc_msgs::msg::OpticalFlow::SharedPtr msg) {on_optical_flow(*msg);});
@@ -212,25 +216,46 @@ void GnssSimNode::on_vehicle_state(const mc_msgs::msg::VehicleState & msg)
 
   attitude_q_ = msg.q;
   has_attitude_ = true;
-  last_alt_msl_ = msg.alt_msl;
+  // Deliberately not msg.alt_msl -- see this class's own doc comment
+  // (FT-006 correction): the vertical channel is on_baro_altitude()'s.
+  last_vehicle_state_stamp_ = stamp;
 
-  if (!alt_msl_anchor_.has_value()) {
-    alt_msl_anchor_ = msg.alt_msl;
+  publish_estimate(stamp);
+}
+
+void GnssSimNode::on_baro_altitude(const mc_msgs::msg::BaroAltitude & msg)
+{
+  const rclcpp::Time stamp(msg.header.stamp);
+  last_baro_alt_ = msg.alt_m;
+
+  if (!baro_alt_anchor_.has_value()) {
+    baro_alt_anchor_ = msg.alt_m;
     z_ = 0.0F;
-    last_vehicle_state_stamp_ = stamp;
+    last_baro_stamp_ = stamp;
     publish_estimate(stamp);
     return;
   }
 
-  // NED down: gaining altitude (alt_msl increasing) means z should
-  // decrease, matching VehicleState.z/alt_msl's own documented frames.
-  const float new_z = -(msg.alt_msl - *alt_msl_anchor_);
-  const double dt = (stamp - *last_vehicle_state_stamp_).seconds();
+  // NED down: gaining altitude (baro altitude increasing) means z should
+  // decrease, matching VehicleState.z's own documented frame.
+  const float new_z = -(msg.alt_m - *baro_alt_anchor_);
+  const double dt = (stamp - *last_baro_stamp_).seconds();
   if (dt > 0.0) {
-    vz_ = static_cast<float>((new_z - z_) / dt);
+    // FT-006: the raw 10 Hz baro difference turns ~0.1 m of sample jitter
+    // into ~1 m/s of vertical velocity, which HIL_GPS carries as vd -- on the
+    // bench that tripped PX4's "vertical velocity unstable" preflight check
+    // and blocked arming. Low-pass it (dt-aware first order, so irregular
+    // sample spacing is handled); z_ itself stays the unfiltered reading.
+    const float raw_vz = static_cast<float>((new_z - z_) / dt);
+    if (baro_vz_filter_tau_s_ > 0.0) {
+      const float alpha = static_cast<float>(1.0 - std::exp(-dt / baro_vz_filter_tau_s_));
+      vz_ += alpha * (raw_vz - vz_);
+    } else {
+      vz_ = raw_vz;
+    }
   }
   z_ = new_z;
-  last_vehicle_state_stamp_ = stamp;
+  last_baro_stamp_ = stamp;
 
   publish_estimate(stamp);
 }
@@ -315,8 +340,8 @@ void GnssSimNode::reanchor(
   x_ = 0.0F;
   y_ = 0.0F;
   z_ = 0.0F;
-  if (last_alt_msl_.has_value()) {
-    alt_msl_anchor_ = *last_alt_msl_;
+  if (last_baro_alt_.has_value()) {
+    baro_alt_anchor_ = *last_baro_alt_;
   }
 
   const bool was_active = active_;
@@ -417,6 +442,10 @@ void GnssSimNode::check_self_supervision(const rclcpp::Time & stamp)
     (stamp - *last_vehicle_state_stamp_).seconds() > input_staleness_timeout_s_;
   const bool flow_stale = !last_flow_stamp_.has_value() ||
     (stamp - *last_flow_stamp_).seconds() > input_staleness_timeout_s_;
+  // A frozen vertical input would hold HIL_GPS altitude constant while the
+  // FCC's own baro keeps moving -- stop streaming rather than inject that.
+  const bool baro_stale = !last_baro_stamp_.has_value() ||
+    (stamp - *last_baro_stamp_).seconds() > input_staleness_timeout_s_;
 
   const mc_msgs::msg::IndoorGnssSimStatus status = gnss_sim_status();
   const bool drift_exceeded = status.eph > static_cast<float>(max_eph_before_fault_m_);
@@ -424,7 +453,9 @@ void GnssSimNode::check_self_supervision(const rclcpp::Time & stamp)
   const float deviation_m = compute_waypoint_deviation();
   const bool deviation_exceeded = deviation_m > static_cast<float>(max_waypoint_deviation_m_);
 
-  if (!(vehicle_state_stale || flow_stale || drift_exceeded || deviation_exceeded)) {
+  if (!(vehicle_state_stale || flow_stale || baro_stale || drift_exceeded ||
+    deviation_exceeded))
+  {
     return;
   }
 
@@ -436,6 +467,9 @@ void GnssSimNode::check_self_supervision(const rclcpp::Time & stamp)
       std::to_string(input_staleness_timeout_s_) + " s)";
   } else if (flow_stale) {
     reason = "/mc/sensors/optical_flow input stale (no sample within " +
+      std::to_string(input_staleness_timeout_s_) + " s)";
+  } else if (baro_stale) {
+    reason = "/mc/sensors/baro_altitude input stale (no sample within " +
       std::to_string(input_staleness_timeout_s_) + " s)";
   } else if (drift_exceeded) {
     reason = "eph (" + std::to_string(status.eph) + " m) exceeded max_eph_before_fault_m (" +

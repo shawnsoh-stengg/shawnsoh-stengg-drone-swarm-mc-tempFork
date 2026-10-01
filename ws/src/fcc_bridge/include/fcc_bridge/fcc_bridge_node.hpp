@@ -11,6 +11,7 @@
 #include "mc_msgs/msg/fcc_mission_item.hpp"
 #include "mc_msgs/msg/fcc_offboard_setpoint.hpp"
 #include "mc_msgs/msg/fault_event.hpp"
+#include "mc_msgs/msg/baro_altitude.hpp"
 #include "mc_msgs/msg/optical_flow.hpp"
 #include "mc_msgs/msg/vehicle_state.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -66,11 +67,17 @@ private:
   rclcpp::Publisher<mc_msgs::msg::VehicleState>::SharedPtr pub_vehicle_state_;
   rclcpp::Publisher<mc_msgs::msg::FaultEvent>::SharedPtr pub_fault_;
   rclcpp::Publisher<mc_msgs::msg::FccMissionAck>::SharedPtr pub_mission_ack_;
-  // HIF-008 relay (ICD §3.3a) — published only while the backend reports a
-  // valid sample (OpticalFlowSample::valid); nothing is published before
-  // the first frame arrives, rather than spamming an all-zero topic that
-  // would read as a real (stationary) velocity reading to gnss_sim_node.
+  // HIF-008 relay (ICD §3.3a) — published once per new frame (seq), and
+  // only after the first valid one: nothing before it, rather than an
+  // all-zero topic that would read as a real (stationary) velocity reading
+  // to gnss_sim_node; and nothing after the stream stops, so the stall
+  // reaches gnss_sim_node's IGS-005 staleness watchdog instead of being
+  // masked by the last sample repeating every tick.
   rclcpp::Publisher<mc_msgs::msg::OpticalFlow>::SharedPtr pub_optical_flow_;
+  uint32_t last_flow_seq_{0};
+  // Raw baro altitude (ALTITUDE, same channel) — same once-per-frame rule.
+  rclcpp::Publisher<mc_msgs::msg::BaroAltitude>::SharedPtr pub_baro_altitude_;
+  uint32_t last_baro_seq_{0};
   rclcpp::CallbackGroup::SharedPtr timer_cb_group_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 

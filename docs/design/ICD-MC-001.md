@@ -118,10 +118,10 @@ Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side d
 
 | Parameter | Value |
 |---|---|
-| Protocol | MAVLink 2 over UDP (`OPTICAL_FLOW_RAD`, `DISTANCE_SENSOR`) |
+| Protocol | MAVLink 2 over UDP (`OPTICAL_FLOW_RAD`, `DISTANCE_SENSOR`, `ALTITUDE`) |
 | Address | `FCC_ETH_IP:14556` (FCC, default `192.168.10.31`) |
 | Carried over | The existing HIF-002 Ethernet link (same as the mission-protocol sub-channel above; no new hardware) |
-| Purpose | Relays HIF-008 (Holybro H-Flow) data to `get_optical_flow()` / `/mc/sensors/optical_flow` — see §3.3a |
+| Purpose | Relays HIF-008 (Holybro H-Flow) data to `get_optical_flow()` / `/mc/sensors/optical_flow`, and raw baro altitude to `get_baro_altitude()` / `/mc/sensors/baro_altitude` — see §3.3a |
 | Direction | FCC → MC only (receive-only from the MC's perspective) |
 
 H-Flow is a DroneCAN peripheral on the Pixhawk's CAN1 port (HID-MC-001 §10) — PX4's `uavcan_flow` driver ingests it into the FCC-internal `sensor_optical_flow`/`vehicle_optical_flow`/`vehicle_optical_flow_vel` uORB topics, none of which stock PX4 v1.17 bridges to the companion computer over uXRCE-DDS (confirmed against the real v1.17.0 tag's `src/modules/uxrce_dds_client/dds_topics.yaml` — `sensor_optical_flow` appears only as `/fmu/in/*`, and `distance_sensor` does not appear at all; both findings re-confirmed 2026-09-11 against v1.17.0, originally checked against v1.14.4). This sub-channel is the chosen workaround: a second dedicated MAVLink instance on the FCC, configured (not compiled) to stream its existing `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR` MAVLink implementations to the MC — the same class of fix as the mission-protocol sub-channel above.
@@ -337,6 +337,10 @@ Received by: `fcc_bridge_node`'s `FccBackend` implementation (`XrceDdsBackend`'s
 
 **`DISTANCE_SENSOR` fields used:** `current_distance` (`uint16`, cm) — a fallback height reference when `OPTICAL_FLOW_RAD.distance` is `-1`.
 
+**`ALTITUDE` fields used:** `altitude_monotonic` (`float32`, m) only — relayed as `/mc/sensors/baro_altitude` (`mc_msgs/BaroAltitude`), `gnss_sim_node`'s vertical input. PX4 fills this field straight from `vehicle_air_data.baro_alt_meter` (`src/modules/mavlink/streams/ALTITUDE.hpp`, confirmed against the real v1.17.0 tag): the barometer alone, not EKF2. `NaN` until air data exists; such frames are dropped. The other `ALTITUDE` fields (`altitude_amsl`, `altitude_local`, …) are EKF2-derived and deliberately unused. **Why (FT-006, 2026-09-26):** `gnss_sim_node` previously took its vertical channel from `VehicleState.alt_msl`, which is EKF2 output. Once PX4 accepts the node's own `HIL_GPS`, EKF2 fuses that altitude back into `alt_msl`, closing a feedback loop that drove PX4's altitude estimate ~42 km off on the orin-nx bench. Stock v1.17 bridges no baro topic over uXRCE-DDS, so this channel is the config-only way to get raw baro to the MC. FCC-side: add `ALTITUDE` to the flow instance's stream set (HID-MC-001 §13.2 checklist) — ~10 Hz is enough.
+
+**Publish rule:** `fcc_bridge_node` publishes each decoded frame once (per-sample sequence counter), at most once per publish tick, on both `/mc/sensors/optical_flow` and `/mc/sensors/baro_altitude`. Before FT-006 the last flow sample was re-published every tick forever once one had arrived, which hid a stalled stream from `gnss_sim_node`'s IGS-005 staleness watchdog.
+
 **Velocity derivation** (`OpticalFlowRelay::handle_optical_flow_rad()`, `fcc_bridge/optical_flow_relay.cpp`) — replicated exactly from PX4's own `VehicleOpticalFlow.cpp` (confirmed against the real v1.14.4 tag originally, re-confirmed byte-for-byte against v1.17.0, the same formula that firmware uses internally to derive `vehicle_optical_flow_vel` for logging):
 
 ```
@@ -389,7 +393,7 @@ So this channel relies on the second arm, not full HIL mode (which would disable
 | `lat`, `lon` | `int32` | 1e7 deg | IGS-003's `wgs84_fix()` |
 | `alt` | `int32` | mm MSL | IGS-003's `wgs84_fix().alt_msl` |
 | `eph`, `epv` | `uint16` | cm | IGS-003's growing uncertainty model (`IndoorGnssSimStatus.eph`/`.epv`) — never a fixed value |
-| `vel`, `vn`, `ve`, `vd` | `uint16`/`int16` | cm/s | `gnss_sim_node`'s local NED velocity estimate (IGS-001) |
+| `vel`, `vn`, `ve`, `vd` | `uint16`/`int16` | cm/s | `gnss_sim_node`'s local NED velocity estimate (IGS-001). `vd` is the baro-derived rate, first-order low-passed (`baro_vz_filter_tau_s`, default 0.5 s). The raw 10 Hz difference failed PX4's "vertical velocity unstable" preflight check on the FT-006 bench, and PX4 hardcodes `vel_ned_valid = true` for `HIL_GPS`, so the noise can't be flagged as unknown instead |
 | `cog` | `uint16` | 1e2 deg | Derived from `vn`/`ve` |
 | `satellites_visible` | `uint8` | — | Degrades linearly from 10 to 4 as `eph` grows from its at-anchor floor toward PX4's own `EKF2_REQ_EPH` default (3.0 m, confirmed against v1.17.0's `src/modules/ekf2/params_gnss.yaml` — at v1.14.4 the same default lived in `src/modules/ekf2/ekf2_params.c`, before PX4 migrated EKF2 params to YAML) — this ticket's own AC: never a fixed "great accuracy" placeholder. `EKF2_REQ_NSATS` defaults to 6 (same file, unchanged value), so this also ties satellite-count and accuracy-gate rejection to the same honest timescale |
 | `id`, `yaw` | `uint8`, `uint16` | — | `0` (single GPS instance; heading unknown) |
@@ -419,7 +423,8 @@ Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_m
 |---|---|---|---|
 | `MAV_CMD_COMPONENT_ARM_DISARM` | 400 | Arm / Disarm | param1: 1=arm, 0=disarm |
 | `MAV_CMD_DO_SET_MODE` | 176 | Set flight mode | param1: MAV_MODE_FLAG; param2: PX4 custom mode |
-| `MAV_CMD_NAV_TAKEOFF` | 22 | Takeoff | param7: altitude (m MSL) |
+| `MAV_CMD_NAV_TAKEOFF` | 22 | Takeoff | param4: yaw (NaN = current); param5/6: lat/lon — **must be NaN** to climb in place (PX4 v1.17 `navigator_main.cpp` treats any finite pair, including `0, 0`, as an explicit target — Null Island); param7: altitude (m MSL) |
+| `MAV_CMD_NAV_LAND` | 21 | Land | param5/6: NaN (current position; PX4 v1.17 ignores them for LAND, but `0, 0` is never "unset") |
 | `MAV_CMD_NAV_RETURN_TO_LAUNCH` | 20 | RTL | — |
 | `MAV_CMD_NAV_LOITER_UNLIM` | 17 | HOLD (loiter) | — |
 
@@ -466,6 +471,7 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | `/mc/fcc/send_command` | MC → FCC | uXRCE-DDS `vehicle_command` |
 | `/mc/fcc/mission_ack` | FCC → MC | `MISSION_ACK` result from the mission protocol handshake, one per upload/item-update |
 | `/mc/sensors/optical_flow` | FCC → MC | MAVLink optical-flow relay, `OPTICAL_FLOW_RAD` + `DISTANCE_SENSOR` (§3.3a) — HIF-008/IGS-002 |
+| `/mc/sensors/baro_altitude` | FCC → MC | Same channel, `ALTITUDE.altitude_monotonic` — raw baro, not EKF2 (§3.3a) — FT-006 finding |
 | `/mc/fcc/visual_odometry` | MC → FCC | uXRCE-DDS `vehicle_visual_odometry` |
 | `/mc/fcc/offboard_setpoint` | MC → FCC | uXRCE-DDS `offboard_control_mode` + `trajectory_setpoint`; published only while OFFBOARD is confirmed active (FR-027/028) |
 

@@ -21,6 +21,7 @@
 
 #include <px4_msgs/msg/battery_status.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
+#include <px4_msgs/msg/sensor_gps.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
@@ -94,6 +95,8 @@ protected:
       "/fmu/out/vehicle_status_v1", px4_qos());
     pub_battery_ = node_->create_publisher<px4_msgs::msg::BatteryStatus>(
       "/fmu/out/battery_status_v1", px4_qos());
+    pub_gps_ = node_->create_publisher<px4_msgs::msg::SensorGps>(
+      "/fmu/out/vehicle_gps_position", px4_qos());
 
     sub_vehicle_command_ = node_->create_subscription<px4_msgs::msg::VehicleCommand>(
       "/fmu/in/vehicle_command", px4_qos(),
@@ -122,6 +125,7 @@ protected:
   rclcpp::Publisher<px4_msgs::msg::VehicleGlobalPosition>::SharedPtr pub_global_pos_;
   rclcpp::Publisher<px4_msgs::msg::VehicleStatus>::SharedPtr pub_status_;
   rclcpp::Publisher<px4_msgs::msg::BatteryStatus>::SharedPtr pub_battery_;
+  rclcpp::Publisher<px4_msgs::msg::SensorGps>::SharedPtr pub_gps_;
   rclcpp::Subscription<px4_msgs::msg::VehicleCommand>::SharedPtr sub_vehicle_command_;
   px4_msgs::msg::VehicleCommand::SharedPtr last_command_;
   rclcpp::Subscription<px4_msgs::msg::OffboardControlMode>::SharedPtr sub_offboard_control_mode_;
@@ -169,6 +173,73 @@ TEST_F(XrceDdsBackendTest, AggregatesGlobalPositionIntoVehicleState)
   EXPECT_DOUBLE_EQ(state.lat, 1.3521);
   EXPECT_DOUBLE_EQ(state.lon, 103.8198);
   EXPECT_FLOAT_EQ(state.alt_msl, 55.0F);
+}
+
+// device_id packing per PX4 v1.17.0's device::Device::DeviceId: bus_type
+// bits 0-2, bus 3-7, address (MAVLink sysid for HIL_GPS) 8-15, devtype 16-23.
+constexpr uint32_t kRealUbloxDeviceId = (0xA5U << 16) | (1U << 3) | 5U;  // UBX, SERIAL bus 1
+constexpr uint32_t kHilGpsDeviceId = (0xAFU << 16) | (4U << 8) | (1U << 3) | 6U;  // sysid 4
+
+TEST_F(XrceDdsBackendTest, AggregatesRealGpsFixIntoVehicleState)
+{
+  px4_msgs::msg::SensorGps msg{};
+  msg.device_id = kRealUbloxDeviceId;
+  msg.fix_type = 3;
+  msg.hdop = 0.9F;
+  msg.vdop = 1.4F;
+
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_gps_->publish(msg); return backend_->get_vehicle_state().fix_type == 3;},
+      std::chrono::seconds(3)));
+
+  const auto state = backend_->get_vehicle_state();
+  EXPECT_FLOAT_EQ(state.hdop, 0.9F);
+  EXPECT_FLOAT_EQ(state.vdop, 1.4F);
+  EXPECT_TRUE(state.gnss_ok);
+}
+
+TEST_F(XrceDdsBackendTest, RealGpsFixAboveHdopThresholdIsNotGnssOk)
+{
+  px4_msgs::msg::SensorGps msg{};
+  msg.device_id = kRealUbloxDeviceId;
+  msg.fix_type = 3;
+  msg.hdop = 2.5F;
+
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_gps_->publish(msg); return backend_->get_vehicle_state().fix_type == 3;},
+      std::chrono::seconds(3)));
+
+  EXPECT_FALSE(backend_->get_vehicle_state().gnss_ok);
+}
+
+// FT-006 finding: PX4 fills hdop=0 on a HIL_GPS-sourced fix, so counting it
+// would report gnss_ok=true and trip gnss_sim_node's real-GPS lockout on
+// its own injected stream.
+TEST_F(XrceDdsBackendTest, HilGpsSourcedFixIsReportedAsNoRealFix)
+{
+  px4_msgs::msg::SensorGps real{};
+  real.device_id = kRealUbloxDeviceId;
+  real.fix_type = 3;
+  real.hdop = 0.9F;
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_gps_->publish(real); return backend_->get_vehicle_state().gnss_ok;},
+      std::chrono::seconds(3)));
+
+  px4_msgs::msg::SensorGps hil{};
+  hil.device_id = kHilGpsDeviceId;
+  hil.fix_type = 3;
+  hil.hdop = 0.0F;
+  ASSERT_TRUE(
+    spin_until(
+      node_, [&] {pub_gps_->publish(hil); return !backend_->get_vehicle_state().gnss_ok;},
+      std::chrono::seconds(3)));
+
+  const auto state = backend_->get_vehicle_state();
+  EXPECT_EQ(state.fix_type, 0);
+  EXPECT_FLOAT_EQ(state.hdop, 0.0F);
 }
 
 TEST_F(XrceDdsBackendTest, AggregatesArmingAndNavStateFromVehicleStatus)
