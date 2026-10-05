@@ -18,6 +18,15 @@ MC_VERSION=dev
 MC_ETH_MAC=4c:bb:47:c4:2d:6e
 MC_ETH_IP=192.168.10.11
 
+# Optional eth0 default route + DNS, for bench units that need internet
+# (apt/git/docker builds). Empty = no default route and no resolver,
+# which is the flight default: the MC only talks to 192.168.10.x peers.
+# MC_ETH_GATEWAY is one IPv4 address (bench: 192.168.10.1, the MANET AU
+# per HID-MC-001 §6.2). MC_ETH_DNS is a comma-separated list of IPv4
+# addresses, e.g. 8.8.8.8,1.1.1.1.
+MC_ETH_GATEWAY=
+MC_ETH_DNS=
+
 # --- FCC transport (SDD §3, ICD §9.4) ---
 # serial: ttyTHS1 via uXRCE-DDS (production default, HID §HIF-001)
 # ethernet: UDP to FCC_ETH_IP (fallback, HID §HIF-002)

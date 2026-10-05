@@ -85,8 +85,8 @@ fi
 # FCC_ETH_IP and drop both retired variables — before the backfill below,
 # so it can't re-add them. Refuses to guess if the two disagree otherwise.
 ENV_FILE=/etc/drone-mc/environment
-old_fcc_eth="$(grep -E '^FCC_ETH_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2-)"
-old_fcc_gcs="$(grep -E '^FCC_GCS_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2-)"
+old_fcc_eth="$(grep -E '^FCC_ETH_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
+old_fcc_gcs="$(grep -E '^FCC_GCS_IP=' "${ENV_FILE}" | tail -n1 | cut -d= -f2- || true)"
 if [[ -n "${old_fcc_gcs}" ]]; then
     if [[ -z "${old_fcc_eth}" || "${old_fcc_eth}" == 192.168.12.* ]]; then
         sed -i '/^FCC_ETH_IP=/d' "${ENV_FILE}"
@@ -173,14 +173,102 @@ if [[ "${ALLOW_NON_JETSON:-0}" -ne 1 ]]; then
              "dev-workstation dry run." >&2
         exit 1
     fi
+
+    # Other network config claiming the same NIC: netplan apply only adds
+    # 01-drone-mc.yaml's address, it never removes ones another source
+    # (a hand-made NetworkManager profile, a second netplan file) puts on
+    # the same interface — observed on a bench unit as eth0 carrying a
+    # stale 192.168.10.11 + 192.168.12.2 pair from an NM profile alongside
+    # MC_ETH_IP, failing 01b's single-address check. Warn rather than
+    # delete: the other config may be what this SSH session rides on.
+    mc_iface="${iface}"
+    claimants=()
+    for f in /etc/netplan/*.yaml; do
+        [[ -f "${f}" && "${f}" != /etc/netplan/01-drone-mc.yaml ]] || continue
+        if grep -qiF "${MC_ETH_MAC}" "${f}" ||
+           grep -qE "^[[:space:]]*(eth0|${mc_iface}):|name:[[:space:]]*\"?(eth0|${mc_iface})\"?[[:space:]]*$" "${f}"; then
+            claimants+=("netplan file ${f}")
+        fi
+    done
+    if command -v nmcli &>/dev/null && nmcli -t general status &>/dev/null; then
+        while IFS=: read -r nm_name nm_device nm_file; do
+            # netplan's own NM rendering of 01-drone-mc.yaml, not a rival.
+            [[ "${nm_file}" == */netplan-* ]] && continue
+            if [[ "${nm_device}" == "${mc_iface}" || "${nm_device}" == eth0 ]] ||
+               { [[ -f "${nm_file}" ]] &&
+                 grep -qiE "^(mac-address=${MC_ETH_MAC}|interface-name=(eth0|${mc_iface}))$" "${nm_file}"; }; then
+                claimants+=("NetworkManager profile '${nm_name}' (${nm_file:-in-memory})")
+            fi
+        done < <(nmcli -t -f NAME,DEVICE,FILENAME connection show 2>/dev/null || true)
+    fi
+    if [[ "${#claimants[@]}" -gt 0 ]]; then
+        echo "WARNING: other network config also claims ${mc_iface} (MC_ETH_MAC=${MC_ETH_MAC})" \
+             "— its addresses will sit alongside MC_ETH_IP=${MC_ETH_IP} and fail" \
+             "01b-smoke-test-os.sh's single-address check:" >&2
+        for c in "${claimants[@]}"; do echo "    ${c}" >&2; done
+        echo "    Remove it (\`nmcli connection delete <name>\` / delete the extra netplan" \
+             "file), then \`ip addr flush dev ${mc_iface}\` + re-run, or reboot. Do this from" \
+             "the console if this session is on ${mc_iface}." >&2
+    fi
 fi
+
+# Optional default route + DNS (bench internet). Both empty is the flight
+# default: no route out, no resolver. envsubst has no conditionals, so
+# the routes block is built here and substituted whole (or as nothing).
+ipv4_re='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+MC_ETH_GATEWAY="${MC_ETH_GATEWAY:-}"
+MC_ETH_DNS="${MC_ETH_DNS:-}"
+if [[ -n "${MC_ETH_GATEWAY}" && ! "${MC_ETH_GATEWAY}" =~ ${ipv4_re} ]]; then
+    echo "ERROR: MC_ETH_GATEWAY=${MC_ETH_GATEWAY} in /etc/drone-mc/environment is not" \
+         "an IPv4 address. Fix or empty it and re-run." >&2
+    exit 1
+fi
+MC_ETH_DNS_LIST=""
+if [[ -n "${MC_ETH_DNS}" ]]; then
+    IFS=',' read -ra dns_servers <<<"${MC_ETH_DNS// /}"
+    for dns in "${dns_servers[@]}"; do
+        [[ -z "${dns}" ]] && continue
+        if [[ ! "${dns}" =~ ${ipv4_re} ]]; then
+            echo "ERROR: MC_ETH_DNS entry '${dns}' in /etc/drone-mc/environment is not" \
+                 "an IPv4 address (expected a comma-separated list). Fix and re-run." >&2
+            exit 1
+        fi
+        MC_ETH_DNS_LIST+="${MC_ETH_DNS_LIST:+, }${dns}"
+    done
+fi
+MC_ETH_ROUTES_YAML=""
+if [[ -n "${MC_ETH_GATEWAY}" ]]; then
+    MC_ETH_ROUTES_YAML="      routes:
+        - to: default
+          via: ${MC_ETH_GATEWAY}"
+    echo "    eth0 default route via ${MC_ETH_GATEWAY}, DNS [${MC_ETH_DNS_LIST:-none}]"
+elif [[ -n "${MC_ETH_DNS_LIST}" ]]; then
+    echo "    NOTE: MC_ETH_DNS is set but MC_ETH_GATEWAY is empty — names will only" \
+         "resolve if the DNS server is on 192.168.10.x itself."
+fi
+export MC_ETH_DNS_LIST MC_ETH_ROUTES_YAML
 
 RENDERED_NETPLAN="$(mktemp)"
 trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
-envsubst '$MC_ETH_MAC $MC_ETH_IP' \
+envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_DNS_LIST $MC_ETH_ROUTES_YAML' \
     < "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" > "${RENDERED_NETPLAN}"
 install -m 600 "${RENDERED_NETPLAN}" /etc/netplan/01-drone-mc.yaml
 netplan apply
+
+# Even with no rival config left, netplan apply doesn't drop addresses a
+# since-deleted profile already put on the live interface — name any
+# that remain so the 01b failure isn't a surprise.
+if [[ -n "${mc_iface:-}" ]]; then
+    live_iface=eth0
+    ip link show eth0 &>/dev/null || live_iface="${mc_iface}"
+    stale_addrs="$(ip -4 -o addr show dev "${live_iface}" 2>/dev/null |
+        awk '{print $4}' | grep -vxF "${MC_ETH_IP}/24" || true)"
+    if [[ -n "${stale_addrs}" ]]; then
+        echo "WARNING: ${live_iface} still carries address(es) other than MC_ETH_IP=${MC_ETH_IP}:" \
+             "${stale_addrs//$'\n'/ } — reboot or \`ip addr flush dev ${live_iface}\` +" \
+             "\`netplan apply\` to clear them." >&2
+    fi
+fi
 
 echo "==> Installing /etc/udev/rules.d/99-drone-mc.rules (HIF-001 ttyTHS1 permissions)"
 install -m 644 "${REPO_ROOT}/config/udev/99-drone-mc.rules" /etc/udev/rules.d/99-drone-mc.rules

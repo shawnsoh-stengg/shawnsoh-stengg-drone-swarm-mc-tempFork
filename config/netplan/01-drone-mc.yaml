@@ -30,6 +30,12 @@
 # the single 192.168.10.x subnet shared by the GCS, peer MCs (HIF-004) and
 # this drone's own Pixhawk (HIF-002, FCC_ETH_IP). There is no separate
 # MC<->FCC subnet: the Pixhawk's NuttX stack has only one IPv4 address.
+#
+# The MC_ETH_DNS_LIST/MC_ETH_ROUTES_YAML placeholders below are not raw
+# environment values.
+# 01-install-os.sh derives them from the optional MC_ETH_DNS/MC_ETH_GATEWAY:
+# both empty (the flight default) renders `addresses: []` and no routes,
+# i.e. no default route and no resolver.
 network:
   version: 2
   ethernets:
@@ -40,4 +46,5 @@ network:
       addresses:
         - ${MC_ETH_IP}/24
       nameservers:
-        addresses: []
+        addresses: [${MC_ETH_DNS_LIST}]
+${MC_ETH_ROUTES_YAML}
