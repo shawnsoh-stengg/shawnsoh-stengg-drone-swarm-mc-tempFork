@@ -44,7 +44,7 @@ skinparam arrow {
 rectangle "LiPo Battery\n4S–6S  14.8–25.2 V\nXT60 female" as BAT #FFD4A8
 rectangle "IMX219 Camera\n22-pin FPC cable" as CAM #D8C0F0
 rectangle "MANET Radio\n(Air Unit)\nRJ45 Cat5e" as AU #B8DCA8
-rectangle "Gimbal IP Camera\n192.168.10.200\nRJ45 via JST-GH pigtail" as GIMCAM #EDE0F8
+rectangle "Gimbal IP Camera\n192.168.100.200\nRJ45 via JST-GH pigtail" as GIMCAM #EDE0F8
 rectangle "USB-C Debug Host\n(laptop / bench PC)" as USB #D8D8F8
 rectangle "UART Console\n(FTDI USB-UART)\nJST-GH 6-pin" as CONS #D8D8F8
 
@@ -110,8 +110,8 @@ PWR    -[#D08000]--> J2 : 3.3V+1.8V → camera
 UART_BRIDGE -[#3D5A80,thickness=2]--> JET_CORE  : ttyTHS1\n921600 bps
 UART_BRIDGE -[#3D5A80,thickness=2]--> PX4_CORE  : UART B
 
-SW          -[#208040]--> JET_CORE  : eth0\n192.168.10.11
-SW          -[#208040]--> PX4_CORE  : Ethernet\n192.168.10.31
+SW          -[#208040]--> JET_CORE  : eth0\n192.168.100.11
+SW          -[#208040]--> PX4_CORE  : Ethernet\n192.168.100.31
 SW          -[#208040]--> J3         : external port
 SW          -[#208040]--> J15        : ETH port 1\n(gimbal camera)
 

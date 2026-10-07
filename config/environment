@@ -13,15 +13,15 @@ MC_VERSION=dev
 # by scripts/01-install-os.sh — edit these two values (and re-run that
 # script) rather than hand-editing the rendered /etc/netplan/01-drone-mc.yaml
 # when provisioning a new unit. eth0 has this single address: the MANET/GCS
-# peers and this drone's own Pixhawk all share the 192.168.10.x subnet
+# peers and this drone's own Pixhawk all share the 192.168.100.x subnet
 # (HID-MC-001 §4.2).
 MC_ETH_MAC=4c:bb:47:c4:2d:6e
-MC_ETH_IP=192.168.10.11
+MC_ETH_IP=192.168.100.11
 
 # Optional eth0 default route + DNS, for bench units that need internet
 # (apt/git/docker builds). Empty = no default route and no resolver,
-# which is the flight default: the MC only talks to 192.168.10.x peers.
-# MC_ETH_GATEWAY is one IPv4 address (bench: 192.168.10.1, the MANET AU
+# which is the flight default: the MC only talks to 192.168.100.x peers.
+# MC_ETH_GATEWAY is one IPv4 address (bench: 192.168.100.1, the MANET AU
 # per HID-MC-001 §6.2). MC_ETH_DNS is a comma-separated list of IPv4
 # addresses, e.g. 8.8.8.8,1.1.1.1.
 MC_ETH_GATEWAY=
@@ -44,7 +44,7 @@ FCC_ETH_PORT=8888
 # 2026-09-25 the FCC was documented as dual-homed on a separate 192.168.12.x
 # internal subnet plus a FCC_GCS_IP on 192.168.10.x — never true of real
 # hardware; the orin-nx bench Pixhawk only answered on 192.168.10.19.)
-FCC_ETH_IP=192.168.10.31
+FCC_ETH_IP=192.168.100.31
 
 # Mission protocol (MAVLink to FCC_ETH_IP, always on — independent of
 # FCC_TRANSPORT above; stock PX4 has no DDS-writable mission topic, IR-007)
@@ -57,7 +57,7 @@ FCC_MISSION_PORT=14555
 FCC_FLOW_PORT=14556
 
 # --- GCS (ICD §IFD-002) ---
-GCS_IP=192.168.10.10
+GCS_IP=192.168.100.10
 GCS_MAV_PORT_RECV=14551
 GCS_MAV_PORT_SEND=14552
 # gcs_mavlink_node's own loopback socket — mavlink-router-channel-b.conf's

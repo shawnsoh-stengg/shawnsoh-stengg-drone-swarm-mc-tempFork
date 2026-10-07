@@ -109,6 +109,23 @@ if grep -q '^MC_ETH_INTERNAL_IP=' "${ENV_FILE}"; then
     echo "    Retired MC_ETH_INTERNAL_IP from ${ENV_FILE} (eth0 has a single address now)"
 fi
 
+# Subnet move (2026-10-06): 192.168.10.x collided with the AI.R hangar
+# Wi-Fi, so the whole drone network moved to 192.168.100.x with every
+# host octet unchanged (HID-MC-001 §4.2). An already-provisioned drone's
+# per-drone values never come from the repo default again, so rewrite any
+# 192.168.10.N on-device value to 192.168.100.N here — before the backfill
+# below. The Pixhawk (net.cfg IPADDR, UXRCE_DDS_AG_IP), MANET radios,
+# gimbal camera and GCS laptop must be moved too; this can't reach them.
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*\b192\.168\.10\.[0-9]' "${ENV_FILE}"; then
+    while IFS= read -r line; do
+        echo "    Migrating ${line} -> ${line//192.168.10./192.168.100.}"
+    done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*\b192\.168\.10\.[0-9]' "${ENV_FILE}")
+    sed -i -E '/^[A-Za-z_][A-Za-z0-9_]*=/ s/\b192\.168\.10\.([0-9])/192.168.100.\1/g' "${ENV_FILE}"
+    echo "    NOTE: this drone's Pixhawk (/fs/microsd/net.cfg IPADDR, UXRCE_DDS_AG_IP)," \
+         "MANET radios, gimbal camera and GCS laptop must also move to 192.168.100.x" \
+         "(docs/DEPLOYMENT.md, \"Moving the drone subnet\")."
+fi
+
 # Per-variable migration: the file-level check above only seeds
 # /etc/drone-mc/environment once, so a repo change to config/environment
 # (e.g. INFRA-008 adding MC_ETH_MAC/MC_ETH_IP)

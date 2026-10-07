@@ -53,7 +53,7 @@ package "PX4 FCC  (uXRCE-DDS bridge)" as FCC_PKG #FFECD8 {
   component "uORB Topics\nvehicle_local_position\nvehicle_status · battery_status\nvehicle_attitude · vehicle_odometry" as UORB #FFD4A8
 }
 
-package "GCS  (MAVLink 2/UDP  ·  192.168.10.10)" as GCS_PKG #D8EED8 {
+package "GCS  (MAVLink 2/UDP  ·  192.168.100.10)" as GCS_PKG #D8EED8 {
   component "QGroundControl\nVehicle telemetry/control\nCommands · Detections" as QGC #B8DCA8
 }
 
@@ -68,13 +68,13 @@ package "Mission Orchestrator  (MAVLink Channel C  ·  another team's app)\n[not
   component "Mission Orchestrator App\nMission plan library\nCreate · List · Update\nActivate · Delete" as ORCH_APP #C8D8F0;line.dashed
 }
 
-package "Swarm Peers  (MANET · 192.168.10.x)" as PEER_PKG #F5ECF5 {
+package "Swarm Peers  (MANET · 192.168.100.x)" as PEER_PKG #F5ECF5 {
   component "Peer MCs\nHeartbeat · ISR selection\nVoronoi consensus" as PEERS #E0C8F0
 }
 
 database "IMX219 CSI Camera" as CAM #EDE0F8
 
-database "Gimbal IP Camera\n192.168.10.200 (shared switch)" as GIMCAM #EDE0F8
+database "Gimbal IP Camera\n192.168.100.200 (shared switch)" as GIMCAM #EDE0F8
 
 ' ═══════════════════════════════════════════════════
 ' CONTAINER: fcc-bridge
@@ -190,14 +190,14 @@ package "health-monitor" as C_HEALTH #F0F0F0 {
 ' ═══════════════════════════════════════════════════
 ' EXTERNAL ↔ INTERNAL CONNECTIONS
 ' ═══════════════════════════════════════════════════
-UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.10.31:8888"
+UORB <--> FCC_BRIDGE : "uXRCE-DDS\nttyTHS1 / 192.168.100.31:8888"
 QGC <--> MLR : "MAVLink 2/UDP\nChannel A (autopilot,\nno ROS 2 node consumer)"
 QGC <--> MLR_B : "MAVLink 2/UDP\nChannel B"
 MLR <--> MAVROS_NODE : "MAVLink 2/UDP :14553\n(MAVROS_CHANNEL_A endpoint)"
 MLR_B <--> GCS_NODE
 ORCH_APP ..> MLR_C : "MAVLink 2/UDP (Channel C)\n:14571/14572, MAVFTP\n[dashed: Orchestrator App not yet built]"
 MLR_C --> ORCH_NODE : ":14580 (loopback)"
-PEERS .[#888888,dashed].> SWARM : "Swarm protocol/UDP\nMANET · 192.168.10.x\n(SWARM is a scaffold — not implemented)"
+PEERS .[#888888,dashed].> SWARM : "Swarm protocol/UDP\nMANET · 192.168.100.x\n(SWARM is a scaffold — not implemented)"
 CAM --> CAMNODE : "CSI"
 GIMCAM .[#888888,dashed].> PFRONT : "RTSP/H.265\n:8554 (shared switch, HIF-007)\n(not built yet)"
 

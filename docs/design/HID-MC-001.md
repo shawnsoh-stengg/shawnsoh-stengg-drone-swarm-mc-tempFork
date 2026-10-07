@@ -83,15 +83,15 @@ External peripherals              Baseboard                 Internal modules
 LiPo battery (4S–6S) ─────────► Power regulation ────────► Jetson (5 V, 3 A)
                                                    ────────► Pixhawk (5 V, 2 A)
 
-MANET radio ──────── RJ45/SFP ──► Ethernet switch (10/100/1000, ─► Jetson eth0 (192.168.10.11)
-                                    single switch, no 2nd PHY) ──► Pixhawk Ethernet port (192.168.10.31, 100BASE-T)
+MANET radio ──────── RJ45/SFP ──► Ethernet switch (10/100/1000, ─► Jetson eth0 (192.168.100.11)
+                                    single switch, no 2nd PHY) ──► Pixhawk Ethernet port (192.168.100.31, 100BASE-T)
 
                                  UART bridge ──────────────► Jetson ttyTHS1 (uXRCE-DDS primary)
                                  (on-board trace)          ► Pixhawk TELEM2 / UART B
 
 IMX219 camera ─── 22-pin FPC ──► CSI-2 mux/connector ────► Jetson CSI port 0
 
-Gimbal IP camera ─ JST-GH (ETH1) ► Ethernet switch (shared with HIF-002/HIF-004) ──► Jetson eth0 (192.168.10.11)
+Gimbal IP camera ─ JST-GH (ETH1) ► Ethernet switch (shared with HIF-002/HIF-004) ──► Jetson eth0 (192.168.100.11)
 
 GCS / AU ─────── see HIF-004 ──► (via MANET radio, HIF-006)
 
@@ -235,16 +235,18 @@ If the topics are absent, check:
 
 ### 4.2 Network Configuration
 
-**Single shared subnet for MC↔FCC (192.168.10.x):**
+**Single shared subnet for MC↔FCC (192.168.100.x):**
 
 | Interface | IP Address | Subnet | Purpose |
 |---|---|---|---|
-| Jetson eth0 (MC side) | `MC_ETH_IP` (default `192.168.10.11`) | 255.255.255.0 | The Jetson's only `eth0` address — MC↔FCC and MANET (HIF-004) alike |
-| Pixhawk Ethernet (FCC side) | `FCC_ETH_IP` (default `192.168.10.31`; bench unit `orin-nx` = `192.168.10.19`) | 255.255.255.0 | The Pixhawk's only address — every MC↔FCC channel and Channel A |
+| Jetson eth0 (MC side) | `MC_ETH_IP` (default `192.168.100.11`) | 255.255.255.0 | The Jetson's only `eth0` address — MC↔FCC and MANET (HIF-004) alike |
+| Pixhawk Ethernet (FCC side) | `FCC_ETH_IP` (default `192.168.100.31`; bench unit `orin-nx` = `192.168.100.19`) | 255.255.255.0 | The Pixhawk's only address — every MC↔FCC channel and Channel A |
 
-> **Correction (2026-09-25):** this section previously specified a dedicated, isolated MC↔FCC subnet (`192.168.12.1` Jetson via `MC_ETH_INTERNAL_IP` / `192.168.12.31` Pixhawk), with the Pixhawk also holding a separate `FCC_GCS_IP` (`192.168.10.31`) for Channel A. PX4's NuttX network stack gives the Pixhawk exactly one IPv4 address (a single `IPADDR` in `/fs/microsd/net.cfg`), so that dual-homed layout was never physically possible — on the `orin-nx` bench the Pixhawk answered only on `192.168.10.19`, and `192.168.12.19` failed ARP, so mission/flow-relay/HIL_GPS traffic to `192.168.12.x` had gone nowhere. `FCC_GCS_IP` and `MC_ETH_INTERNAL_IP` are retired (folded into `FCC_ETH_IP`/`MC_ETH_IP`; `scripts/01-install-os.sh`/`02-install-systemd-units.sh` migrate old `/etc/drone-mc/environment` files). Consequence: MC↔FCC unicast now shares the `192.168.10.x` segment with MANET/GCS traffic — it stays on the drone's onboard switch as unicast, but there is no longer subnet-level separation.
+> **Subnet move (2026-10-06):** the drone network moved from `192.168.10.0/24` to `192.168.100.0/24` because `192.168.10.x` collided with the AI.R hangar Wi-Fi. Every host octet is unchanged (`.11` MC, `.31` FCC, `.10` GCS, `.1` MANET AU, `.200+` gimbal camera). Addresses throughout this document, including the dated correction notes and bench observations recorded before the move, have been renumbered to the new subnet; `test-results/` keeps the addresses as recorded. `scripts/01-install-os.sh`/`02-install-systemd-units.sh` migrate existing `/etc/drone-mc/environment` files; the FCC, radios, camera and GCS are moved by hand (`docs/DEPLOYMENT.md`, "Moving the drone subnet").
 
-The GCS, peer MCs (MANET), this drone's Jetson and this drone's Pixhawk all sit on the one `192.168.10.0/24` subnet; the Jetson has a single `MC_ETH_IP` address on `eth0`, configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel — observed `enP8p1s0` on one baseboard, `eno1` on another; board-dependent), the config uses `match`/`set-name` to rename it before assigning its address, so `eth0` stays the stable logical name used everywhere else in this document. It matches by MAC address rather than by kernel name: matching by `name` races udev's own predictable-naming rename on the same boot `add` uevent, and was observed to fail silently on cold boot (interface stayed unmanaged, no IPs). The MAC is unit-specific — `config/netplan/01-drone-mc.yaml` is an envsubst template that `scripts/01-install-os.sh` renders against `/etc/drone-mc/environment`'s `MC_ETH_MAC`/`MC_ETH_IP` (INFRA-008); rendered for `jetson-nx-001`'s defaults it reads:
+> **Correction (2026-09-25):** this section previously specified a dedicated, isolated MC↔FCC subnet (`192.168.12.1` Jetson via `MC_ETH_INTERNAL_IP` / `192.168.12.31` Pixhawk), with the Pixhawk also holding a separate `FCC_GCS_IP` (`192.168.100.31`) for Channel A. PX4's NuttX network stack gives the Pixhawk exactly one IPv4 address (a single `IPADDR` in `/fs/microsd/net.cfg`), so that dual-homed layout was never physically possible — on the `orin-nx` bench the Pixhawk answered only on `192.168.100.19`, and `192.168.12.19` failed ARP, so mission/flow-relay/HIL_GPS traffic to `192.168.12.x` had gone nowhere. `FCC_GCS_IP` and `MC_ETH_INTERNAL_IP` are retired (folded into `FCC_ETH_IP`/`MC_ETH_IP`; `scripts/01-install-os.sh`/`02-install-systemd-units.sh` migrate old `/etc/drone-mc/environment` files). Consequence: MC↔FCC unicast now shares the `192.168.100.x` segment with MANET/GCS traffic — it stays on the drone's onboard switch as unicast, but there is no longer subnet-level separation.
+
+The GCS, peer MCs (MANET), this drone's Jetson and this drone's Pixhawk all sit on the one `192.168.100.0/24` subnet; the Jetson has a single `MC_ETH_IP` address on `eth0`, configured via Netplan. Because the Orin NX built-in NIC does not enumerate as `eth0` (it gets a PCIe-path predictable name from the kernel — observed `enP8p1s0` on one baseboard, `eno1` on another; board-dependent), the config uses `match`/`set-name` to rename it before assigning its address, so `eth0` stays the stable logical name used everywhere else in this document. It matches by MAC address rather than by kernel name: matching by `name` races udev's own predictable-naming rename on the same boot `add` uevent, and was observed to fail silently on cold boot (interface stayed unmanaged, no IPs). The MAC is unit-specific — `config/netplan/01-drone-mc.yaml` is an envsubst template that `scripts/01-install-os.sh` renders against `/etc/drone-mc/environment`'s `MC_ETH_MAC`/`MC_ETH_IP` (INFRA-008); rendered for `jetson-nx-001`'s defaults it reads:
 
 ```yaml
 # /etc/netplan/01-drone-mc.yaml
@@ -256,7 +258,7 @@ network:
         macaddress: 4c:bb:47:c4:2d:6e   # jetson-nx-001's onboard NIC; update if the NIC is replaced
       set-name: eth0
       addresses:
-        - 192.168.10.11/24    # MC_ETH_IP — sole address: FCC (HIF-002) + MANET (HIF-004)
+        - 192.168.100.11/24    # MC_ETH_IP — sole address: FCC (HIF-002) + MANET (HIF-004)
       nameservers:
         addresses: []
 ```
@@ -267,7 +269,7 @@ network:
 
 ```
 MAV_0_CONFIG = 1000   (Ethernet)
-UXRCE_DDS_AG_IP = -1062729205   (= MC_ETH_IP 192.168.10.11 as signed int32 big-endian)
+UXRCE_DDS_AG_IP = -1062706165   (= MC_ETH_IP 192.168.100.11 as signed int32 big-endian)
 UXRCE_DDS_PORT_CFG = 8888
 ```
 
@@ -278,7 +280,7 @@ UXRCE_DDS_PORT_CFG = 8888
 ```
 DEVICE=eth0
 BOOTPROTO=static
-IPADDR=<FCC_ETH_IP>        # e.g. 192.168.10.31
+IPADDR=<FCC_ETH_IP>        # e.g. 192.168.100.31
 NETMASK=255.255.255.0
 ```
 
@@ -319,7 +321,7 @@ Both processes run inside the single `mc-fcc-bridge` container and share its lif
 
 ![Diagram 25 — Network Interface Topology](docs/diagrams/25-hid-network-topology.png)
 
-*Diagram 25 — Network Interface Topology: IP addressing and port map for HIF-002 (MC↔FCC) and HIF-004 (MANET), both on the single `192.168.10.x` subnet (§4.2 correction note).*
+*Diagram 25 — Network Interface Topology: IP addressing and port map for HIF-002 (MC↔FCC) and HIF-004 (MANET), both on the single `192.168.100.x` subnet (§4.2 correction note).*
 
 ---
 
@@ -445,31 +447,31 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! \
 
 | Interface | IP Address | Subnet | Gateway |
 |---|---|---|---|
-| Jetson eth0 | `192.168.10.11` | 255.255.255.0 | `192.168.10.1` (AU routing) |
-| Pixhawk FCC (via baseboard) | `192.168.10.31` (`FCC_ETH_IP`, per-drone — same single address as §4.2) | 255.255.255.0 | — |
-| GCS laptop | `192.168.10.10` | 255.255.255.0 | — |
-| MANET AU (IP) | `192.168.10.1` | 255.255.255.0 | — |
+| Jetson eth0 | `192.168.100.11` | 255.255.255.0 | `192.168.100.1` (AU routing) |
+| Pixhawk FCC (via baseboard) | `192.168.100.31` (`FCC_ETH_IP`, per-drone — same single address as §4.2) | 255.255.255.0 | — |
+| GCS laptop | `192.168.100.10` | 255.255.255.0 | — |
+| MANET AU (IP) | `192.168.100.1` | 255.255.255.0 | — |
 
-All swarm peers use the same 192.168.10.x scheme with sequential `.11`, `.12`, `.13`, … for drone MC instances.
+All swarm peers use the same 192.168.100.x scheme with sequential `.11`, `.12`, `.13`, … for drone MC instances.
 
 ### 6.3 Logical Traffic Map
 
 | Traffic type | Source:port | Destination:port | Interface |
 |---|---|---|---|
-| GCS → MC MAVLink | 192.168.10.10:any | 192.168.10.11:14551 | eth0 via MANET |
-| MC → GCS MAVLink | 192.168.10.11:any | 192.168.10.10:14552 | eth0 via MANET |
-| GCS → FCC MAVLink | 192.168.10.10:any | 192.168.10.31:14550 | eth0 via MANET (mavlink-router passes through) |
-| Swarm heartbeat | 192.168.10.x:any | 192.168.10.y:14900 | eth0 via MANET |
-| Swarm coordination | 192.168.10.x:any | 192.168.10.y:14901 | eth0 via MANET |
+| GCS → MC MAVLink | 192.168.100.10:any | 192.168.100.11:14551 | eth0 via MANET |
+| MC → GCS MAVLink | 192.168.100.11:any | 192.168.100.10:14552 | eth0 via MANET |
+| GCS → FCC MAVLink | 192.168.100.10:any | 192.168.100.31:14550 | eth0 via MANET (mavlink-router passes through) |
+| Swarm heartbeat | 192.168.100.x:any | 192.168.100.y:14900 | eth0 via MANET |
+| Swarm coordination | 192.168.100.x:any | 192.168.100.y:14901 | eth0 via MANET |
 
 ### 6.4 Link Verification
 
 ```bash
 # Ping GCS
-ping -c 4 192.168.10.10
+ping -c 4 192.168.100.10
 
 # Ping FCC (Pixhawk Ethernet, FCC_ETH_IP — same address HIF-002 uses, §4.2)
-ping -c 4 192.168.10.31
+ping -c 4 192.168.100.31
 
 # Check Ethernet link state
 ip link show eth0 | grep -E "UP|LOWER_UP"
@@ -487,9 +489,9 @@ The MANET radio AU must be configured by the radio administrator before integrat
 | Operating mode | Infrastructure (AP or mesh — specific to radio model) |
 | Frequency band | Per local spectrum authority |
 | Network SSID / mesh ID | Fixed per programme |
-| IP address (AU management) | `192.168.10.1` |
+| IP address (AU management) | `192.168.100.1` |
 | DHCP | Disabled — all endpoints use static IPs |
-| Layer 2 bridge | Enabled — AU acts as transparent L2 bridge for the 192.168.10.x subnet |
+| Layer 2 bridge | Enabled — AU acts as transparent L2 bridge for the 192.168.100.x subnet |
 | MTU | ≥ 1500 bytes |
 | QoS | Priority to UDP ports 14550–14902 |
 
@@ -684,7 +686,7 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 | Cable type | JST-GH 6-pin to RJ45 pigtail (camera end terminates in standard RJ45), Cat 5e, shielded, ≤ 2 m |
 | Camera connector | RJ45 (integrated in gimbal camera housing) |
 
-> **Note:** HIF-007 is **not** a second Jetson network interface. The JST-GH ETH port 1 connector wires into the baseboard's existing internal Ethernet switch alongside the Pixhawk Ethernet port (HIF-002) and the MANET radio AU port (HIF-004). The gimbal camera is simply one more host on the 192.168.10.0/24 switched segment, reached through Jetson's single `eth0` interface (192.168.10.11) — no new Netplan interface or kernel device is introduced.
+> **Note:** HIF-007 is **not** a second Jetson network interface. The JST-GH ETH port 1 connector wires into the baseboard's existing internal Ethernet switch alongside the Pixhawk Ethernet port (HIF-002) and the MANET radio AU port (HIF-004). The gimbal camera is simply one more host on the 192.168.100.0/24 switched segment, reached through Jetson's single `eth0` interface (192.168.100.11) — no new Netplan interface or kernel device is introduced.
 
 ### 9.2 Connector Pinout (6-pin JST-GH)
 
@@ -701,17 +703,17 @@ PX4 writes a new `.ulg` file on each arm event. Logs are essential for post-flig
 
 | Interface | IP Address | Subnet | Notes |
 |---|---|---|---|
-| Jetson `eth0` (shared) | `192.168.10.11` | 255.255.255.0 | Existing HIF-002/HIF-004 interface — reused as-is, no change |
-| Gimbal IP camera | `192.168.10.200` | 255.255.255.0 | Static, configured on the camera itself. First address of the `.200`+ range reserved for gimbal/camera peripherals on the shared switch |
+| Jetson `eth0` (shared) | `192.168.100.11` | 255.255.255.0 | Existing HIF-002/HIF-004 interface — reused as-is, no change |
+| Gimbal IP camera | `192.168.100.200` | 255.255.255.0 | Static, configured on the camera itself. First address of the `.200`+ range reserved for gimbal/camera peripherals on the shared switch |
 
-No Netplan changes are required — the camera is just another host on the existing 192.168.10.0/24 switched segment already configured for `eth0` (HID §4.2). It is reachable, and reaches the Jetson, through the baseboard's internal switch alongside the Pixhawk (HIF-002) and MANET radio AU (HIF-004).
+No Netplan changes are required — the camera is just another host on the existing 192.168.100.0/24 switched segment already configured for `eth0` (HID §4.2). It is reachable, and reaches the Jetson, through the baseboard's internal switch alongside the Pixhawk (HIF-002) and MANET radio AU (HIF-004).
 
 ### 9.4 Video Source
 
 | Parameter | Value |
 |---|---|
 | Protocol | RTSP 1.0, video codec H.265/HEVC |
-| Camera RTSP URL | `rtsp://192.168.10.200:8554/stream1` |
+| Camera RTSP URL | `rtsp://192.168.100.200:8554/stream1` |
 | Resolution / frame rate | 1920×1080 @ 30 FPS (configurable on camera) |
 | Ingested by | `perception_front_node` (GStreamer `rtspsrc`), see SDD §9a |
 
@@ -720,10 +722,10 @@ No Netplan changes are required — the camera is just another host on the exist
 ```bash
 # On Jetson — confirm eth0 is up and camera is reachable
 ip -4 addr show eth0
-ping -c 4 192.168.10.200
+ping -c 4 192.168.100.200
 
 # Confirm RTSP stream is being served
-gst-launch-1.0 rtspsrc location=rtsp://192.168.10.200:8554/stream1 ! fakesink -v
+gst-launch-1.0 rtspsrc location=rtsp://192.168.100.200:8554/stream1 ! fakesink -v
 ```
 
 ---
@@ -867,10 +869,12 @@ A `custom` mode instance starts with no streams, which avoids onboard mode's lon
 
 ```
 # /fs/microsd/etc/extras.txt — MC<->FCC MAVLink exceptions (HID-MC-001 §10.6)
-# PER-DRONE FILE: -t must be this drone's MC_ETH_IP (default 192.168.10.11).
+# PER-DRONE FILE: -t must be this drone's MC_ETH_IP (default 192.168.100.11).
+# Re-pairing this FCC with another MC, or changing the MC's IP, means editing
+# -t and rebooting: the running instance only reads it at startup.
 
 # Optical-flow + baro relay, FCC -> MC only (ICD-MC-001 §3.3a).
-mavlink start -u 14556 -o 14556 -t 192.168.10.11 -m custom -r 10000
+mavlink start -u 14556 -o 14556 -t 192.168.100.11 -m custom -r 10000
 mavlink stream -u 14556 -s OPTICAL_FLOW_RAD -r 20
 mavlink stream -u 14556 -s DISTANCE_SENSOR -r 10
 mavlink stream -u 14556 -s ALTITUDE -r 10
@@ -891,6 +895,7 @@ mavlink start -u 14557 -m custom -r 1000
 
 - [ ] `mavlink status` lists UDP `14557`.
 - [ ] `MAV_USEHILGPS` and `MAV_SYS_ID` are set per FT-006's procedure (`test-results/FT-006-mc-igs-bench-integration.md` §3.1–3.2). Leave `MAV_USEHILGPS` at `0` until FT-006's negative-path check has run.
+- [ ] `SENS_BAR_AUTOCAL` is `0` for every `HIL_GPS` session (`param set SENS_BAR_AUTOCAL 0`, `param save`). It defaults to `1`. Once per boot, as soon as a GPS fix is stable, PX4 shifts the baro calibration so baro altitude equals GPS altitude, and saves the offset to `CAL_BAROx_OFF` (`VehicleAirData::BaroGNSSAltitudeOffset()`, v1.17.0). `gnss_sim_node` builds the `HIL_GPS` altitude from that same baro (§10.6 step D's `ALTITUDE` stream), so the shift loops back. On the 2026-10-02 bench, baro jumped from −10.2 m to 30.0 m about 1 s after anchoring at 30 m. The `HIL_GPS` altitude then became 30 + 40 = 70 m, and EKF2's 40 m baro/GPS-height disagreement failed `Preflight Fail: height estimate not stable`. If it already fired this boot, set the parameter and re-anchor. Re-anchoring takes the shifted baro as its new reference. Set it back to `1` before any outdoor session on a real receiver.
 
 **F. MC side**
 
@@ -906,6 +911,54 @@ mavlink start -u 14557 -m custom -r 1000
 Known gap, not covered here: the FCC-side instance for the mission-protocol channel (`:14555`, `ICD-MC-001.md` §3.1) isn't documented either. It probably belongs in the same `extras.txt`, but it's outside HIF-008.
 
 ---
+
+### 10.7 PX4 Parameter Set — Indoor `HIL_GPS` Flight Test
+
+Apply this on top of §10.4 (H-Flow/DroneCAN) and §10.6 D/E (`extras.txt`) before any indoor session that uses `gnss_sim_node`'s synthetic fix (`TP-FT-002` and later, and FT-006 on the bench). Every name, enum value and default below was checked against the real PX4 **v1.17.0** tag on 2026-10-02 (`commander_params.c`, `navigator/{geofence,rtl,mission}_params.c`, `mc_pos_control/*_params.c`, `ekf2/params_gnss.yaml`, `sensors/vehicle_air_data/params.c`). The **A** group is required for `HIL_GPS` to work at all. The **B** and **C** values are a starting point for a small indoor space. Fit them to the actual room before flying, and record what you used in the test log.
+
+```
+# --- A. Required for HIL_GPS (FT-006 verified 2026-10-02) ---
+param set MAV_SYS_ID <DRONE_ID>     # must equal the MC's DRONE_ID (ICD §3.3b sysid gate)
+param set MAV_USEHILGPS 1           # default 0: PX4 drops HIL_GPS without it
+param set SENS_BAR_AUTOCAL 0        # default 1: baro would be re-calibrated to HIL_GPS alt (§10.6 E)
+# EKF2_GPS_CTRL stays 7 (default): 0 discards HIL_GPS entirely (§10.4 warning)
+
+# --- B. Indoor envelope (site-specific: fit to the room) ---
+param set GF_ACTION 5               # default 2 (Hold): 5 = Land on a fence breach
+param set GF_MAX_HOR_DIST 8         # m from Home, default 0 (off): room half-width minus margin
+param set GF_MAX_VER_DIST 3         # m above Home, default 0 (off): ceiling height minus margin
+param set RTL_RETURN_ALT 2          # m, default 60: stock RTL climbs into the ceiling
+param set RTL_DESCEND_ALT 1.5       # m, default 30
+param set NAV_RCL_ACT 3             # manual-control loss -> Land (default 2, Return)
+param set NAV_DLL_ACT 3             # GCS link loss -> Land (default 0, disabled)
+param set MIS_TAKEOFF_ALT 1.5       # m, default 2.5
+param set MPC_XY_CRUISE 1.0         # m/s mission speed, default 5
+param set MPC_XY_VEL_MAX 2.0        # m/s, default 12
+param set MPC_Z_VEL_MAX_UP 1.0      # m/s, default 3
+param set MPC_Z_VEL_MAX_DN 0.7      # m/s, default 1.5
+param set MIS_DIST_1WP 30           # m, default 10000: warns on a mission planned for elsewhere (warning only)
+
+param save
+reboot                              # then re-anchor gnss_sim_node (it does not survive an FCC reboot)
+```
+
+**C. Leave at default — checked, and deliberately not changed:**
+
+| Parameter | v1.17.0 default | Why it stays |
+|---|---|---|
+| `EKF2_GPS_CTRL` | 7 | `HIL_GPS` reaches EKF2 through this same GNSS path (§10.4) |
+| `EKF2_HGT_REF` | 1 (GPS) | `HIL_GPS` altitude is built from the FCC baro anyway, so GPS and baro height agree as long as `SENS_BAR_AUTOCAL = 0` |
+| `EKF2_REQ_EPH` / `EKF2_REQ_NSATS` | 3.0 m / 6 | Only the **initial** GNSS checks use these (`GnssChecks::runInitialFixChecks()`). They pass right after anchoring (eph 1.0 m, 10 sats). Once passed, PX4 only runs the simplified checks (fix ≥ 3D, hacc/vacc ≤ 50 m), so the designed eph growth doesn't drop GNSS fusion mid-flight |
+| `EKF2_REQ_VDRIFT` | 0.2 m/s | Stationary pre-arm drift check. Passes at the bench's steady `vel_d ≈ −0.09`. It trips for about 20–30 s after a re-anchor that changes altitude |
+| `COM_POS_FS_EPH` | 5 m | Position-loss failsafe threshold. Matches `gnss_sim_node`'s IGS-005 `max_eph_before_fault_m` (5.0 m) |
+| `EKF2_RNG_CTRL` / `EKF2_OF_CTRL` | 1 / 1 | §10.4. Range aid and flow fusion both stay on. See §10.4's open question on double-counting the flow |
+| `COM_LOW_BAT_ACT` | 0 (Warning) | Doesn't trigger RTL. If you change it to 3 (Return), the `RTL_*` values above become what it uses |
+
+**Flight window per anchor.** `gnss_sim_node` grows eph at 0.02 m/s from 1.0 m (`eph_growth_rate_m_per_s`). The IGS-005 latch stops `HIL_GPS` at eph 5.0 m, about **200 s** after anchoring. EKF2's own estimate approaches `COM_POS_FS_EPH` at about the same time. Arm, fly and land within about **150 s of the anchor**, and re-anchor on the ground between sorties. Re-anchoring in the air would teleport the fix. The anchor lat/lon must be inside the loaded mission's area: Home is wherever the fix says the vehicle is.
+
+**Not a parameter, still required:** an RC transmitter with a kill switch bound and tested, props-off arm/disarm first, and a tether or cage for the first sorties (INTEGRATION-AND-FLIGHT-TEST-PLAN.md FT-006 deliverable 2).
+
+**Restore before outdoor flight on a real receiver:** `MAV_USEHILGPS 0`, `SENS_BAR_AUTOCAL 1`, and site-appropriate `GF_*`/`RTL_*`/`NAV_*`/`MPC_*` values. `SENS_BAR_AUTOCAL` has already saved an offset fitted to the fake GPS into `CAL_BAROx_OFF`. With it back at `1`, it re-calibrates against real GNSS on the next boot.
 
 ## 11. Environmental and Mechanical
 
@@ -1003,22 +1056,22 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 
 ### 13.2 Software Configuration (one-time, per drone)
 
-- [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the Netplan config (single `MC_ETH_IP`/24, default `192.168.10.11/24`, on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
+- [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the Netplan config (single `MC_ETH_IP`/24, default `192.168.100.11/24`, on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
 - [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600`, `UXRCE_DDS_PTCFG = 2` via QGroundControl, then reboot the FCC (§3.3 — without `PTCFG = 2` no `/fmu/*` topic reaches `fcc_bridge_node`).
 - [ ] **HIF-002** Set the Pixhawk's Ethernet address: edit `/fs/microsd/net.cfg` so `IPADDR` = this drone's `FCC_ETH_IP` (`BOOTPROTO=static`, `NETMASK=255.255.255.0`, §4.2), reboot the FCC, verify with `netman show` in the MAVLink console.
-- [ ] **HIF-002** Set PX4 agent IP: `UXRCE_DDS_AG_IP = -1062729205` (default `MC_ETH_IP` 192.168.10.11 as signed int32 — recompute for a non-default `MC_ETH_IP`, §4.2), `UXRCE_DDS_PORT_CFG = 8888`.
+- [ ] **HIF-002** Set PX4 agent IP: `UXRCE_DDS_AG_IP = -1062706165` (default `MC_ETH_IP` 192.168.100.11 as signed int32 — recompute for a non-default `MC_ETH_IP`, §4.2), `UXRCE_DDS_PORT_CFG = 8888`.
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
-- [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.10.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.10.11/24`.
+- [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.100.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.100.11/24`.
 - [ ] **HIF-008** Set the PX4 DroneCAN/EKF2 parameters listed in §10.4 (`UAVCAN_SUB_FLOW`, `UAVCAN_SUB_RNG`, `EKF2_OF_CTRL`, height/rate limits, `EKF2_OF_POS_X/Y/Z` offsets) via QGroundControl and reboot the FCC. Also start a second MAVLink instance on the FCC streaming `OPTICAL_FLOW_RAD`/`DISTANCE_SENSOR`/`ALTITUDE` (raw baro for `gnss_sim_node`'s vertical channel, ~10 Hz — FT-006) to the MC on `FCC_FLOW_PORT` (`:14556` by default, ICD §3.3a) — no MC-side config needed, `fcc_bridge` binds this port automatically.
 
 ### 13.3 Pre-Flight Verification (each flight)
 
 - [ ] **HIF-001** `ros2 topic hz /fmu/out/vehicle_status` — expect ≥ 5 Hz.
-- [ ] **HIF-002** (if Ethernet fallback active) `ping $FCC_ETH_IP` (default `192.168.10.31`) from Jetson — expect < 1 ms RTT.
+- [ ] **HIF-002** (if Ethernet fallback active) `ping $FCC_ETH_IP` (default `192.168.100.31`) from Jetson — expect < 1 ms RTT.
 - [ ] **HIF-003** `gst-launch-1.0 nvarguscamerasrc sensor-id=0 num-buffers=10 ! fakesink` — no errors.
-- [ ] **HIF-004** `ping 192.168.10.10` from Jetson — GCS reachable.
-- [ ] **HIF-007** `ping 192.168.10.200` from Jetson — gimbal camera reachable; confirm RTSP stream per §9.5.
+- [ ] **HIF-004** `ping 192.168.100.10` from Jetson — GCS reachable.
+- [ ] **HIF-007** `ping 192.168.100.200` from Jetson — gimbal camera reachable; confirm RTSP stream per §9.5.
 - [ ] **HIF-005** Check `battery_status.remaining` in QGroundControl — > 80% before flight.
 - [ ] **HIF-006** MicroSD (Pixhawk) seated — PX4 log recording active (green SD light on Pixhawk).
 - [ ] **HIF-008** QGroundControl → MAVLink Inspector → `DISTANCE_SENSOR.current_distance` non-zero and updating (§10.5). MC-side: `ros2 topic echo /mc/sensors/optical_flow` shows `quality` non-zero and updating (§10.5).

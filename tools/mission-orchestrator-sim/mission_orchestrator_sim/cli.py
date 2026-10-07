@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mc-host",
         required=True,
-        help="MC's Channel C address (the Jetson's LAN IP, e.g. 192.168.10.11; "
+        help="MC's Channel C address (the Jetson's LAN IP, e.g. 192.168.100.11; "
         "use 127.0.0.1 against a loopback-rewritten mavlink-router-channel-c.conf for local testing)",
     )
     parser.add_argument(

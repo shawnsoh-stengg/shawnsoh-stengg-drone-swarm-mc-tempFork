@@ -81,7 +81,7 @@ mc_msgs::msg::MissionUpload sample_upload()
 
   mc_msgs::msg::SwarmPeer peer;
   peer.drone_id = 7;
-  peer.ip_address = "192.168.10.12";
+  peer.ip_address = "192.168.100.12";
   peer.mission_phase = 3;
   peer.lat = 1.3;
   peer.lon = 103.8;
@@ -150,7 +150,7 @@ TEST_F(MissionPersistenceTest, SaveThenLoadRoundTripsAllFields)
   ASSERT_EQ(loaded->swarm_manifest.size(), 1U);
   const auto & peer = loaded->swarm_manifest[0];
   EXPECT_EQ(peer.drone_id, 7);
-  EXPECT_EQ(peer.ip_address, "192.168.10.12");
+  EXPECT_EQ(peer.ip_address, "192.168.100.12");
   EXPECT_EQ(peer.mission_phase, 3);
   EXPECT_EQ(peer.sensor_flags, 0xAB);
   EXPECT_EQ(peer.fault_mask, 0x1234);

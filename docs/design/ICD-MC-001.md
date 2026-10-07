@@ -65,7 +65,7 @@ Eight interface domains are defined:
 ```
 ┌───────────────────────────────────────────────────────────────────┐
 │                    Mission Computer (MC)                          │
-│                    192.168.10.11                                   │
+│                    192.168.100.11                                  │
 │                                                                   │
 │  IFD-004        IFD-001               IFD-002          IFD-003   │
 │  Camera ──CSI──► gscam2   FCC ──DDS──► fcc_bridge   GCS ──MAV──► │
@@ -74,7 +74,7 @@ Eight interface domains are defined:
 │                                                                   │
 │  IFD-006                              IFD-007 (2 streams)         │
 │  Gimbal camera ──eth0(switch)──► perception_ video_mux ─RTSP/H.265─► │
-│  192.168.10.200                    front_node        + metadata      │
+│  192.168.100.200                   front_node        + metadata      │
 │                                     (:8555 Stream A)    to GCS        │
 │  camera_node (IFD-004) ──────► perception_down_node ─┘ (:8556 Stream B)│
 │                                                                   │
@@ -94,7 +94,7 @@ Eight interface domains are defined:
 | Parameter | Primary (Serial) | Secondary (Ethernet) |
 |---|---|---|
 | Protocol | uXRCE-DDS over UART | uXRCE-DDS over UDP |
-| Device / Address | `/dev/ttyTHS1` | `FCC_ETH_IP` (FCC, default `192.168.10.31`) |
+| Device / Address | `/dev/ttyTHS1` | `FCC_ETH_IP` (FCC, default `192.168.100.31`) |
 | Baud rate | 921600 | — |
 | UDP port (agent) | — | 8888 |
 | DDS domain ID | 0 | 0 |
@@ -108,7 +108,7 @@ The Micro XRCE-DDS Agent runs in the `fcc-bridge` container and bridges between 
 | Parameter | Value |
 |---|---|
 | Protocol | MAVLink 2 over UDP (standard mission microservice) |
-| Address | `FCC_ETH_IP:14555` (FCC, default `192.168.10.31`) |
+| Address | `FCC_ETH_IP:14555` (FCC, default `192.168.100.31`) |
 | Carried over | The existing HIF-002 Ethernet link (already MAVLink-capable; no new hardware) |
 | Purpose | `upload_mission()` / `update_mission_item()` only — see §3.3 `Mission Protocol` below |
 
@@ -119,7 +119,7 @@ Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side d
 | Parameter | Value |
 |---|---|
 | Protocol | MAVLink 2 over UDP (`OPTICAL_FLOW_RAD`, `DISTANCE_SENSOR`, `ALTITUDE`) |
-| Address | `FCC_ETH_IP:14556` (FCC, default `192.168.10.31`) |
+| Address | `FCC_ETH_IP:14556` (FCC, default `192.168.100.31`) |
 | Carried over | The existing HIF-002 Ethernet link (same as the mission-protocol sub-channel above; no new hardware) |
 | Purpose | Relays HIF-008 (Holybro H-Flow) data to `get_optical_flow()` / `/mc/sensors/optical_flow`, and raw baro altitude to `get_baro_altitude()` / `/mc/sensors/baro_altitude` — see §3.3a |
 | Direction | FCC → MC only (receive-only from the MC's perspective) |
@@ -131,7 +131,7 @@ H-Flow is a DroneCAN peripheral on the Pixhawk's CAN1 port (HID-MC-001 §10) —
 | Parameter | Value |
 |---|---|
 | Protocol | MAVLink 2 over UDP (`HIL_GPS`) |
-| Address | `FCC_ETH_IP:14557` (FCC, default `192.168.10.31`) |
+| Address | `FCC_ETH_IP:14557` (FCC, default `192.168.100.31`) |
 | Carried over | The existing HIF-002 Ethernet link (same as the other two sub-channels above; no new hardware) |
 | Purpose | Streams `gnss_sim_node`'s synthetic WGS-84 fix to the FCC so PX4 accepts it as its GPS receiver, indoors — see §3.3b |
 | Direction | MC → FCC only (send-only from the MC's perspective) |
@@ -502,7 +502,7 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 | Parameter | Value |
 |---|---|
 | Protocol | MAVLink 2 over UDP |
-| GCS address | `192.168.10.10` |
+| GCS address | `192.168.100.10` |
 | GCS receive port (MC → GCS) | `14551` |
 | MC receive port (GCS → MC) | `14552` |
 | Router daemon | `mavlink-router v4` in `mavlink-router` container |
@@ -525,11 +525,11 @@ The `FccBackend` class in the `fcc_bridge_node` provides a transport-agnostic RO
 
 [UdpEndpoint GCS_CHANNEL_A]
 Mode = Server
-Port = 14550       # bound on the MC's own address (192.168.10.11); GCS sends here
+Port = 14550       # bound on the MC's own address (192.168.100.11); GCS sends here
 
 [UdpEndpoint FCC_CHANNEL_A]
 Mode = Normal
-Address = ${FCC_ETH_IP}   # envsubst-rendered by 02-install-systemd-units.sh (INFRA-008), default 192.168.10.31
+Address = ${FCC_ETH_IP}   # envsubst-rendered by 02-install-systemd-units.sh (INFRA-008), default 192.168.100.31
 Port = 14550
 
 [UdpEndpoint MAVROS_CHANNEL_A]
@@ -544,7 +544,7 @@ Port = 14553       # internal: MAVROS (gcs-comms container) listens here
 
 [UdpEndpoint GCS_CHANNEL_B]
 Mode = Normal
-Address = 192.168.10.10
+Address = 192.168.100.10
 Port = 14551
 
 [UdpEndpoint GCS_MC_RECV]
@@ -755,7 +755,7 @@ Rate: ≥ 1 Hz (FR-071).
 | Parameter | Value |
 |---|---|
 | Protocol | Custom binary / UDP / IPv4 |
-| Network | MANET mesh · 192.168.10.x |
+| Network | MANET mesh · 192.168.100.x |
 | Peer IPs | From GCS-uploaded swarm manifest |
 | Heartbeat port | `14900` (all drones listen and send) |
 | Coordination port | `14901` (ISR + Voronoi messages) |
@@ -992,9 +992,9 @@ Transform from camera body frame to vehicle body frame is stored in the ROS 2 TF
 |---|---|
 | Physical interface | HIF-007 — ETH port 1 (JST-GH) on the baseboard's internal Ethernet switch, shared with HIF-002/HIF-004 via Jetson `eth0` |
 | Protocol | RTSP 1.0, video codec H.265/HEVC |
-| Camera address | `192.168.10.200:8554` |
-| Jetson address | `192.168.10.11` (existing `eth0` interface, §HID-007) |
-| Stream URL | `rtsp://192.168.10.200:8554/stream1` |
+| Camera address | `192.168.100.200:8554` |
+| Jetson address | `192.168.100.11` (existing `eth0` interface, §HID-007) |
+| Stream URL | `rtsp://192.168.100.200:8554/stream1` |
 | Resolution / rate | 1920×1080 @ 30 FPS (camera-side configurable) |
 | Consumer | `perception_front_node` (`video_downlink` package) via GStreamer `rtspsrc` |
 
@@ -1034,7 +1034,7 @@ Type: `mc_msgs/TrackArray`. Published at ≥ 5 Hz whenever the gimbal video pipe
 |---|---|
 | Protocol | RTSP 1.0 over the existing MANET link (HIF-004), video codec H.265/HEVC, embedded KLV-style metadata track |
 | Server | `video_mux_node` (`video_downlink` package), bound on the MC's GCS-facing address |
-| Stream URL (GCS pulls) | `rtsp://192.168.10.11:8555/mc_video` |
+| Stream URL (GCS pulls) | `rtsp://192.168.100.11:8555/mc_video` |
 | Independent of | IFD-002 (MAVLink GCS channel) — separate port, separate process; a stalled video downlink does not affect telemetry or command/ack traffic |
 
 `video_mux_node` subscribes to `perception_front_node`'s decoded/annotated frame stream and `/mc/perception/front/tracks` + `/mc/perception/front/detections`, re-encodes to H.265, muxes in a metadata track (per-frame UTC timestamp, detection class, confidence, track ID, geodetic position), and serves the result as a single RTSP session.
@@ -1047,7 +1047,7 @@ Type: `mc_msgs/TrackArray`. Published at ≥ 5 Hz whenever the gimbal video pipe
 |---|---|
 | Protocol | RTSP 1.0 over the existing MANET link (HIF-004), video codec H.265/HEVC, embedded metadata track — same transport pattern as Stream A |
 | Server | `video_mux_node` (`video_downlink` package) — same node as Stream A, second independent pipeline |
-| Stream URL (GCS pulls) | `rtsp://192.168.10.11:8556/mc_video_down` |
+| Stream URL (GCS pulls) | `rtsp://192.168.100.11:8556/mc_video_down` |
 | Inputs | `/camera/image_raw` (`camera_node`, IFD-004) + `/mc/detections` (`perception_down_node`, `mc_msgs/DetectionArray`, §9.2) |
 | Independent of | Stream A (`:8555`), IFD-002 (MAVLink GCS channel), and `perception_down_node`'s existing detection/geolocation role, which is unchanged by this interface |
 
@@ -1689,20 +1689,22 @@ All deployment parameters are set via environment variables in the Docker Compos
 
 | Parameter | Value |
 |---|---|
-| MC IP | `192.168.10.11` (`MC_ETH_IP`, per-drone, INFRA-008 — the Jetson's only `eth0` address) |
-| FCC IP | `192.168.10.31` (`FCC_ETH_IP`, per-drone — e.g. bench unit `orin-nx` = `192.168.10.19`; the Pixhawk's only address, carries every MC↔FCC Ethernet channel and Channel A) |
-| GCS IP | `192.168.10.10` |
-| Swarm peer IPs | `192.168.10.12` … `192.168.10.1N` |
-| Gimbal IP camera (HIF-007, shared switch — reuses MC IP `192.168.10.11` on `eth0`) | `192.168.10.200` (first of the `.200`+ range reserved for camera/gimbal peripherals) |
+| MC IP | `192.168.100.11` (`MC_ETH_IP`, per-drone, INFRA-008 — the Jetson's only `eth0` address) |
+| FCC IP | `192.168.100.31` (`FCC_ETH_IP`, per-drone — e.g. bench unit `orin-nx` = `192.168.100.19`; the Pixhawk's only address, carries every MC↔FCC Ethernet channel and Channel A) |
+| GCS IP | `192.168.100.10` |
+| Swarm peer IPs | `192.168.100.12` … `192.168.100.1N` |
+| Gimbal IP camera (HIF-007, shared switch — reuses MC IP `192.168.100.11` on `eth0`) | `192.168.100.200` (first of the `.200`+ range reserved for camera/gimbal peripherals) |
 
-> **Correction (2026-09-25):** this ICD previously documented the FCC as dual-homed — a private MC↔FCC subnet (`192.168.12.31` FCC / `192.168.12.1` MC via `MC_ETH_INTERNAL_IP`) plus a GCS-facing `FCC_GCS_IP` (`192.168.10.31`) for Channel A only. PX4's NuttX stack gives the Pixhawk exactly one IPv4 address (single `IPADDR` in `/fs/microsd/net.cfg`; `netman show` in the MAVLink console), so that was never physically possible: on the `orin-nx` bench the Pixhawk answered only on `192.168.10.19`, and `192.168.12.19` failed ARP — mission, flow-relay and HIL_GPS traffic sent to `192.168.12.x` had gone nowhere. There is now one `192.168.10.0/24` subnet; every MC↔FCC channel (§3.1) and Channel A (§4.2) target `FCC_ETH_IP`. Consequence: MC↔FCC unicast now shares the `192.168.10.x` segment with MANET/GCS traffic — it stays on the drone's onboard switch as unicast, but there is no longer subnet-level separation.
+> **Subnet move (2026-10-06):** the drone network moved from `192.168.10.0/24` to `192.168.100.0/24` because `192.168.10.x` collided with the AI.R hangar Wi-Fi. Every host octet is unchanged (`.11` MC, `.31` FCC, `.10` GCS, `.1` MANET AU, `.200+` gimbal camera). Addresses throughout this document, including the dated correction notes and bench observations recorded before the move, have been renumbered to the new subnet; `test-results/` keeps the addresses as recorded. `scripts/01-install-os.sh`/`02-install-systemd-units.sh` migrate existing `/etc/drone-mc/environment` files; the FCC, radios, camera and GCS are moved by hand (`docs/DEPLOYMENT.md`, "Moving the drone subnet").
+
+> **Correction (2026-09-25):** this ICD previously documented the FCC as dual-homed — a private MC↔FCC subnet (`192.168.12.31` FCC / `192.168.12.1` MC via `MC_ETH_INTERNAL_IP`) plus a GCS-facing `FCC_GCS_IP` (`192.168.100.31`) for Channel A only. PX4's NuttX stack gives the Pixhawk exactly one IPv4 address (single `IPADDR` in `/fs/microsd/net.cfg`; `netman show` in the MAVLink console), so that was never physically possible: on the `orin-nx` bench the Pixhawk answered only on `192.168.100.19`, and `192.168.12.19` failed ARP — mission, flow-relay and HIL_GPS traffic sent to `192.168.12.x` had gone nowhere. There is now one `192.168.100.0/24` subnet; every MC↔FCC channel (§3.1) and Channel A (§4.2) target `FCC_ETH_IP`. Consequence: MC↔FCC unicast now shares the `192.168.100.x` segment with MANET/GCS traffic — it stays on the drone's onboard switch as unicast, but there is no longer subnet-level separation.
 
 ### 11.2 Port Reference
 
 | Port | Protocol | Interface | Direction |
 |---|---|---|---|
 | `14550` | UDP | MAVLink — GCS ↔ FCC (Channel A) | Bidirectional (MC's only use is via MAVROS_CHANNEL_A below, GCS-005) |
-| `14551` | UDP | MAVLink — MC → GCS (Channel B) | `GCS_CHANNEL_B` endpoint (Normal mode, fixed remote `192.168.10.10:14551`) — mavlink-router sends MC→GCS traffic here; this is the GCS's own receive port |
+| `14551` | UDP | MAVLink — MC → GCS (Channel B) | `GCS_CHANNEL_B` endpoint (Normal mode, fixed remote `192.168.100.10:14551`) — mavlink-router sends MC→GCS traffic here; this is the GCS's own receive port |
 | `14552` | UDP | MAVLink — GCS → MC (Channel B) | `GCS_MC_RECV` endpoint (Server mode, bound `0.0.0.0:14552` on the MC) — GCS sends here; this is the MC's own receive port |
 | `14553` | UDP | MAVLink — mavlink-router (Channel A) → MAVROS | Internal (loopback), GCS-005 |
 | `14560` | UDP | MAVLink — mavlink-router → gcs_mavlink_node | Internal (loopback) |
@@ -1712,10 +1714,10 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `14557` | UDP | MAVLink HIL_GPS sender — MC → FCC | Send-only, always on, to `FCC_ETH_IP` (IGS-004, §3.3b) |
 | `14900` | UDP | Swarm heartbeat | Broadcast among peers |
 | `14901` | UDP | Swarm coordination | Unicast among peers |
-| `8554` | TCP/UDP | RTSP — Gimbal camera source stream | Gimbal camera → `perception_front_node`, on `192.168.10.200` (HIF-007, shared switch) |
-| `8555` | TCP/UDP | RTSP — MC video downlink, Stream A (gimbal) | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007 §8.1) |
-| `8556` | TCP/UDP | RTSP — MC video downlink, Stream B (downward) | `video_mux_node` → GCS, on `192.168.10.11` (IFD-007 §8.1a) |
-| `14571` | UDP | MAVLink — MC → Orchestrator (Channel C) | `ORCHESTRATOR_CHANNEL_C` endpoint (Normal mode, fixed remote `192.168.10.10:14571`) — the Orchestrator's own receive port (IFD-008 §12.1) |
+| `8554` | TCP/UDP | RTSP — Gimbal camera source stream | Gimbal camera → `perception_front_node`, on `192.168.100.200` (HIF-007, shared switch) |
+| `8555` | TCP/UDP | RTSP — MC video downlink, Stream A (gimbal) | `video_mux_node` → GCS, on `192.168.100.11` (IFD-007 §8.1) |
+| `8556` | TCP/UDP | RTSP — MC video downlink, Stream B (downward) | `video_mux_node` → GCS, on `192.168.100.11` (IFD-007 §8.1a) |
+| `14571` | UDP | MAVLink — MC → Orchestrator (Channel C) | `ORCHESTRATOR_CHANNEL_C` endpoint (Normal mode, fixed remote `192.168.100.10:14571`) — the Orchestrator's own receive port (IFD-008 §12.1) |
 | `14572` | UDP | MAVLink — Orchestrator → MC (Channel C) | `ORCHESTRATOR_MC_RECV` endpoint (Server mode, bound `0.0.0.0:14572` on the MC) — the MC's own receive port (IFD-008 §12.1) |
 | `14580` | UDP | MAVLink — mavlink-router → mission_orchestrator_node | Internal (loopback) (IFD-008 §12.1) |
 
@@ -1737,14 +1739,14 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `FCC_TRANSPORT` | `serial` | `serial` or `ethernet` — selects uXRCE-DDS transport |
 | `FCC_SERIAL_DEVICE` | `/dev/ttyTHS1` | Serial device for FCC (serial transport) |
 | `FCC_SERIAL_BAUD` | `921600` | Baud rate |
-| `MC_ETH_IP` | `192.168.10.11` | This Jetson's single `eth0` address, rendered into Netplan by `scripts/01-install-os.sh` (INFRA-008, HID-MC-001 §4.2) |
-| `FCC_ETH_IP` | `192.168.10.31` | The FCC's sole address (per-drone): target of the uXRCE-DDS Ethernet fallback, the mission/flow/HIL_GPS channels, and Channel A's `FCC_CHANNEL_A` endpoint. `FCC_GCS_IP` and `MC_ETH_INTERNAL_IP` are retired (2026-09-25, folded into `FCC_ETH_IP`/`MC_ETH_IP` — see §11.1's correction note); `01-install-os.sh`/`02-install-systemd-units.sh` migrate old `/etc/drone-mc/environment` files |
+| `MC_ETH_IP` | `192.168.100.11` | This Jetson's single `eth0` address, rendered into Netplan by `scripts/01-install-os.sh` (INFRA-008, HID-MC-001 §4.2) |
+| `FCC_ETH_IP` | `192.168.100.31` | The FCC's sole address (per-drone): target of the uXRCE-DDS Ethernet fallback, the mission/flow/HIL_GPS channels, and Channel A's `FCC_CHANNEL_A` endpoint. `FCC_GCS_IP` and `MC_ETH_INTERNAL_IP` are retired (2026-09-25, folded into `FCC_ETH_IP`/`MC_ETH_IP` — see §11.1's correction note); `01-install-os.sh`/`02-install-systemd-units.sh` migrate old `/etc/drone-mc/environment` files |
 | `FCC_ETH_PORT` | `8888` | uXRCE-DDS UDP port |
 | `FCC_MISSION_PORT` | `14555` | MAVLink mission-protocol UDP port (always active to `FCC_ETH_IP`, independent of `FCC_TRANSPORT`) |
 | `FCC_FLOW_PORT` | `14556` | MAVLink optical-flow relay UDP port, receive-only (always active from `FCC_ETH_IP`, independent of `FCC_TRANSPORT`, HIF-008) |
 | `FCC_GPS_INPUT_PORT` | `14557` | MAVLink HIL_GPS UDP port, send-only, read by `gnss_sim_node` (always active to `FCC_ETH_IP`, independent of `FCC_TRANSPORT`, IGS-004) |
 | `DRONE_ID` | `1` | This drone's ID (1-based) |
-| `GCS_IP` | `192.168.10.10` | GCS IP address |
+| `GCS_IP` | `192.168.100.10` | GCS IP address |
 | `GCS_MAV_PORT_RECV` | `14551` | Confusingly named — this is actually the GCS's own receive port (MC→GCS), matching `GCS_CHANNEL_B`'s fixed remote address:port in §4.2; unused by any script/code today (`config/environment` sets it, nothing reads it) |
 | `GCS_MAV_PORT_SEND` | `14552` | Confusingly named — this is actually the MC's own bound receive port (GCS→MC, `GCS_MC_RECV` in §4.2); unused by any script/code today |
 | `GCS_MAVLINK_LOOPBACK_PORT` | `14560` | `gcs_mavlink_node`'s Channel B loopback port (`GCS_MAVLINK_NODE` endpoint, §4.2) |
@@ -1762,7 +1764,7 @@ All deployment parameters are set via environment variables in the Docker Compos
 | `CAMERA_WIDTH` | `1280` | Camera capture width (px) |
 | `CAMERA_HEIGHT` | `720` | Camera capture height (px) |
 | `CAMERA_FPS` | `30` | Camera capture frame rate |
-| `ORCHESTRATOR_IP` | `192.168.10.10` | Mission Orchestrator IP (assumes co-located with GCS laptop, §12.1) — hardcoded in `mavlink-router-channel-c.conf`, same as `GCS_IP`/`GCS_MAV_PORT_RECV`/`GCS_MAV_PORT_SEND` above; listed here for reference symmetry, not read from the environment at runtime |
+| `ORCHESTRATOR_IP` | `192.168.100.10` | Mission Orchestrator IP (assumes co-located with GCS laptop, §12.1) — hardcoded in `mavlink-router-channel-c.conf`, same as `GCS_IP`/`GCS_MAV_PORT_RECV`/`GCS_MAV_PORT_SEND` above; listed here for reference symmetry, not read from the environment at runtime |
 | `ORCHESTRATOR_MAV_PORT_RECV` | `14571` | Confusingly named — this is actually the Orchestrator's own receive port (MC→Orchestrator), matching `ORCHESTRATOR_CHANNEL_C`'s fixed remote address:port in §12.1; see `ORCHESTRATOR_IP` note |
 | `ORCHESTRATOR_MAV_PORT_SEND` | `14572` | Confusingly named — this is actually the MC's own bound receive port (Orchestrator→MC, `ORCHESTRATOR_MC_RECV` in §12.1); see `ORCHESTRATOR_IP` note |
 | `ORCHESTRATOR_MAVLINK_LOOPBACK_PORT` | `14580` | `mission_orchestrator_node`'s Channel C loopback port (`ORCHESTRATOR_MAVLINK_NODE` endpoint, §12.1) |
@@ -1783,11 +1785,11 @@ This interface is a plan-library CRUD channel between a separate ground-side app
 
 ### 12.1 Transport — Channel C
 
-A third MAVLink channel, fully isolated from Channels A and B (own `mavlink-router` process/config, own ports), riding the existing `192.168.10.0/24` MANET link — no new physical link.
+A third MAVLink channel, fully isolated from Channels A and B (own `mavlink-router` process/config, own ports), riding the existing `192.168.100.0/24` MANET link — no new physical link.
 
 | Port | Protocol | Interface | Direction |
 |---|---|---|---|
-| `14571` | UDP | MAVLink — MC → Orchestrator (Channel C) | `ORCHESTRATOR_CHANNEL_C` endpoint (Normal mode, fixed remote `192.168.10.10:14571`) — the Orchestrator's own receive port |
+| `14571` | UDP | MAVLink — MC → Orchestrator (Channel C) | `ORCHESTRATOR_CHANNEL_C` endpoint (Normal mode, fixed remote `192.168.100.10:14571`) — the Orchestrator's own receive port |
 | `14572` | UDP | MAVLink — Orchestrator → MC (Channel C) | `ORCHESTRATOR_MC_RECV` endpoint (Server mode, bound `0.0.0.0:14572` on the MC) — the MC's own receive port |
 | `14580` | UDP | MAVLink — mavlink-router → mission_orchestrator_node | Internal (loopback) |
 

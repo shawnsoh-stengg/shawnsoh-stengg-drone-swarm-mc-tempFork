@@ -50,40 +50,40 @@ cloud "MANET Mesh Network" as MANET_NW #E0E0E0
 ' mavlink-router-channel-c.conf. The Mission Orchestrator application box
 ' below is still the OTHER team's deliverable and has not been built yet.
 package "Ground Control Station" as GCS_PKG #D8EED8 {
-  rectangle "QGroundControl\n192.168.10.10\n\nVehicle Telemetry/Control\nOperator Monitor" as GCS #B8DCBA
+  rectangle "QGroundControl\n192.168.100.10\n\nVehicle Telemetry/Control\nOperator Monitor" as GCS #B8DCBA
 
   rectangle "Mission Orchestrator\n(another team's app)\n\nMission Plan Library\nCreate · Update · Activate\n[not yet built]" as ORCH #C8D8F0;line.dashed
 
-  rectangle "Mesh Radio (Ground Unit)\n192.168.10.63" as GU #E0E0E0
+  rectangle "Mesh Radio (Ground Unit)\n192.168.100.63" as GU #E0E0E0
 }
 
 ' ── SWARM PEERS ──────────────────────────────────────────────
-package "Swarm Peers  (192.168.10.12+)" as PEERS_PKG #F5ECF5 {
-  rectangle "Peer MC #2\n192.168.10.12" as P2 #E8D8F0
-  rectangle "Peer MC #3\n192.168.10.13" as P3 #E8D8F0
+package "Swarm Peers  (192.168.100.12+)" as PEERS_PKG #F5ECF5 {
+  rectangle "Peer MC #2\n192.168.100.12" as P2 #E8D8F0
+  rectangle "Peer MC #3\n192.168.100.13" as P3 #E8D8F0
 
-  rectangle "Mesh Radio (Air Unit)\n192.168.10.22" as AU2 #E0E0E0
-  rectangle "Mesh Radio (Air Unit)\n192.168.10.23" as AU3 #E0E0E0
+  rectangle "Mesh Radio (Air Unit)\n192.168.100.22" as AU2 #E0E0E0
+  rectangle "Mesh Radio (Air Unit)\n192.168.100.23" as AU3 #E0E0E0
 }
 
 ' ── AIRBORNE DRONE ───────────────────────────────────────────
 package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
   package "Mission Computer (MC)" as MC_PKG #CCDFF5 {
-    rectangle "Jetson Orin NX 16GB\n192.168.10.11\n──────────────────\nROS 2 Humble · CycloneDDS (same-host)\nzenoh-bridge-dds (cross-host mesh)\nDocker Engine\ndrone-mc.target\n──────────────────\nC++17 application nodes\nAI inference (GPU)" as MC #A8CCEE
+    rectangle "Jetson Orin NX 16GB\n192.168.100.11\n──────────────────\nROS 2 Humble · CycloneDDS (same-host)\nzenoh-bridge-dds (cross-host mesh)\nDocker Engine\ndrone-mc.target\n──────────────────\nC++17 application nodes\nAI inference (GPU)" as MC #A8CCEE
   }
 
   package "Flight Control Computer (FCC)" as FCC_PKG #FFECD8 {
-    rectangle "Pixhawk 6X\n192.168.10.31\n──────────────────\nPX4 v1.14 · NuttX\nuORB topics\nMAVLink 2" as FCC #FFD4A8
+    rectangle "Pixhawk 6X\n192.168.100.31\n──────────────────\nPX4 v1.14 · NuttX\nuORB topics\nMAVLink 2" as FCC #FFD4A8
   }
 
   rectangle "IMX219\nCSI Camera\n(downward, VIO +\nground detection)" as CAM #EDE0F8
 
-  rectangle "Gimbal IP Camera\n192.168.10.200\n(front-facing,\nsearch & detection)" as GIMCAM #EDE0F8
+  rectangle "Gimbal IP Camera\n192.168.100.200\n(front-facing,\nsearch & detection)" as GIMCAM #EDE0F8
 
-  rectangle "Mission Protocol Socket\nMAVLink 2/UDP :14555\n192.168.10.31 (always ethernet)\nnot routed by mavlink-router" as MISSPROTO #F5ECF5
+  rectangle "Mission Protocol Socket\nMAVLink 2/UDP :14555\n192.168.100.31 (always ethernet)\nnot routed by mavlink-router" as MISSPROTO #F5ECF5
 
-  rectangle "Mesh Radio (Air Unit)\n 192.168.10.2x" as AU1 #E0E0E0
+  rectangle "Mesh Radio (Air Unit)\n 192.168.100.2x" as AU1 #E0E0E0
 }
 
 ' ── CONNECTIONS ──────────────────────────────────────────────
@@ -92,7 +92,7 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
 MC <-left-> FCC : "  uXRCE-DDS\n  ttyTHS1 (FCC: Telem2) serial\n"
 
 ' MC ↔ FCC mission protocol  (the one MAVLink exception on this link, IR-007)
-MC .left.> MISSPROTO : "MAVLink-Mission Comm.\n 192.168.10.31 ethernet\n  MISSION_COUNT\n  MISSION_ITEM_INT\n  MISSION_ACK"
+MC .left.> MISSPROTO : "MAVLink-Mission Comm.\n 192.168.100.31 ethernet\n  MISSION_COUNT\n  MISSION_ITEM_INT\n  MISSION_ACK"
 MISSPROTO .right.> FCC
 
 ' Cameras → MC (downward CSI camera_node is real/deployed; gimbal ingest
@@ -105,7 +105,7 @@ GIMCAM .up.> MC : "  RTSP/H.265 :8554\n  (IFD-006, HIF-007,\n  shared switch)\n 
 ' code scaffolds — bare Node() constructors, zero pub/sub/timer calls,
 ' verified 2026-09-08 — so no swarm heartbeat/coordination traffic exists
 ' yet; the MC↔GCS Channel B link itself is real)
-MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel, real)\n  Swarm heartbeat / coordination (UDP)\n  [not implemented — swarm_coord is a scaffold]\n  192.168.10.x"
+MC <-up-> AU1 : "  MAVLink 2/UDP  →  GCS (MC mission channel, real)\n  Swarm heartbeat / coordination (UDP)\n  [not implemented — swarm_coord is a scaffold]\n  192.168.100.x"
 MC .up.> AU1 : "  Zenoh mesh (zenoh-bridge-dds)\n  TCP :7447 — peer MCs (ZBD-001, done)"
 MC .up.> AU1 : "  GCS Video Downlink (RTSP/H.265 + metadata)\n  Stream A :8555 (gimbal) · Stream B :8556 (downward)\n  [video_mux_node is a scaffold —\n  not implemented, no container built]"
 

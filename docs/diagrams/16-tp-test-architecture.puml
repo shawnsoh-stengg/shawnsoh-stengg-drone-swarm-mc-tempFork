@@ -41,7 +41,7 @@ skinparam arrow {
 ' LEVEL 5 — Hardware-in-the-Loop
 ' ═══════════════════════════════════════════════════
 package "TP-HW — Hardware-in-the-Loop  (Milestone M5, M6)" as HW #FFE8C0 {
-  rectangle "Environment\nPhysical Jetson Orin NX + Pixhawk 6X\nBench PSU · GCS laptop · IMX219 camera\nttyTHS1 serial · 192.168.10.x LAN" as HW_ENV #FFD4A8
+  rectangle "Environment\nPhysical Jetson Orin NX + Pixhawk 6X\nBench PSU · GCS laptop · IMX219 camera\nttyTHS1 serial · 192.168.100.x LAN" as HW_ENV #FFD4A8
   rectangle "Scope\n6 tests: uXRCE-DDS latency · camera FPS\nTensorRT sustained load · serial reliability\nboot time · full smoke suite on DUT" as HW_SCOPE #FFD4A8
   rectangle "Tools\nManual execution · rclpy observer scripts\ntegrastats · /proc · wireshark" as HW_TOOLS #FFD4A8
 }

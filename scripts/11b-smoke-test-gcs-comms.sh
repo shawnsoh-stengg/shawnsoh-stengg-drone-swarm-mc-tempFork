@@ -10,7 +10,7 @@
 # a library gcs_mavlink_node links against), params files, systemd unit
 # wiring.
 #
-# GCS-005 AC2 (QGroundControl on a real 192.168.10.10 network showing a
+# GCS-005 AC2 (QGroundControl on a real 192.168.100.10 network showing a
 # HEARTBEAT within 5 s) needs a real QGC + FCC/SITL on a real network — that
 # is HW-tier verification (TP-MC-001's UT/NI/ST/HW levels), not something an
 # automated smoke test can exercise, and is deliberately not attempted here.
