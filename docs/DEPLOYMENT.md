@@ -55,7 +55,7 @@ orchestrator`, listed in the table above.
 
 `gnss_sim_node` streams a synthetic GPS fix to the FCC as `HIL_GPS`
 (`:14557`, ICD §3.3b), so it must only ever run because an operator started
-it for an indoor or HITL-bench session. Its unit has **no `[Install]`
+it for an indoor flight or a real-FCC bench (`FT-006`) session. Its unit has **no `[Install]`
 section**, and `02-install-systemd-units.sh` installs it but skips
 enabling it. Earlier installs are actively `disable`d via
 `ON_DEMAND_UNITS`. `drone-mc.target` never brings it up. Its
@@ -478,7 +478,7 @@ sudo systemctl stop drone-mc.target
 systemctl status drone-mc.target
 systemctl list-dependencies drone-mc.target --no-pager
 
-# Indoor/HITL session only (start-on-demand, never in the boot set)
+# Indoor flight / real-FCC bench (FT-006) only (start-on-demand, never in the boot set)
 sudo systemctl start drone-mc-indoor-nav
 sudo systemctl stop drone-mc-indoor-nav
 
