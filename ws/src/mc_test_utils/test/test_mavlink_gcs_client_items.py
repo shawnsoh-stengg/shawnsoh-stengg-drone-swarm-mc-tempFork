@@ -33,7 +33,7 @@ def test_swarm_peer_entry_item_x_y_are_real_ints():
     # struct.pack('i', 1.0) raises "required argument is not an integer",
     # only caught previously by an actual live SITL run (encode() is never
     # exercised end-to-end by the other unit tests in this file).
-    item = gcs_client.swarm_peer_entry_item(drone_id=2, ip_octet3=10, ip_octet4=12)
+    item = gcs_client.swarm_peer_entry_item(drone_id=2, ip_octet3=100, ip_octet4=12)
     assert isinstance(item['x'], int)
     assert isinstance(item['y'], int)
 

@@ -3,7 +3,7 @@
 decodes it and ACKs within the 500 ms bound (FR-061/FR-003).
 
 Run this from the real GCS laptop (or a host that owns GCS_IP on the
-192.168.10.x subnet) — mavlink-router's GCS_CHANNEL_B endpoint sends MC->GCS
+192.168.100.x subnet) — mavlink-router's GCS_CHANNEL_B endpoint sends MC->GCS
 traffic to a FIXED address (GCS_IP:14551), not back to whatever ephemeral
 port this script's send-socket used, so a single udpout connection will
 never see the reply. Two sockets are required: one to send (GCS_MC_RECV,
@@ -16,9 +16,9 @@ from pymavlink import mavutil
 
 # --- EDIT THESE to match the *specific unit under test*'s real
 # /etc/drone-mc/environment — do not use the ticket text's example values
-# (192.168.10.11 / DRONE_ID=1) unless that's actually this unit's config.
-MC_IP = "192.168.10.14"   # this unit's MC_ETH_IP
-DRONE_ID = 4              # this unit's DRONE_ID (== target_system)
+# (192.168.100.11 / DRONE_ID=1) unless that's actually this unit's config.
+MC_IP = "192.168.100.39"   # this unit's MC_ETH_IP
+DRONE_ID = 2              # this unit's DRONE_ID (== target_system)
 
 MC_CMD_END_MISSION = 50003
 MC_COMPONENT_ID = 191  # MAV_COMP_ID_ONBOARD_COMPUTER (docs/GCS-MAVLINK-API-REFERENCE.md)

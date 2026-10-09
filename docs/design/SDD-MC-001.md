@@ -89,7 +89,7 @@ Four principles govern the design:
 │  fcc_bridge_node · Micro XRCE-DDS Agent                      │
 ├──────────────────────────────────────────────────────────────┤
 │  Layer 1 — Hardware and Transport                            │
-│  ttyTHS1 serial · 192.168.10.x ethernet · CSI camera         │
+│  ttyTHS1 serial · 192.168.100.x ethernet · CSI camera        │
 │  MANET mesh radio · PX4 uORB                                 │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -179,7 +179,7 @@ Parameters are loaded at node startup via `--ros-args --params-file` in the cont
 When `SIMULATION_MODE=true`:
 - `fcc_bridge_node` uses `MavlinkUdpBackend` pointed at the SITL UDP address instead of uXRCE-DDS.
 - `camera_node` publishes synthetic frames from a ROS 2 bag or a Gazebo camera topic.
-- `perception_front_node` connects to a local test RTSP server (e.g. `rtsp-simple-server` looping a recorded clip) instead of the physical gimbal camera at 192.168.10.200.
+- `perception_front_node` connects to a local test RTSP server (e.g. `rtsp-simple-server` looping a recorded clip) instead of the physical gimbal camera at 192.168.100.200.
 - All other nodes are unchanged — the transport-agnostic design makes this transparent.
 
 This is enforced by a factory function called once at node startup, not by conditional compilation.
@@ -251,7 +251,9 @@ void XrceDdsBackend::on_local_pos(const px4_msgs::msg::VehicleLocalPosition::Sha
 
 **Link liveness** uses `last_fcc_msg_time_` compared against `node_->now()`. If the gap exceeds `timeout_s`, `is_link_alive()` returns false and the owning `fcc_bridge_node` publishes `FCC_LINK_LOST` to `/mc/fault`.
 
-**FCC Ethernet addressing.** **Correction (2026-09-25):** earlier revisions of this document dual-homed the FCC — a private MC↔FCC subnet 192.168.12.x (FCC `192.168.12.31`, plus a second Jetson address `MC_ETH_INTERNAL_IP`) and a separate GCS-facing `192.168.10.31` (`FCC_GCS_IP`) for Channel A only. That was never physically possible: PX4's NuttX network stack gives the Pixhawk exactly one IPv4 address (single `IPADDR` in `/fs/microsd/net.cfg`; `netman show`). On the orin-nx bench (2026-09-25) the Pixhawk answered only on `192.168.10.19` and `192.168.12.19` was unreachable, so everything sent to 192.168.12.x had gone nowhere. The FCC now has one address, `FCC_ETH_IP` (default `192.168.10.31`, per-drone), on the same 192.168.10.x subnet as the GCS and peer MCs, and the Jetson has one eth0 address, `MC_ETH_IP` (default `192.168.10.11`). Every MC↔FCC Ethernet channel targets `FCC_ETH_IP`: the uXRCE-DDS Ethernet fallback (UDP `:8888`), the mission protocol (`:14555`), the optical-flow relay (`:14556`), IGS-004's HIL_GPS sender (`:14557`) and Channel A's mavlink-router pass-through (`:14550`). One consequence: MC↔FCC unicast now shares the 192.168.10.x segment with GCS and MANET traffic instead of a private subnet. `FCC_GCS_IP`/`MC_ETH_INTERNAL_IP` are retired; `01-install-os.sh`/`02-install-systemd-units.sh` migrate existing `/etc/drone-mc/environment` files automatically.
+> **Subnet move (2026-10-06):** the drone network moved from `192.168.10.0/24` to `192.168.100.0/24` because `192.168.10.x` collided with the AI.R hangar Wi-Fi. Every host octet is unchanged (`.11` MC, `.31` FCC, `.10` GCS, `.1` MANET AU, `.200+` gimbal camera). Addresses throughout this document, including the dated correction notes and bench observations recorded before the move, have been renumbered to the new subnet; `test-results/` keeps the addresses as recorded. `scripts/01-install-os.sh`/`02-install-systemd-units.sh` migrate existing `/etc/drone-mc/environment` files; the FCC, radios, camera and GCS are moved by hand (`docs/DEPLOYMENT.md`, "Moving the drone subnet").
+
+**FCC Ethernet addressing.** **Correction (2026-09-25):** earlier revisions of this document dual-homed the FCC — a private MC↔FCC subnet 192.168.12.x (FCC `192.168.12.31`, plus a second Jetson address `MC_ETH_INTERNAL_IP`) and a separate GCS-facing `192.168.100.31` (`FCC_GCS_IP`) for Channel A only. That was never physically possible: PX4's NuttX network stack gives the Pixhawk exactly one IPv4 address (single `IPADDR` in `/fs/microsd/net.cfg`; `netman show`). On the orin-nx bench (2026-09-25) the Pixhawk answered only on `192.168.100.19` and `192.168.12.19` was unreachable, so everything sent to 192.168.12.x had gone nowhere. The FCC now has one address, `FCC_ETH_IP` (default `192.168.100.31`, per-drone), on the same 192.168.100.x subnet as the GCS and peer MCs, and the Jetson has one eth0 address, `MC_ETH_IP` (default `192.168.100.11`). Every MC↔FCC Ethernet channel targets `FCC_ETH_IP`: the uXRCE-DDS Ethernet fallback (UDP `:8888`), the mission protocol (`:14555`), the optical-flow relay (`:14556`), IGS-004's HIL_GPS sender (`:14557`) and Channel A's mavlink-router pass-through (`:14550`). One consequence: MC↔FCC unicast now shares the 192.168.100.x segment with GCS and MANET traffic instead of a private subnet. `FCC_GCS_IP`/`MC_ETH_INTERNAL_IP` are retired; `01-install-os.sh`/`02-install-systemd-units.sh` migrate existing `/etc/drone-mc/environment` files automatically.
 
 **Mission item transport.** Stock PX4 has no DDS-writable mission topic — mission items live in FCC-side dataman, reachable only through the standard MAVLink mission protocol. `XrceDdsBackend` therefore also owns a MAVLink 2/UDP socket to `FCC_ETH_IP:14555`, riding the existing HIF-002 Ethernet link (already MAVLink-capable per HID-MC-001 §4 — no new hardware). This channel is independent of the `FCC_TRANSPORT` primary/secondary DDS selection (§3.1); it is always up to `FCC_ETH_IP` regardless of which link currently carries uXRCE-DDS. `vehicle_state` and `vehicle_command` are unaffected by this — they stay on uXRCE-DDS. This is one of three MAVLink exceptions on the MC↔FCC interface (IR-007) — the other two are the optical-flow relay described next and IGS-004's HIL_GPS sender (owned by `gnss_sim_node`/`indoor_nav`, not this backend — ICD §3.3b).
 
@@ -799,7 +801,7 @@ removes that coupling entirely.
 ### 9a.1 perception_front_node — RTSP Ingest, Inference, and Tracking
 
 ```
-rtsp://192.168.10.200:8554/stream1 ──► rtspsrc (H.265 depay/decode, HIF-007/IFD-006)
+rtsp://192.168.100.200:8554/stream1 ──► rtspsrc (H.265 depay/decode, HIF-007/IFD-006)
                                               │
                                               ▼
                                      Frame queue (max depth = 2, drop oldest)
@@ -845,7 +847,7 @@ perception_front_node frame stream ──► GStreamer encode (H.265, nvv4l2h265
                                                      │
                                                      ▼
                                           RTSP server :8555 → GCS
-                                          (rtsp://192.168.10.11:8555/mc_video)
+                                          (rtsp://192.168.100.11:8555/mc_video)
                                                      │
                                                      ▼
                                           /mc/video/downlink_status (≥ 1 Hz)
@@ -868,7 +870,7 @@ On `perception_front_node` frame/track silence > 3 s, `video_mux_node` stops ser
                                                      │
                                                      ▼
                                           RTSP server :8556 → GCS (Stream B)
-                                          (rtsp://192.168.10.11:8556/mc_video_down)
+                                          (rtsp://192.168.100.11:8556/mc_video_down)
                                                      │
                                                      ▼
                                           /mc/video/down_downlink_status (≥ 1 Hz)
@@ -1185,7 +1187,7 @@ on demand only (not WantedBy= drone-mc.target, never enabled):
   indoor-nav.service            (requires fcc-bridge, after gcs-comms)
 ```
 
-`indoor-nav.service` (`gnss_sim_node`, `INDOOR-GNSS-SIMULATION-BACKLOG.md`) is deliberately **not** in the boot set. It injects a synthetic GPS fix into PX4 as `HIL_GPS` (ICD §3.3b), so it runs only when an operator starts it for an indoor/HITL session (`sudo systemctl start drone-mc-indoor-nav`). Its unit has no `[Install]` section, and `scripts/02-install-systemd-units.sh` installs but never enables it. `PartOf=drone-mc.target` still stops it with the target. It `Requires=` fcc-bridge because all of its inputs come from there (flow, baro, `vehicle_state`). gcs-comms is `After=` only, since the anchor command can also be published straight onto `/mc/gcs/command`. See `docs/DEPLOYMENT.md`.
+`indoor-nav.service` (`gnss_sim_node`, `INDOOR-GNSS-SIMULATION-BACKLOG.md`) is deliberately **not** in the boot set. It injects a synthetic GPS fix into PX4 as `HIL_GPS` (ICD §3.3b), so it runs only when an operator starts it for an indoor flight or real-FCC bench (`FT-006`) session (`sudo systemctl start drone-mc-indoor-nav`). Its unit has no `[Install]` section, and `scripts/02-install-systemd-units.sh` installs but never enables it. `PartOf=drone-mc.target` still stops it with the target. It `Requires=` fcc-bridge because all of its inputs come from there (flow, baro, `vehicle_state`). gcs-comms is `After=` only, since the anchor command can also be published straight onto `/mc/gcs/command`. See `docs/DEPLOYMENT.md`.
 
 `mission_orchestrator_node` (§11.4, GCS-004) has its own systemd unit and container as of `GCS-006` (2026-08-26, `PROJECT-PLAN-5-MONTH.md` Phase 3) — `config/systemd/drone-mc-mission-orchestrator.service` runs `ghcr.io/drone-mc/mission-orchestrator`, separate from `gcs-comms.service` per GCS-005's (2026-08-06) explicit exclusion (§11.1, §12.1). `mavlink-router-channel-c.conf` (§12.5) now has a corresponding running `mavlink-routerd` process too — `docker/mavlink-router/entrypoint.sh` launches it as a third independent process alongside Channel A/B's own two, same isolation pattern. The plan library at `/var/drone-mc/mission_plans/` is bind-mounted read-write from the host for persistence across container restarts. See `GCS-006`'s own ticket entry for the full deliverable list.
 

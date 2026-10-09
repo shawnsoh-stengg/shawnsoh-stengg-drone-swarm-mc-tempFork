@@ -49,11 +49,11 @@ formation_offsets:
     d_m: 0.0
 swarm_manifest:
   - drone_id: 1
-    ip_octet3: 10
+    ip_octet3: 100
     ip_octet4: 11
   - drone_id: 2
-    ip_octet3: 10
+    ip_octet3: 100
     ip_octet4: 12
   - drone_id: 3
-    ip_octet3: 10
+    ip_octet3: 100
     ip_octet4: 13

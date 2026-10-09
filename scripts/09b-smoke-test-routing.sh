@@ -61,8 +61,8 @@ check "channel-b.conf present"  test -f "${TMPL_B}"
 # exact same literal values as before this change.
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
-: "${FCC_ETH_IP:=192.168.10.31}"
-: "${GCS_IP:=192.168.10.10}"
+: "${FCC_ETH_IP:=192.168.100.31}"
+: "${GCS_IP:=192.168.100.10}"
 export FCC_ETH_IP GCS_IP
 CONF_A="${RENDER_DIR}/mavlink-router-channel-a.conf"
 CONF_B="${RENDER_DIR}/mavlink-router-channel-b.conf"
@@ -72,8 +72,8 @@ envsubst '$GCS_IP' < "${TMPL_B}" > "${CONF_B}"
 envsubst '$GCS_IP' < "${TMPL_C}" > "${CONF_C}"
 
 # Channel A: GCS<->FCC only, port 14550.
-check "channel-a: FCC endpoint at 192.168.10.31:14550" \
-    grep -qE 'Address = 192\.168\.10\.31' "${CONF_A}"
+check "channel-a: FCC endpoint at 192.168.100.31:14550" \
+    grep -qE 'Address = 192\.168\.100\.31' "${CONF_A}"
 check "channel-a: port 14550 declared" grep -qE 'Port = 14550' "${CONF_A}"
 check "channel-a: no Channel B port 14551" bash -c "! grep -qE 'Port = 14551' '${CONF_A}'"
 check "channel-a: no Channel B port 14552" bash -c "! grep -qE 'Port = 14552' '${CONF_A}'"
@@ -96,15 +96,15 @@ check "channel-a: exactly one MAVROS endpoint (no accidental duplicate)" \
     bash -c "[[ \$(grep -c '\[UdpEndpoint MAVROS_CHANNEL_A\]' '${CONF_A}') -eq 1 ]]"
 
 # Channel B: GCS<->MC only, ports 14551/14552/14560.
-check "channel-b: GCS endpoint at 192.168.10.10:14551" \
-    grep -qE 'Address = 192\.168\.10\.10' "${CONF_B}"
+check "channel-b: GCS endpoint at 192.168.100.10:14551" \
+    grep -qE 'Address = 192\.168\.100\.10' "${CONF_B}"
 check "channel-b: gcs_mavlink_node loopback at 127.0.0.1:14560" \
     grep -qE 'Address = 127\.0\.0\.1' "${CONF_B}"
 check "channel-b: port 14551 declared" grep -qE 'Port = 14551' "${CONF_B}"
 check "channel-b: port 14552 declared" grep -qE 'Port = 14552' "${CONF_B}"
 check "channel-b: port 14560 declared" grep -qE 'Port = 14560' "${CONF_B}"
 check "channel-b: no Channel A port 14550" bash -c "! grep -qE 'Port = 14550' '${CONF_B}'"
-check "channel-b: no FCC address 192.168.10.31" bash -c "! grep -qE '192\.168\.10\.31' '${CONF_B}'"
+check "channel-b: no FCC address 192.168.100.31" bash -c "! grep -qE '192\.168\.100\.31' '${CONF_B}'"
 check "channel-b: no Channel C ports (14571/14572/14580)" \
     bash -c "! grep -qE 'Port = 1457[12]$|Port = 14580' '${CONF_B}'"
 
@@ -114,8 +114,8 @@ check "channel-b: no Channel C ports (14571/14572/14580)" \
 # 15b-smoke-test-mission-orchestrator.sh — this is only the isolation
 # property, matching this file's existing scope for A/B.
 check "channel-c.conf present" test -f "${TMPL_C}"
-check "channel-c: Orchestrator endpoint at 192.168.10.10:14571" \
-    grep -qE 'Address = 192\.168\.10\.10' "${CONF_C}"
+check "channel-c: Orchestrator endpoint at 192.168.100.10:14571" \
+    grep -qE 'Address = 192\.168\.100\.10' "${CONF_C}"
 check "channel-c: mission_orchestrator_node loopback at 127.0.0.1:14580" \
     grep -qE 'Address = 127\.0\.0\.1' "${CONF_C}"
 check "channel-c: port 14571 declared" grep -qE 'Port = 14571' "${CONF_C}"
@@ -124,7 +124,7 @@ check "channel-c: port 14580 declared" grep -qE 'Port = 14580' "${CONF_C}"
 check "channel-c: no Channel A port 14550" bash -c "! grep -qE 'Port = 14550' '${CONF_C}'"
 check "channel-c: no Channel B ports (14551/14552/14560)" \
     bash -c "! grep -qE 'Port = 1455[12]$|Port = 14560' '${CONF_C}'"
-check "channel-c: no FCC address 192.168.10.31" bash -c "! grep -qE '192\.168\.10\.31' '${CONF_C}'"
+check "channel-c: no FCC address 192.168.100.31" bash -c "! grep -qE '192\.168\.100\.31' '${CONF_C}'"
 
 # Isolation is by construction (independent processes, no shared config) —
 # verify the entrypoint actually launches three independent mavlink-routerd
@@ -190,7 +190,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
     WORKDIR="$(mktemp -d)"
     trap 'rm -rf "${WORKDIR}" "${RENDER_DIR}"; [[ -n "${cid:-}" ]] && docker rm -f "${cid}" &>/dev/null || true; [[ -n "${tcpdump_pid:-}" ]] && kill "${tcpdump_pid}" &>/dev/null || true' EXIT
 
-    # Loopback-rewritten copies: real 192.168.10.x addresses aren't routable
+    # Loopback-rewritten copies: real 192.168.100.x addresses aren't routable
     # in a sandboxed test host, so both channels run entirely on 127.0.0.1,
     # each endpoint given its own distinct port so they can coexist in one
     # test run without colliding or self-looping (channel-a.conf's two
@@ -201,7 +201,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
          sec==2 && /^Port/{print "Port = 25553"; next}
          /^Port = 14550/{print "Port = 25550"; next}
          {print}' "${CONF_A}" > "${WORKDIR}/mavlink-router-channel-a.conf"
-    sed -e 's/192\.168\.10\.10/127.0.0.1/' -e 's/14551/25551/g' -e 's/14552/25552/g' -e 's/14560/25560/g' "${CONF_B}" > "${WORKDIR}/mavlink-router-channel-b.conf"
+    sed -e 's/192\.168\.100\.10/127.0.0.1/' -e 's/14551/25551/g' -e 's/14552/25552/g' -e 's/14560/25560/g' "${CONF_B}" > "${WORKDIR}/mavlink-router-channel-b.conf"
 
     cid="$(docker run -d --rm --network=host \
         --mount "type=bind,src=${WORKDIR},dst=/etc/drone-mc,readonly" \

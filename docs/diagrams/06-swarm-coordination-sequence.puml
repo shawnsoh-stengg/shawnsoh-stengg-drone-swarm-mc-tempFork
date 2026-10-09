@@ -83,9 +83,9 @@ MC3 --> GCS : ACK: success
 note over MC1, MC3
   All drones store mission data persistently.
   Swarm manifest provides peer IPs:
-    MC#1: 192.168.10.11
-    MC#2: 192.168.10.12
-    MC#3: 192.168.10.13
+    MC#1: 192.168.100.11
+    MC#2: 192.168.100.12
+    MC#3: 192.168.100.13
 end note
 
 ' ── Peer Discovery ────────────────────────────────

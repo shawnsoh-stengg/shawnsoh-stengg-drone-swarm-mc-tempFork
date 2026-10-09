@@ -45,7 +45,7 @@ skinparam component {
 ' ═══════════════════════════════════════════════════
 ' GROUND CONTROL STATION
 ' ═══════════════════════════════════════════════════
-package "Ground Control Station  ·  192.168.10.10" as GCS_PKG #D8EED8 {
+package "Ground Control Station  ·  192.168.100.10" as GCS_PKG #D8EED8 {
   component "QGroundControl\nAutopilot monitor\nMission planner" as QGC #B8DCA8
 
   component "Mission Orchestrator\n(another team's app)\nMission plan library\n[not yet built]" as ORCH #C8D8F0;line.dashed
@@ -62,7 +62,7 @@ package "Ground Control Station  ·  192.168.10.10" as GCS_PKG #D8EED8 {
 ' ═══════════════════════════════════════════════════
 ' MANET MESH NETWORK (transport layer)
 ' ═══════════════════════════════════════════════════
-package "MANET Mesh Network  ·  192.168.10.x" as MANET_PKG #F0F0F0 {
+package "MANET Mesh Network  ·  192.168.100.x" as MANET_PKG #F0F0F0 {
   rectangle "Mesh Radio (AU)\nUDP transport" as AU #DCDCDC
 }
 
@@ -73,7 +73,7 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
   ' ── CHANNEL A: GCS ↔ FCC ──────────────────────
   package "Channel A — Autopilot  [GCS ↔ FCC]" as CHAN_A #FFECD8 {
-    rectangle "Pixhawk 6X FCC\n192.168.10.31\nPX4 v1.14 / NuttX\n\nMAVLink system_id=1\ncomp_id=MAV_COMP_ID_AUTOPILOT1" as FCC #FFD4A8
+    rectangle "Pixhawk 6X FCC\n192.168.100.31\nPX4 v1.14 / NuttX\n\nMAVLink system_id=1\ncomp_id=MAV_COMP_ID_AUTOPILOT1" as FCC #FFD4A8
 
     note as N_A
       Standard PX4 autopilot channel.
@@ -94,7 +94,7 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
     component "MAVROS\n(apt package, not linked by\ngcs_mavlink_node — separate\nOS process, same container)" as MAVROS_PROC #C0E0D0;line.dashed
 
-    rectangle "Mission Computer (MC)\n192.168.10.11\nJetson Orin NX 16GB" as MC #A8CCEE
+    rectangle "Mission Computer (MC)\n192.168.100.11\nJetson Orin NX 16GB" as MC #A8CCEE
 
     note as N_B
       Dedicated MC channel.
@@ -145,9 +145,9 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
   ' ── MC ↔ FCC LINK ────────────────────────────
   package "MC ↔ FCC Link  [uXRCE-DDS + one MAVLink exception]" as CHAN_C #F5ECF5 {
-    rectangle "uXRCE-DDS Bridge\nttyTHS1 serial (primary)\n192.168.10.31:8888 ethernet (secondary)\nFccBackend abstraction layer" as DDS #D8C0F0
+    rectangle "uXRCE-DDS Bridge\nttyTHS1 serial (primary)\n192.168.100.31:8888 ethernet (secondary)\nFccBackend abstraction layer" as DDS #D8C0F0
 
-    rectangle "Mission Protocol Socket\nMAVLink 2/UDP  192.168.10.31:14555\nAlways ethernet — independent of\nFCC_TRANSPORT above\nOwned directly by FccBackend\n(not routed by mavlink-router)" as MISSPROTO #E8D8F0
+    rectangle "Mission Protocol Socket\nMAVLink 2/UDP  192.168.100.31:14555\nAlways ethernet — independent of\nFCC_TRANSPORT above\nOwned directly by FccBackend\n(not routed by mavlink-router)" as MISSPROTO #E8D8F0
 
     note as N_C
       uXRCE-DDS carries state + commands.
@@ -189,7 +189,7 @@ package "Airborne Drone" as DRONE_PKG #E8F2FC {
 
 ' Channel A: GCS ↔ FCC  (orange)
 QGC <-[#E07000]-> AU : "  <&bolt> Channel A\n  MAVLink 2/UDP\n  Autopilot telemetry\n  & commands"
-AU <-[#E07000]-> FCC : "  <&bolt> Channel A\n  MAVLink 2/UDP\n  192.168.10.31:14550"
+AU <-[#E07000]-> FCC : "  <&bolt> Channel A\n  MAVLink 2/UDP\n  192.168.100.31:14550"
 
 ' Channel B: GCS ↔ MC  (green)
 QGC <-[#208040]-> AU : "  <&bolt> Channel B\n  MAVLink 2/UDP\n  Mission & coordination"
@@ -208,11 +208,11 @@ ORCH_NODE -[#4060C0]-> MC : "  /mc/gcs/mission_upload\n  (on activate — same t
 
 ' MC ↔ FCC  (purple — uXRCE-DDS)
 MC <-[#7030A0]-> DDS : "  <&fork> MC ↔ FCC — uXRCE-DDS"
-DDS <-[#7030A0]-> FCC : "  <&fork> uXRCE-DDS\n  ttyTHS1 / 192.168.10.31:8888"
+DDS <-[#7030A0]-> FCC : "  <&fork> uXRCE-DDS\n  ttyTHS1 / 192.168.100.31:8888"
 
 ' MC ↔ FCC mission protocol  (magenta — MAVLink, the one exception)
 MC <-[#C020A0]-> MISSPROTO : "  <&bolt> Mission Protocol\n  MAVLink 2/UDP"
-MISSPROTO <-[#C020A0]-> FCC : "  <&bolt> 192.168.10.31:14555\n  eth0 only"
+MISSPROTO <-[#C020A0]-> FCC : "  <&bolt> 192.168.100.31:14555\n  eth0 only"
 
 legend right
   | Line | Channel |

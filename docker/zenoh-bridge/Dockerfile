@@ -1,5 +1,5 @@
 # zenoh-bridge-dds service image — bridges selected DDS topics across the
-# MANET mesh (192.168.10.x) via a static-peer Zenoh mesh, replacing
+# MANET mesh (192.168.100.x) via a static-peer Zenoh mesh, replacing
 # CycloneDDS's own cross-host unicast discovery (docker/ros2-core/cyclonedds.xml
 # is now lo-only; see config/zenoh-bridge-dds.json5 for where the per-drone
 # peer list moved to).

@@ -38,7 +38,7 @@ pip install -r requirements.txt
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--mc-host` | *(required)* | The drone's Channel C address — the Jetson's LAN IP (`192.168.10.11`-class address), or `127.0.0.1` for local/loopback testing |
+| `--mc-host` | *(required)* | The drone's Channel C address — the Jetson's LAN IP (`192.168.100.11`-class address), or `127.0.0.1` for local/loopback testing |
 | `--drone-id` | `1` | Target drone's `system_id` (the MC's `DRONE_ID`) |
 | `--recv-port` | `14571` | Local UDP port this tool listens on (`ORCHESTRATOR_MAV_PORT_RECV`) |
 | `--send-port` | `14572` | MC's Channel C UDP port this tool sends to (`ORCHESTRATOR_MAV_PORT_SEND`) |
@@ -63,17 +63,17 @@ filename *is* the plan's identity, there is no separate ID.
 ### Example session (against a real MC on the LAN)
 
 ```bash
-$ ./mission-orchestrator-sim --mc-host 192.168.10.11 create recon_alpha plans/recon_alpha.json
+$ ./mission-orchestrator-sim --mc-host 192.168.100.11 create recon_alpha plans/recon_alpha.json
 OK: created recon_alpha.json (412 bytes)
 
-$ ./mission-orchestrator-sim --mc-host 192.168.10.11 list
+$ ./mission-orchestrator-sim --mc-host 192.168.100.11 list
 recon_alpha.json	412 bytes
 active plan: (none)
 
-$ ./mission-orchestrator-sim --mc-host 192.168.10.11 activate recon_alpha
+$ ./mission-orchestrator-sim --mc-host 192.168.100.11 activate recon_alpha
 MC_MISSION_PLAN_ACK: client_request_id=1 filename=recon_alpha.json result=ACCEPTED
 
-$ ./mission-orchestrator-sim --mc-host 192.168.10.11 delete recon_alpha
+$ ./mission-orchestrator-sim --mc-host 192.168.100.11 delete recon_alpha
 ERROR: Nak(FileProtected) for opcode 8
 ```
 
@@ -92,21 +92,21 @@ usable directly in a shell `&&` chain or a CI assertion.
 Run `mission_orchestrator_node` and a `mavlink-routerd` process configured
 with a loopback-rewritten copy of `config/mavlink-router-channel-c.conf`
 (same technique `scripts/09b-smoke-test-routing.sh`'s `LIVE_CHECK=1` path
-uses for Channels A/B — rewrite `Address = 192.168.10.10` to `127.0.0.1`,
+uses for Channels A/B — rewrite `Address = 192.168.100.10` to `127.0.0.1`,
 ports unchanged), then point this tool at `--mc-host 127.0.0.1`. See that
 script for the exact rewrite pattern.
 
 ### Testing against a real two-host deployment
 
 `config/mavlink-router-channel-c.conf` is already written for the repo's
-standard addresses (GCS laptop `192.168.10.10`, Jetson MC `192.168.10.11` —
+standard addresses (GCS laptop `192.168.100.10`, Jetson MC `192.168.100.11` —
 see `CLAUDE.md`'s Network/IP Reference) — **no rewrite is needed** for this
 case, unlike the loopback setup above.
 
 As of `GCS-006`, both `mission_orchestrator_node` and Channel C's
 `mavlink-routerd` process are started by `drone-mc.target` like every other
 MC service — no manual `ros2 run`/`mavlink-routerd` step on the Jetson. On
-the Jetson MC (`192.168.10.11`), once `scripts/02-install-systemd-units.sh`
+the Jetson MC (`192.168.100.11`), once `scripts/02-install-systemd-units.sh`
 has been run (it provisions `/etc/drone-mc/mavlink-router-channel-c.conf`
 and `/var/drone-mc/mission_plans` for you) and `drone-mc-mission-
 orchestrator`/`drone-mc-mavlink-router` images are built
@@ -125,16 +125,16 @@ Confirm the node's `DRONE_ID` env var (`/etc/drone-mc/environment` on the
 Jetson) matches whatever `--drone-id` you pass below (both default to `1`
 if you set neither).
 
-On the GCS laptop (`192.168.10.10`):
+On the GCS laptop (`192.168.100.10`):
 
 ```bash
 cd tools/mission-orchestrator-sim
 pip install -r requirements.txt
 
-./mission-orchestrator-sim --mc-host 192.168.10.11 create recon_alpha plans/recon_alpha.json
-./mission-orchestrator-sim --mc-host 192.168.10.11 list
-./mission-orchestrator-sim --mc-host 192.168.10.11 activate recon_alpha
-./mission-orchestrator-sim --mc-host 192.168.10.11 delete recon_alpha   # expect Nak(FileProtected)
+./mission-orchestrator-sim --mc-host 192.168.100.11 create recon_alpha plans/recon_alpha.json
+./mission-orchestrator-sim --mc-host 192.168.100.11 list
+./mission-orchestrator-sim --mc-host 192.168.100.11 activate recon_alpha
+./mission-orchestrator-sim --mc-host 192.168.100.11 delete recon_alpha   # expect Nak(FileProtected)
 ```
 
 `--mc-host` is the only flag that needs to change from the loopback case —
@@ -172,7 +172,7 @@ reference. Minimal example:
     {"lat": 1.3521000, "lon": 103.8198000}
   ],
   "swarm_manifest": [
-    {"drone_id": 1, "ip": "192.168.10.11"}
+    {"drone_id": 1, "ip": "192.168.100.11"}
   ],
   "arm_authorised": true
 }

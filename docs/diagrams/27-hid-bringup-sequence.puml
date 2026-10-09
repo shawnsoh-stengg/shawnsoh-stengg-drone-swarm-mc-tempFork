@@ -120,9 +120,9 @@ udev/sysctl are all installed by 01-install-os.sh;
 
 :Configure Netplan on Jetson
 /etc/netplan/01-drone-mc.yaml:
-  eth0: 192.168.10.11/24  (single address —
+  eth0: 192.168.100.11/24  (single address —
         GCS, peers and this drone's FCC
-        all share 192.168.10.x)
+        all share 192.168.100.x)
 netplan apply;
 
 :Apply Jetson-IO device tree overlay
@@ -131,7 +131,7 @@ for IMX219 on CSI port 0:
   Select: 22-pin CSI → IMX219
   Reboot;
 
-:Connect GCS laptop (192.168.10.10)
+:Connect GCS laptop (192.168.100.10)
 via MANET radio to drone;
 
 :Open QGroundControl on GCS laptop
@@ -143,8 +143,8 @@ Connect to Pixhawk on UDP:14550;
   Save and reboot Pixhawk;
 
 :Set PX4 parameters for HIF-002 Ethernet:
-  Pixhawk Ethernet: 192.168.10.31/24  (its one address)
-  UXRCE_DDS_AG_IP  = -1062729205  (192.168.10.11, signed int32)
+  Pixhawk Ethernet: 192.168.100.31/24  (its one address)
+  UXRCE_DDS_AG_IP  = -1062706165  (192.168.100.11, signed int32)
   UXRCE_DDS_PORT_CFG = 8888
   (Secondary transport — serial is primary);
 
@@ -217,7 +217,7 @@ fork
   :ros2 topic hz /fmu/out/vehicle_status
   Expect: ≥ 5 Hz  [HIF-001];
 fork again
-  :ping 192.168.10.10
+  :ping 192.168.100.10
   Expect: < 5 ms RTT  [HIF-004];
 fork again
   :ros2 topic hz /camera/image_raw

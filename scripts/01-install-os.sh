@@ -112,6 +112,23 @@ if grep -q '^MC_ETH_INTERNAL_IP=' "${ENV_FILE}"; then
     echo "    Retired MC_ETH_INTERNAL_IP from ${ENV_FILE} (eth0 has a single address now)"
 fi
 
+# Subnet move (2026-10-06): 192.168.10.x collided with the AI.R hangar
+# Wi-Fi, so the whole drone network moved to 192.168.100.x with every
+# host octet unchanged (HID-MC-001 §4.2). An already-provisioned drone's
+# per-drone values never come from the repo default again, so rewrite any
+# 192.168.10.N on-device value to 192.168.100.N here — before the backfill
+# below. The Pixhawk (net.cfg IPADDR, UXRCE_DDS_AG_IP), MANET radios,
+# gimbal camera and GCS laptop must be moved too; this can't reach them.
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*\b192\.168\.10\.[0-9]' "${ENV_FILE}"; then
+    while IFS= read -r line; do
+        echo "    Migrating ${line} -> ${line//192.168.10./192.168.100.}"
+    done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*\b192\.168\.10\.[0-9]' "${ENV_FILE}")
+    sed -i -E '/^[A-Za-z_][A-Za-z0-9_]*=/ s/\b192\.168\.10\.([0-9])/192.168.100.\1/g' "${ENV_FILE}"
+    echo "    NOTE: this drone's Pixhawk (/fs/microsd/net.cfg IPADDR, UXRCE_DDS_AG_IP)," \
+         "MANET radios, gimbal camera and GCS laptop must also move to 192.168.100.x" \
+         "(docs/DEPLOYMENT.md, \"Moving the drone subnet\")."
+fi
+
 # Per-variable migration: the file-level check above only seeds
 # /etc/drone-mc/environment once, so a repo change to config/environment
 # (e.g. INFRA-008 adding MC_ETH_MAC/MC_ETH_IP)
@@ -244,7 +261,7 @@ if [[ -n "${MC_ETH_GATEWAY}" ]]; then
     echo "    eth0 default route via ${MC_ETH_GATEWAY}, DNS [${MC_ETH_DNS_LIST:-none}]"
 elif [[ -n "${MC_ETH_DNS_LIST}" ]]; then
     echo "    NOTE: MC_ETH_DNS is set but MC_ETH_GATEWAY is empty — names will only" \
-         "resolve if the DNS server is on 192.168.10.x itself."
+         "resolve if the DNS server is on 192.168.100.x itself."
 fi
 export MC_ETH_DNS_LIST MC_ETH_ROUTES_YAML
 
@@ -253,6 +270,11 @@ trap 'rm -f "${RENDERED_NETPLAN}"' EXIT
 envsubst '$MC_ETH_MAC $MC_ETH_IP $MC_ETH_DNS_LIST $MC_ETH_ROUTES_YAML' \
     < "${REPO_ROOT}/config/netplan/01-drone-mc.yaml" > "${RENDERED_NETPLAN}"
 install -m 600 "${RENDERED_NETPLAN}" /etc/netplan/01-drone-mc.yaml
+if [[ -n "${SSH_CONNECTION:-}" ]] &&
+   ! ip -4 -o addr show 2>/dev/null | grep -qF " ${MC_ETH_IP}/"; then
+    echo "    NOTE: eth0 is moving to MC_ETH_IP=${MC_ETH_IP} — this SSH session will drop" \
+         "if it rides the old address. Reconnect on ${MC_ETH_IP} (or use the console)."
+fi
 netplan apply
 
 # Even with no rival config left, netplan apply doesn't drop addresses a

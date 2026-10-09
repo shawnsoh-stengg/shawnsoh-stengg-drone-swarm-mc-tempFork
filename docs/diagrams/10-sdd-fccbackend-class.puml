@@ -280,7 +280,7 @@ end note
 note right of XrceDdsBackend
   Production.
   ttyTHS1  @921600 baud  (primary)
-  192.168.10.31  UDP:8888  (secondary)
+  192.168.100.31  UDP:8888  (secondary)
   Micro XRCE-DDS Agent bridges
   ROS 2 ↔ PX4 uORB topic bus.
   All 7 subscribed topics updated
@@ -289,7 +289,7 @@ note right of XrceDdsBackend
   upload_mission()/update_mission_item()
   do NOT use DDS — mission_sock_fd_ is a
   separate MAVLink 2/UDP socket to
-  192.168.10.31:14555, always active
+  192.168.100.31:14555, always active
   regardless of FCC_TRANSPORT.  [IR-007]
   ──────────────────────────────
   stream_offboard_setpoint() (FCC-009) DOES

@@ -21,7 +21,7 @@ Layer 2 — FCC Abstraction
   fcc_bridge_node  <-->  FccBackend (XrceDdsBackend | MavlinkUdpBackend)
 
 Layer 1 — Hardware & Transport
-  ttyTHS1 serial (uXRCE-DDS), 192.168.10.x ethernet, CSI camera, MANET radio
+  ttyTHS1 serial (uXRCE-DDS), 192.168.100.x ethernet, CSI camera, MANET radio
 ```
 
 Layers communicate strictly downward-to-upward through ROS 2 topics under the `/mc/` namespace (see below) — a Layer 4 node never talks to Layer 1 hardware directly, it goes through `fcc_bridge_node`. See diagram `02` (`docs/diagrams/02-software-architecture.puml`) for the full node topology.
@@ -50,7 +50,7 @@ MANET link).
 - **MAVLink channel separation** — three distinct channels share the wire:
   - **Channel A**: GCS→FCC, standard PX4 autopilot traffic, routed by `mavlink-router`.
   - **Channel B**: GCS→MC, raw MAVLink v2 over a loopback socket in `gcs_mavlink_node` (MAVROS is *not* this channel's transport — see `SDD-MC-001.md` §11.1).
-  - **Channel C / MC↔FCC mission protocol**: standard MAVLink mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) on a dedicated UDP port (`FCC_ETH_IP:14555`, default `192.168.10.31`), since stock PX4 has no DDS-writable mission topic. Not routed by `mavlink-router`. The FCC has a single IPv4 address on the shared 192.168.10.x subnet (PX4/NuttX supports only one), so MC↔FCC unicast shares that segment with GCS and peer traffic rather than a private subnet.
+  - **Channel C / MC↔FCC mission protocol**: standard MAVLink mission protocol (`MISSION_COUNT`/`MISSION_ITEM_INT`/`MISSION_ACK`) on a dedicated UDP port (`FCC_ETH_IP:14555`, default `192.168.100.31`), since stock PX4 has no DDS-writable mission topic. Not routed by `mavlink-router`. The FCC has a single IPv4 address on the shared 192.168.100.x subnet (PX4/NuttX supports only one), so MC↔FCC unicast shares that segment with GCS and peer traffic rather than a private subnet.
 - **Threading model** — every node runs a `MultiThreadedExecutor` with a reentrant callback group for subscriptions and a mutually-exclusive group for timers; control loops use a 10 ms `WallTimer` plus atomic state.
 - **Mission state machine** — 11 states in `mission_manager_node`: `PREFLIGHT → ARMING → TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND`, with a `FAULT → RTL` escape path from any state. GCS override must be honored within 500 ms (FR-003). See diagram `04`.
 

@@ -50,7 +50,7 @@ check "zenoh-bridge-dds.json5 present"     test -f "${TMPL}"
 # shape as before this change.
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "${RENDER_DIR}"' EXIT
-: "${CONNECT_ENDPOINTS:=\"tcp/192.168.10.12:7447\", \"tcp/192.168.10.13:7447\"}"
+: "${CONNECT_ENDPOINTS:=\"tcp/192.168.100.12:7447\", \"tcp/192.168.100.13:7447\"}"
 export CONNECT_ENDPOINTS
 CONFIG="${RENDER_DIR}/zenoh-bridge-dds.json5"
 envsubst '$CONNECT_ENDPOINTS' < "${TMPL}" > "${CONFIG}"

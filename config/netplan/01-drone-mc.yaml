@@ -26,8 +26,8 @@
 # /etc/drone-mc/environment, re-run 01-install-os.sh — no hand-editing of
 # this file or the rendered netplan output.
 #
-# eth0 carries one address, MC_ETH_IP/24 (192.168.10.11 by default), on
-# the single 192.168.10.x subnet shared by the GCS, peer MCs (HIF-004) and
+# eth0 carries one address, MC_ETH_IP/24 (192.168.100.11 by default), on
+# the single 192.168.100.x subnet shared by the GCS, peer MCs (HIF-004) and
 # this drone's own Pixhawk (HIF-002, FCC_ETH_IP). There is no separate
 # MC<->FCC subnet: the Pixhawk's NuttX stack has only one IPv4 address.
 #

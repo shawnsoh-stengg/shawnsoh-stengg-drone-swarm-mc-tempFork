@@ -542,9 +542,9 @@ TEST_F(GcsMavlinkNodeTest, MissionUploadAssemblesAllItemKindsWithDroppedRetriedI
     make_item(
       4, kCmdSearchAreaVertex, /*vertex_index=*/ 1.0F, /*total=*/ 2.0F, 11000000, 1031000000,
       0.0F),
-    // seq5: swarm peer entry — drone_id=3, IP reconstructed as 192.168.10.13.
+    // seq5: swarm peer entry — drone_id=3, IP reconstructed as 192.168.100.13.
     make_item(
-      5, kCmdSwarmPeerEntry, 0.0F, 0.0F, /*drone_id=*/ 3, /*octet3=*/ 10, /*octet4=*/ 13.0F),
+      5, kCmdSwarmPeerEntry, 0.0F, 0.0F, /*drone_id=*/ 3, /*octet3=*/ 100, /*octet4=*/ 13.0F),
   };
 
   std::atomic<bool> mock_gcs_ok{false};
@@ -610,7 +610,7 @@ TEST_F(GcsMavlinkNodeTest, MissionUploadAssemblesAllItemKindsWithDroppedRetriedI
 
   ASSERT_EQ(up.swarm_manifest.size(), 1U);
   EXPECT_EQ(up.swarm_manifest[0].drone_id, 3U);
-  EXPECT_EQ(up.swarm_manifest[0].ip_address, "192.168.10.13");
+  EXPECT_EQ(up.swarm_manifest[0].ip_address, "192.168.100.13");
 }
 
 // No mock GCS response at all — the 2 s mission_upload_timeout_s_ override

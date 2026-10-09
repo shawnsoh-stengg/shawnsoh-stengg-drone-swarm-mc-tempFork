@@ -55,7 +55,7 @@ orchestrator`, listed in the table above.
 
 `gnss_sim_node` streams a synthetic GPS fix to the FCC as `HIL_GPS`
 (`:14557`, ICD §3.3b), so it must only ever run because an operator started
-it for an indoor or HITL-bench session. Its unit has **no `[Install]`
+it for an indoor flight or a real-FCC bench (`FT-006`) session. Its unit has **no `[Install]`
 section**, and `02-install-systemd-units.sh` installs it but skips
 enabling it. Earlier installs are actively `disable`d via
 `ON_DEMAND_UNITS`. `drone-mc.target` never brings it up. Its
@@ -301,7 +301,7 @@ value.
 `/etc/drone-mc/environment` — set `DRONE_ID`, `MC_VERSION` (image tag),
 `FCC_TRANSPORT` (`serial` for production ttyTHS1, `ethernet` for the
 UDP `:8888` fallback to `FCC_ETH_IP`), and this vehicle's own network identity
-(`MC_ETH_MAC`/`MC_ETH_IP`, `FCC_ETH_IP` — the Pixhawk's single 192.168.10.x
+(`MC_ETH_MAC`/`MC_ETH_IP`, `FCC_ETH_IP` — the Pixhawk's single 192.168.100.x
 address; the old `MC_ETH_INTERNAL_IP`/`FCC_GCS_IP` are retired and migrated
 automatically by `01-install-os.sh`/`02-install-systemd-units.sh`). Full
 variable reference in `config/environment`'s own comments. That one file
@@ -328,7 +328,7 @@ bringing up drone N is:
    (this unit's real NIC MAC — see the file that used to hardcode this,
    `config/netplan/01-drone-mc.yaml`, for why it must be matched by MAC
    not interface name), `MC_ETH_IP`, `FCC_ETH_IP`
-   (this unit's own Pixhawk address — its only one, on 192.168.10.x).
+   (this unit's own Pixhawk address — its only one, on 192.168.100.x).
 4. Re-run `01-install-os.sh` (renders + applies netplan with the real
    values) and `02-install-systemd-units.sh` (renders the mavlink-router
    confs and the zenoh peer list).
@@ -336,6 +336,84 @@ bringing up drone N is:
 No `.conf`/`.yaml` file under `/etc/drone-mc` or `/etc/netplan` is ever
 hand-edited directly — `GCS_IP` and the channel ports stay fleet-wide
 constants (same value on every drone) and are not per-drone inputs.
+
+### Changing an ID or address on a deployed drone
+
+Each of these values is copied into places that nothing re-checks: the
+FCC's SD card, the FCC's parameters, other drones' rendered configs, and
+GCS-side tools. If one copy is missed, there's usually no error. A
+channel just stops carrying data. On the 2026-10-02 FT-006 bench, three
+missed copies (`DRONE_ID`, `extras.txt -t`, a stale environment file)
+each silently blocked `HIL_GPS`.
+
+**Two rules for every change:**
+
+- **Edit only `/etc/drone-mc/environment` on the Jetson.** Never edit the
+  repo's `config/environment`: it's only the seed for a new unit, and
+  reinstalling from it wipes this unit's values. After editing, check the
+  file still loads with `bash -n /etc/drone-mc/environment`. A broken line
+  makes `01`/`02` stop with a confusing error.
+- **Re-run the scripts and restart.** Run `01-install-os.sh` (netplan) and
+  `02-install-systemd-units.sh` (mavlink-router confs, zenoh peers), then
+  `sudo systemctl restart drone-mc.target`. Containers read the
+  environment only at startup. If `drone-mc-indoor-nav` is in use, restart
+  it too, since it isn't part of the target. Then re-anchor it.
+
+#### `MAV_SYS_ID` / `DRONE_ID` (always change both together)
+
+| Where | What to change / check |
+|---|---|
+| FCC | `param set MAV_SYS_ID <n>`, then `param save` and reboot |
+| Jetson `/etc/drone-mc/environment` | `DRONE_ID=<n>`. Every MAVLink sender on the MC uses it as its sysid: `fcc_bridge` (mission protocol, XRCE `source_system`), `gcs_mavlink_node`, `mission_orchestrator_node`, MAVROS `target_system_id` (`docker/gcs-comms/entrypoint.sh`), and `gnss_sim_node`. PX4 silently drops `HIL_GPS` whose sysid ≠ `MAV_SYS_ID` (ICD §3.3b) |
+| `config/fleet.yaml` (repo, fleet-wide) | The `<n>: <ip>` line must give this drone's `MC_ETH_IP`. It's keyed by `DRONE_ID`, so changing the ID moves the drone to a different line. Re-run `02` on **every** drone: each one's zenoh peer list comes from this file, minus its own ID |
+| Fleet | IDs must be unique. Two drones on one ID collide in QGC and in the zenoh peer list |
+| GCS-side tools | Hardcoded target sysids, e.g. `tools/ft001_ac2_channel_b/ft001_ac2_channel_b.py` `DRONE_ID`. QGC shows the vehicle under its new ID |
+| Check | Jetson: `sudo journalctl -u drone-mc-indoor-nav` start line shows `sysid=<n>`. FCC: `mavlink status` shows `sysid: <n>, compid:191` on the Channel A instance; after anchoring, `listener sensor_gps` `device_id` address = `0x<n>` |
+
+#### FCC IP (`FCC_ETH_IP`)
+
+| Where | What to change / check |
+|---|---|
+| FCC | `/fs/microsd/net.cfg` `IPADDR` (`netman show` / `netman update`), then reboot. It must stay on 192.168.100.x, because there is no other MC↔FCC subnet |
+| Jetson `/etc/drone-mc/environment` | `FCC_ETH_IP`. Used by: mavlink-router Channel A's `FCC_CHANNEL_A` endpoint (re-rendered by `02`), `fcc_bridge` (XRCE UDP `:8888` when `FCC_TRANSPORT=ethernet`, mission protocol `:14555`, flow relay `:14556` source), and `gnss_sim_node` (`HIL_GPS` to `:14557`) |
+| GCS / bench tools | Anything that talks to the FCC directly instead of through the MC, e.g. a QGC comm link aimed at the FCC, or `tcpdump … dst host` filters in the FT-006 procedure |
+| Check | `ping $FCC_ETH_IP`. FCC `mavlink status`: the `:14557` instance shows rx > 0 once anchored. QGC still connects through the MC on `:14550` |
+
+#### MC IP (`MC_ETH_IP`)
+
+| Where | What to change / check |
+|---|---|
+| Jetson `/etc/drone-mc/environment` | `MC_ETH_IP`. Re-run `01` (netplan). SSH on the old address drops, so do it from the console or reconnect on the new IP. Run `ip -4 addr show eth0` and check there's exactly one address. If `01` warns that another config also claims eth0, delete the NetworkManager profile it names |
+| FCC `/fs/microsd/etc/extras.txt` | The `:14556` relay's `mavlink start … -t <MC_ETH_IP>` (`HID-MC-001.md` §10.6 D), then reboot the FCC. Nothing on the MC can fix this. With a stale `-t`, `mavlink status` shows `tx 0 / txerr > 0` on that instance, `ft006_bench.py watch` shows `baro: none`, and `gnss_sim_node` never sends |
+| FCC params (only if `FCC_TRANSPORT=ethernet`) | `UXRCE_DDS_AG_IP` = the new MC IP as a **signed** int32 (`HID-MC-001.md` §4.2) |
+| `config/fleet.yaml` (repo, fleet-wide) | This drone's `<DRONE_ID>: <ip>` line. Re-run `02` on every **other** drone so their zenoh peer lists pick it up |
+| GCS side | QGC comm link and any tool aimed at the MC: `tools/ft001_ac2_channel_b/ft001_ac2_channel_b.py` `MC_IP`, `mission-orchestrator-sim`'s MC address argument, SSH configs |
+| Check | FCC `mavlink status`: the `:14556` instance shows tx > 0 with txerr ≈ 0. Jetson: `sudo tcpdump -ni eth0 udp port 14556` sees packets. `watch` shows `baro=… age<1s` |
+
+#### GCS IP (`GCS_IP`)
+
+| Where | What to change / check |
+|---|---|
+| Jetson `/etc/drone-mc/environment`, on **every** drone | `GCS_IP` is a fleet-wide constant. Re-run `02` on each drone: it re-renders mavlink-router Channel B's `GCS_CHANNEL_B` and Channel C's endpoints, which send MC→GCS to `GCS_IP`. Then restart `drone-mc-mavlink-router` |
+| `config/environment` (repo) | Update the default too, so new units get the right value (this is the one case where the repo default should change) |
+| Not affected | Channel A. QGC connects *to* the MC's `:14550` server endpoint, so the MC never needs the GCS address for it |
+| Check | On the GCS: Channel B telemetry arrives on `:14551` (`tools/ft001_ac2_channel_b` receive side), and Channel C's MAVFTP plan library answers (`mission-orchestrator-sim`) |
+
+#### Moving the drone subnet (192.168.10.x → 192.168.100.x, 2026-10-06)
+
+The old `192.168.10.0/24` drone network collided with the AI.R hangar Wi-Fi, so every address moved to `192.168.100.0/24` with its host octet unchanged (`.11` MC, `.31` FCC, `.10` GCS, `.1` MANET AU, `.200+` gimbal camera; bench `orin-nx` is now MC `.39` / FCC `.19`). This is every row of the three tables above at once, for every device on the segment. Move the whole drone at once: nothing on `.10.x` can talk to anything on `.100.x`.
+
+| Where | What to change / check |
+|---|---|
+| Jetson `/etc/drone-mc/environment` | Automatic: `01` and `02` rewrite every `192.168.10.N` value (`MC_ETH_IP`, `FCC_ETH_IP`, `GCS_IP`, `MC_ETH_GATEWAY`, `MC_ETH_DNS`) to `192.168.100.N` and print each change. Pull the repo (or port this commit to the org repo), then run `sudo ./scripts/01-install-os.sh` from the console, because SSH on `.10.x` drops at `netplan apply`, then `sudo ./scripts/02-install-systemd-units.sh` and `01b`/`02b` |
+| FCC `/fs/microsd/net.cfg` | `IPADDR=192.168.100.<n>` (`NETMASK=255.255.255.0`; also `ROUTER` if set). Reboot, then confirm with `netman show` |
+| FCC `/fs/microsd/etc/extras.txt` | The `:14556` relay's `mavlink start … -t 192.168.100.<MC octet>`, then reboot |
+| FCC params (only if `FCC_TRANSPORT=ethernet`) | `UXRCE_DDS_AG_IP`: default MC `192.168.100.11` = `-1062706165`. For another MC: `python3 -c "import ipaddress as i; print(int(i.ip_address('192.168.100.39')) - 2**32)"` |
+| MANET radios (air units, ground unit) | Each radio's own management/bridge IP (`.1` AU on-drone gateway, `.22`/`.23` AUs, `.63` GU), using the radio vendor's tool |
+| Gimbal IP camera (HIF-007) | Its static IP (`192.168.100.200+`), using the camera vendor's tool |
+| GCS laptop | Static IP `192.168.100.10/24` on the drone-facing NIC. Update QGC comm links, SSH configs, and any `--mc-host`/`MC_IP` arguments |
+| Repo | Already done: `config/environment`, `config/fleet.yaml`, smoke-test defaults, tools, docs. Re-render `docs/diagrams/*.png` if you edit a `.puml` |
+| Check | Jetson `ip -4 addr show eth0` shows exactly one `192.168.100.x/24` address. `ping $FCC_ETH_IP`. The checks in the MC IP and FCC IP sections above. QGC connects on `192.168.100.<MC>:14550`. The hangar Wi-Fi is still reachable from the GCS on its own NIC |
 
 ## Known deployment gaps
 
@@ -382,7 +460,7 @@ constants (same value on every drone) and are not per-drone inputs.
   including `08` (Micro XRCE-DDS Agent source) and `04`. Their DNS pre-flight
   check fails fast. Either give the Jetson a route out, or build images where
   there is network and `docker save`/`docker load` them across. For a
-  persistent route out, set `MC_ETH_GATEWAY` (e.g. `192.168.10.1`) and
+  persistent route out, set `MC_ETH_GATEWAY` (e.g. `192.168.100.1`) and
   `MC_ETH_DNS` (e.g. `8.8.8.8,1.1.1.1`) in `/etc/drone-mc/environment` and
   re-run `01-install-os.sh`. Leave both empty on flight units.
 - **`video_downlink` has no deployment story yet at all** — no unit file,
@@ -400,7 +478,7 @@ sudo systemctl stop drone-mc.target
 systemctl status drone-mc.target
 systemctl list-dependencies drone-mc.target --no-pager
 
-# Indoor/HITL session only (start-on-demand, never in the boot set)
+# Indoor flight / real-FCC bench (FT-006) only (start-on-demand, never in the boot set)
 sudo systemctl start drone-mc-indoor-nav
 sudo systemctl stop drone-mc-indoor-nav
 

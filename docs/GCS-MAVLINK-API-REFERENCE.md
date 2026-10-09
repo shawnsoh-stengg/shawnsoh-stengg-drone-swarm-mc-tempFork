@@ -19,7 +19,7 @@ Channel B (`gcs_mavlink_node`) implements the full custom telemetry/status set (
 ### Transport
 
 - MAVLink 2 over UDP, routed by its own `mavlink-router` instance/config (`mavlink-router-channel-b.conf`) — isolated from Channel A and Channel C.
-- GCS laptop: `192.168.10.10`. Port `14551` is the GCS's own receive port (MC→GCS — `mavlink-router`'s `GCS_CHANNEL_B` endpoint, a fixed remote address:port). Port `14552` is the MC's own receive port (GCS→MC — `GCS_MC_RECV`, bound `0.0.0.0:14552` on the MC). `ICD-MC-001.md`'s §11.2/ §11.4 summary tables previously had this backwards; §4.1/§4.2's own `mavlink-router-channel-b.conf` snippet, the real `config/mavlink-router-channel-b.conf`, and `scripts/09b-smoke-test-routing.sh` all agree with the direction stated here. - `gcs_mavlink_node` itself listens on a loopback socket `GCS_MAVLINK_LOOPBACK_PORT` (env, default `14560`), bound to `INADDR_LOOPBACK` — `mavlink-router` is the only process with a real network-facing socket for this channel.
+- GCS laptop: `192.168.100.10`. Port `14551` is the GCS's own receive port (MC→GCS — `mavlink-router`'s `GCS_CHANNEL_B` endpoint, a fixed remote address:port). Port `14552` is the MC's own receive port (GCS→MC — `GCS_MC_RECV`, bound `0.0.0.0:14552` on the MC). `ICD-MC-001.md`'s §11.2/ §11.4 summary tables previously had this backwards; §4.1/§4.2's own `mavlink-router-channel-b.conf` snippet, the real `config/mavlink-router-channel-b.conf`, and `scripts/09b-smoke-test-routing.sh` all agree with the direction stated here. - `gcs_mavlink_node` itself listens on a loopback socket `GCS_MAVLINK_LOOPBACK_PORT` (env, default `14560`), bound to `INADDR_LOOPBACK` — `mavlink-router` is the only process with a real network-facing socket for this channel.
 - MC `system_id` = the drone's numeric ID; `component_id = 191` (`MAV_COMP_ID_ONBOARD_COMPUTER`). GCS operator `system_id = 255`.
 
 ### Messages: GCS → MC
@@ -154,7 +154,7 @@ Params confirmed in `ws/src/gcs_comms/params/default.yaml`.
 
 - A third, fully isolated MAVLink channel — separate `mavlink-router` config from both Channel A and Channel B.
 - Ports: `14571` UDP is the Orchestrator's own receive port (MC→Orchestrator — `ORCHESTRATOR_CHANNEL_C`, a fixed remote address:port); `14572` UDP is the MC's own receive port (Orchestrator→MC — `ORCHESTRATOR_MC_RECV`, bound `0.0.0.0:14572` on the MC); `14580` UDP is the loopback from `mavlink-router` to `mission_orchestrator_node` (`ORCHESTRATOR_MAVLINK_LOOPBACK_PORT`, default `14580`). Same direction convention as Channel B — see its transport note above.
-- Orchestrator is assumed co-located with the GCS laptop, `192.168.10.10`.
+- Orchestrator is assumed co-located with the GCS laptop, `192.168.100.10`.
 - MC `component_id = 191` (same as Channel B). Orchestrator `system_id = 255`, `component_id = 190` (`MAV_COMP_ID_MISSIONPLANNER`).
 - 🧭 **MAVLink 2 packet signing is required by the spec but not yet implemented** — open item.
 
