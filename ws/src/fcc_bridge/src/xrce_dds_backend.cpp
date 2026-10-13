@@ -105,7 +105,7 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
 
   mission_sock_fd_ = open_mission_socket();
 
-  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.10.31");
+  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.100.31");
   const int mission_port = std::stoi(env_or("FCC_MISSION_PORT", "14555"));
   sockaddr_in target_addr{};
   target_addr.sin_family = AF_INET;

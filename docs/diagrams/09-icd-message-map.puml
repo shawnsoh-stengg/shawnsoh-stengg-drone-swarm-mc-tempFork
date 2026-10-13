@@ -40,18 +40,18 @@ skinparam sequence {
 ' ═══════════════════════════════════════════════════
 ' PARTICIPANTS
 ' ═══════════════════════════════════════════════════
-participant "FCC\nPixhawk 6X\n192.168.10.31" as FCC #FFD4A8
-participant "MISSION COMPUTER (MC)\n192.168.10.11  ·  Jetson Orin NX 16GB" as MC #A8CCEE
-participant "GCS\nQGroundControl\n192.168.10.10" as GCS #B8DCA8
+participant "FCC\nPixhawk 6X\n192.168.100.31" as FCC #FFD4A8
+participant "MISSION COMPUTER (MC)\n192.168.100.11  ·  Jetson Orin NX 16GB" as MC #A8CCEE
+participant "GCS\nQGroundControl\n192.168.100.10" as GCS #B8DCA8
 participant "Mission Orchestrator\n(another team's app)\n[not yet built]" as ORCH #C8D8F0
-participant "Swarm Peers\n192.168.10.12+\n(MANET)" as PEERS #D8C0F0
+participant "Swarm Peers\n192.168.100.12+\n(MANET)" as PEERS #D8C0F0
 participant "IMX219\nCamera" as CAM #EDE0F8
-participant "Gimbal\nIP Camera\n192.168.10.200" as GIMCAM #EDE0F8
+participant "Gimbal\nIP Camera\n192.168.100.200" as GIMCAM #EDE0F8
 
 ' ═══════════════════════════════════════════════════
 ' IFD-001: MC ↔ FCC  (uXRCE-DDS)
 ' ═══════════════════════════════════════════════════
-== IFD-001 · MC ↔ FCC · uXRCE-DDS · ttyTHS1 921600 / 192.168.10.31 UDP:8888 ==
+== IFD-001 · MC ↔ FCC · uXRCE-DDS · ttyTHS1 921600 / 192.168.100.31 UDP:8888 ==
 
 FCC -[#E07000]> MC : <color:#E07000>vehicle_local_position</color>  ≥10 Hz\n  x,y,z (NED m)  ·  vx,vy,vz (m/s)  ·  heading (rad)  ·  xy_valid, z_valid
 FCC -[#E07000]> MC : <color:#E07000>vehicle_global_position</color>  ≥5 Hz\n  lat,lon (degE7)  ·  alt_msl (m)  ·  eph,epv (m)
@@ -73,7 +73,7 @@ note over FCC, MC #FFF0E0
   vehicle_command, sole authority mission_manager_node  [FCC-009]
 end note
 
-== IFD-001b · MC ↔ FCC · Mission Protocol (MAVLink 2/UDP) · 192.168.10.31:14555 — always ethernet ==
+== IFD-001b · MC ↔ FCC · Mission Protocol (MAVLink 2/UDP) · 192.168.100.31:14555 — always ethernet ==
 
 note over FCC, MC #F5ECF5
   Stock PX4 has no DDS-writable mission topic — items live in FCC-side
@@ -117,7 +117,7 @@ end note
 ' ═══════════════════════════════════════════════════
 ' IFD-003: MC ↔ Swarm Peers  (Swarm Protocol / UDP)
 ' ═══════════════════════════════════════════════════
-== IFD-003 · MC ↔ Peers · Swarm Protocol/UDP · MANET 192.168.10.x · :14900 hb  :14901 coord ==
+== IFD-003 · MC ↔ Peers · Swarm Protocol/UDP · MANET 192.168.100.x · :14900 hb  :14901 coord ==
 
 MC -[#7030A0]> PEERS : <color:#7030A0>SWARM_HEARTBEAT (0x01)</color>  1 Hz  →  all peers  ·  40 bytes\n  timestamp_us  ·  lat_e7, lon_e7, alt_mm  ·  vx,vy,vz\n  mission_phase  ·  battery_pct  ·  sensor_health  ·  fault_mask
 
@@ -161,9 +161,9 @@ end note
 ' ═══════════════════════════════════════════════════
 ' IFD-006: Gimbal Camera → MC  (RTSP/H.265)
 ' ═══════════════════════════════════════════════════
-== IFD-006 · Gimbal Camera → MC · RTSP/H.265 · 192.168.10.200:8554 (shared switch, HIF-007) ==
+== IFD-006 · Gimbal Camera → MC · RTSP/H.265 · 192.168.100.200:8554 (shared switch, HIF-007) ==
 
-GIMCAM -[#20A070]> MC : <color:#20A070>RTSP/H.265 stream</color>  ·  rtsp://192.168.10.200:8554/stream1\n  1920×1080 @ 30 FPS  →  perception_front_node (rtspsrc)
+GIMCAM -[#20A070]> MC : <color:#20A070>RTSP/H.265 stream</color>  ·  rtsp://192.168.100.200:8554/stream1\n  1920×1080 @ 30 FPS  →  perception_front_node (rtspsrc)
 
 note over GIMCAM, MC #C8E8D8
   Independent of IFD-004 (downward CSI camera) — different physical link,
@@ -175,9 +175,9 @@ end note
 ' ═══════════════════════════════════════════════════
 ' IFD-007: MC → GCS Video Downlink  (RTSP/H.265 + metadata)
 ' ═══════════════════════════════════════════════════
-== IFD-007 · MC → GCS Video Downlink · RTSP/H.265 + metadata · 192.168.10.11:8555 (Stream A) ==
+== IFD-007 · MC → GCS Video Downlink · RTSP/H.265 + metadata · 192.168.100.11:8555 (Stream A) ==
 
-MC -[#107850]> GCS : <color:#107850>Stream A: RTSP/H.265 + metadata</color>  ·  rtsp://192.168.10.11:8555/mc_video\n  time_usec  ·  track_id  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)\n  served by video_mux_node, re-encoding perception_front_node's frames + tracks/detections
+MC -[#107850]> GCS : <color:#107850>Stream A: RTSP/H.265 + metadata</color>  ·  rtsp://192.168.100.11:8555/mc_video\n  time_usec  ·  track_id  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)\n  served by video_mux_node, re-encoding perception_front_node's frames + tracks/detections
 
 note over MC, GCS #A8D8C0
   Independent of IFD-002 (MAVLink GCS channel) — separate RTSP server,
@@ -185,9 +185,9 @@ note over MC, GCS #A8D8C0
   traffic.  MC publishes /mc/video/downlink_status (≥1 Hz)  [IR-041, IR-042]
 end note
 
-== IFD-007 · MC → GCS Video Downlink · RTSP/H.265 + metadata · 192.168.10.11:8556 (Stream B, downward — additive, 2026-07-22) ==
+== IFD-007 · MC → GCS Video Downlink · RTSP/H.265 + metadata · 192.168.100.11:8556 (Stream B, downward — additive, 2026-07-22) ==
 
-MC -[#5050C0]> GCS : <color:#5050C0>Stream B: RTSP/H.265 + metadata</color>  ·  rtsp://192.168.10.11:8556/mc_video_down\n  time_usec  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)  (no track_id)\n  served by video_mux_node (same node, second pipeline), re-encoding camera_node's frames + perception_down_node's detections
+MC -[#5050C0]> GCS : <color:#5050C0>Stream B: RTSP/H.265 + metadata</color>  ·  rtsp://192.168.100.11:8556/mc_video_down\n  time_usec  ·  class_id  ·  confidence (×10000)  ·  lat,lon (degE7)  ·  alt (mm)  (no track_id)\n  served by video_mux_node (same node, second pipeline), re-encoding camera_node's frames + perception_down_node's detections
 
 note over MC, GCS #D0B8F8
   Additive to Stream A, independent failure domain — silence on one

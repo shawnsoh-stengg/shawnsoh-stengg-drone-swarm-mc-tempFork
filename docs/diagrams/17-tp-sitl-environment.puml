@@ -112,7 +112,7 @@ end note
 
 note bottom of SITL_HOST
   Everything runs on one host's loopback (127.0.0.1) — there is
-  no 192.168.10.x network, no iptables NAT, no MANET, and no
+  no 192.168.100.x network, no iptables NAT, no MANET, and no
   Docker in this test level. Fault injection is real, not
   simulated: PX4-side MAV_CMD_INJECT_FAILURE for battery,
   withheld MAVLink heartbeats for GCS link loss (test_10b —

@@ -1,6 +1,6 @@
 # drone-mc-indoor-nav.service — gnss_sim_node (indoor_nav): synthetic
 # indoor GNSS fix streamed to the FCC as HIL_GPS (ICD §3.3b), for indoor /
-# HITL-bench flights only.
+# real-FCC bench (FT-006) sessions only.
 #
 # START-ON-DEMAND, deliberately NOT part of drone-mc.target's boot set:
 # there is no [Install] section, and 02-install-systemd-units.sh skips it

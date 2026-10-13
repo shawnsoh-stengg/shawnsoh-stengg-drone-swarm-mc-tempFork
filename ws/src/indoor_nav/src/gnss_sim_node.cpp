@@ -163,7 +163,7 @@ GnssSimNode::GnssSimNode(const rclcpp::NodeOptions & options)
   // socket directly, since it is the only producer and this is a one-way
   // stream (this ticket's own AC: "a direct point-to-point UDP send if
   // routing isn't needed").
-  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.10.31");
+  const std::string fcc_ip = env_or("FCC_ETH_IP", "192.168.100.31");
   const int hil_gps_port = std::stoi(env_or("FCC_GPS_INPUT_PORT", "14557"));
   hil_gps_target_addr_.sin_family = AF_INET;
   hil_gps_target_addr_.sin_port = htons(static_cast<uint16_t>(hil_gps_port));

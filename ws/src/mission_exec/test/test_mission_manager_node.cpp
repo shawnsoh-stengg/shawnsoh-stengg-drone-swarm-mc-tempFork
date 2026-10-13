@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -290,6 +291,46 @@ protected:
       spin_until(
         {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::INGRESS);},
         std::chrono::seconds(2)));
+  }
+
+  // EXEC-006: advance_to_ingress(), then GCS END_MISSION -> RETURN -> LAND
+  // with the FCC still armed and at home.
+  void advance_to_land()
+  {
+    advance_to_ingress();
+    send_gcs_command(kMcCmdEndMission, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+    ASSERT_TRUE(
+      spin_until(
+        {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+        std::chrono::seconds(2)));
+    auto vs = good_vehicle_state();
+    vs.arming_state = kArmingStateArmed;
+    pub_vehicle_state_->publish(vs);
+    ASSERT_TRUE(
+      spin_until(
+        {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::LAND);},
+        std::chrono::seconds(2)));
+  }
+
+  // EXEC-006: FCC reports landed and disarmed; waits for the recycle.
+  void land_and_disarm_to_preflight()
+  {
+    pub_vehicle_state_->publish(good_vehicle_state());
+    ASSERT_TRUE(
+      spin_until(
+        {node_, harness_},
+        [this] {return phase_reached(mc_msgs::msg::MissionPhase::PREFLIGHT);},
+        std::chrono::seconds(2)));
+  }
+
+  size_t restart_notice_count() const
+  {
+    return static_cast<size_t>(
+      std::count_if(
+        status_texts_.begin(), status_texts_.end(),
+        [](const mc_msgs::msg::StatusText::SharedPtr & msg) {
+          return msg->text.find("restart required") != std::string::npos;
+        }));
   }
 
   bool phase_reached(uint8_t phase) const
@@ -778,6 +819,9 @@ TEST_F(MissionManagerNodeTest, ReturnToLand_GuardTrueAtHomePositionSendsLandComm
       std::chrono::seconds(2)));
 
   auto vs = good_vehicle_state();
+  // Still armed: a disarmed FCC would recycle LAND straight on to PREFLIGHT
+  // (EXEC-006) before this test could observe LAND.
+  vs.arming_state = kArmingStateArmed;
   vs.x = 0.0F;
   vs.y = 0.0F;  // within home_position_tolerance_m_ of the NED origin
   pub_vehicle_state_->publish(vs);
@@ -1097,4 +1141,248 @@ TEST_F(MissionManagerNodeTest, PreArmChecks_ReasonClearsOnceConditionIsFixed)
     spin_until(
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
       std::chrono::seconds(2)));
+}
+
+// --- EXEC-006: LAND -> PREFLIGHT recycle (normal end) / terminal FAULT ---
+
+TEST_F(MissionManagerNodeTest, FullMissionEndsInPreflightAfterLandAndDisarm)
+{
+  advance_to_ingress();
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  mc_msgs::msg::IsrRole role;
+  role.all_peers_acked = true;
+  pub_isr_role_->publish(role);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_},
+      [this] {return phase_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION);},
+      std::chrono::seconds(2)));
+
+  mc_msgs::msg::VoronoiCell cell;
+  cell.upload_id = 42;
+  pub_voronoi_cell_->publish(cell);
+  const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
+  nav_msgs::msg::Path path;
+  path.poses = {geometry_msgs::msg::PoseStamped{}};
+  pub_coverage_path_->publish(path);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_},
+      [this, uploads_before_coverage_path] {
+        return fcc_mission_uploads_.size() > uploads_before_coverage_path;
+      },
+      std::chrono::seconds(2)));
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
+      std::chrono::seconds(2)));
+
+  // FCC mission complete -> RETURN; still armed at home (z irrelevant) -> LAND.
+  vs.nav_state = kNavStateAutoLoiter;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::LAND);},
+      std::chrono::seconds(2)));
+
+  land_and_disarm_to_preflight();
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+}
+
+TEST_F(MissionManagerNodeTest, GcsAbortEndsInPreflightAfterLandAndDisarm)
+{
+  advance_to_land();
+  land_and_disarm_to_preflight();
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+}
+
+TEST_F(MissionManagerNodeTest, LandStaysUntilDisarmedAndStationary)
+{
+  advance_to_land();
+  auto vs = good_vehicle_state();  // disarmed...
+  vs.vz = 2.0F;  // ...but still descending (e.g. an RC kill in the air)
+  pub_vehicle_state_->publish(vs);
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::LAND);
+
+  land_and_disarm_to_preflight();
+}
+
+TEST_F(MissionManagerNodeTest, RecycleRefusesRearmUntilNewUploadAndAuthorisation)
+{
+  advance_to_land();
+  std::ifstream persisted_before(mission_upload_path_);
+  ASSERT_TRUE(persisted_before.good());
+  land_and_disarm_to_preflight();
+
+  // The flown upload (and its ARM authorisation) is gone, in memory and on
+  // disk, so the next mission can't arm off it (FR-010).
+  const size_t commands_after_recycle = send_commands_.size();
+  pub_vehicle_state_->publish(good_vehicle_state());
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+  EXPECT_EQ(send_commands_.size(), commands_after_recycle);
+  const auto report = node_->pre_arm_check_report();
+  EXPECT_FALSE(report.passed);
+  EXPECT_NE(
+    std::find(
+      report.failed_checks.begin(), report.failed_checks.end(), "no mission upload received"),
+    report.failed_checks.end());
+  std::ifstream persisted_after(mission_upload_path_);
+  EXPECT_FALSE(persisted_after.good());
+
+  // MC_CMD_ARM_AUTHORISE alone isn't enough without an upload.
+  send_gcs_command(50002 /*MC_CMD_ARM_AUTHORISE*/, {1.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+
+  // A new upload with ARM authorisation arms again.
+  pub_mission_upload_->publish(full_mission_upload(/*arm_authorised=*/ true));
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+      std::chrono::seconds(2)));
+}
+
+TEST_F(MissionManagerNodeTest, UploadReceivedMidMissionSurvivesRecycle)
+{
+  advance_to_land();
+  // Channel B accepts uploads in any phase: this one is the next mission's.
+  auto next = full_mission_upload(/*arm_authorised=*/ false);
+  next.upload_id = 43;
+  pub_mission_upload_->publish(next);
+  wait_for_ticks();
+  land_and_disarm_to_preflight();
+
+  const auto report = node_->pre_arm_check_report();
+  EXPECT_EQ(
+    std::find(
+      report.failed_checks.begin(), report.failed_checks.end(), "no mission upload received"),
+    report.failed_checks.end());
+  EXPECT_NE(
+    std::find(
+      report.failed_checks.begin(), report.failed_checks.end(),
+      "GCS ARM authorisation not set"),
+    report.failed_checks.end());
+}
+
+TEST_F(MissionManagerNodeTest, LateMissionAckAfterRecycleIsIgnored)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+      std::chrono::seconds(2)));
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+      std::chrono::seconds(2)));
+
+  // Start the FORMATION_SLOT upload but never ack it, then abort.
+  wait_for_ticks();
+  send_gcs_command(50001 /*MC_CMD_PHASE_TRANSITION*/, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
+      std::chrono::seconds(2)));
+  const uint32_t abandoned_upload_id = fcc_mission_uploads_.back()->upload_id;
+  send_gcs_command(kMcCmdEndMission, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::LAND);},
+      std::chrono::seconds(2)));
+  land_and_disarm_to_preflight();
+
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = abandoned_upload_id;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+  EXPECT_EQ(phases_.back()->phase, mc_msgs::msg::MissionPhase::PREFLIGHT);
+}
+
+TEST_F(MissionManagerNodeTest, HealthMonitorFaultStaysTerminalAndNotifiesRestartOnce)
+{
+  advance_to_ingress();
+  mc_msgs::msg::FaultEvent fault;
+  fault.fault_id = mc_msgs::msg::FaultEvent::FCC_LINK_LOST;
+  fault.severity = 2;
+  pub_fault_->publish(fault);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+      std::chrono::seconds(2)));
+  wait_for_ticks(3);
+  EXPECT_EQ(restart_notice_count(), 0U);  // still armed and flying
+
+  pub_vehicle_state_->publish(good_vehicle_state());  // FCC RTL'd, landed, disarmed
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return restart_notice_count() > 0;},
+      std::chrono::seconds(2)));
+  EXPECT_EQ(status_texts_.back()->severity, mc_msgs::msg::StatusText::SEVERITY_CRITICAL);
+  EXPECT_LE(status_texts_.back()->text.size(), 50U);  // ICD §4.7 relay limit
+
+  // Every way out is refused: a phase request, and a fresh upload.
+  const size_t acks_before = command_acks_.size();
+  send_gcs_command(50001 /*MC_CMD_PHASE_TRANSITION*/, {0.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this, acks_before] {return command_acks_.size() > acks_before;},
+      std::chrono::seconds(2)));
+  EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_REJECTED);
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  wait_for_ticks(10);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::FAULT);
+  EXPECT_EQ(restart_notice_count(), 1U);
+}
+
+TEST_F(MissionManagerNodeTest, GcsEmergencyFaultStaysTerminalAndNotifiesRestartOnce)
+{
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+      std::chrono::seconds(2)));
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+      std::chrono::seconds(2)));
+
+  // Operator takeover (MANUAL) is EMERGENCY-tier: FAULT, by design.
+  send_gcs_command(kMavCmdDoSetMode, {1.F, 1.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+      std::chrono::seconds(2)));
+
+  pub_vehicle_state_->publish(good_vehicle_state());  // pilot landed and disarmed
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return restart_notice_count() > 0;},
+      std::chrono::seconds(2)));
+  pub_vehicle_state_->publish(good_vehicle_state());
+  wait_for_ticks(10);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::FAULT);
+  EXPECT_EQ(restart_notice_count(), 1U);
 }

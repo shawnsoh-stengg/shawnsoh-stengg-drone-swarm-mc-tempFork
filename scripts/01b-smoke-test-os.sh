@@ -29,7 +29,7 @@ netplan_has_mc_ip() {
     # defaults — checking the hardcoded defaults here would fail on every
     # drone provisioned with its own IPs (see MC_ETH_MAC/IP override note
     # in config/netplan/01-drone-mc.yaml).
-    # eth0 has a single address (the FCC shares its 192.168.10.x subnet —
+    # eth0 has a single address (the FCC shares its 192.168.100.x subnet —
     # config/netplan/01-drone-mc.yaml); a leftover 192.168.12.x address means
     # this host still runs the pre-2026-09-25 dual-IP netplan and
     # 01-install-os.sh needs re-running.

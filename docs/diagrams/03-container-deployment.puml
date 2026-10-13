@@ -56,7 +56,7 @@ skinparam database {
 ' ═══════════════════════════════════════════════════
 ' HOST: Jetson Orin NX 16GB
 ' ═══════════════════════════════════════════════════
-node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.11" as JETSON {
+node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.100.11" as JETSON {
 
   ' ─── systemd target ───────────────────────────
   package "drone-mc.target  (systemd)" as TARGET #E8F4FF {
@@ -134,9 +134,9 @@ node "Jetson Orin NX 16GB\nJetPack 6.2.2 · Ubuntu 22.04 · aarch64\n192.168.10.
   package "Hardware Interfaces" as HW #F0F0F8 {
     artifact "ttyTHS1\n(serial → FCC)" as TTY
     artifact "/dev/video*\n(CSI camera)" as VIDDEV
-    artifact "eth0 192.168.10.11\n(ethernet → FCC 192.168.10.31)" as ETH_INT
-    artifact "192.168.10.x\n(MANET mesh)" as ETH_MESH
-    artifact "192.168.10.200\n(gimbal camera, shared switch, HIF-007)" as ETH_GIMCAM
+    artifact "eth0 192.168.100.11\n(ethernet → FCC 192.168.100.31)" as ETH_INT
+    artifact "192.168.100.x\n(MANET mesh)" as ETH_MESH
+    artifact "192.168.100.200\n(gimbal camera, shared switch, HIF-007)" as ETH_GIMCAM
   }
 
 }
@@ -150,9 +150,9 @@ package "Container Base Image\nros2-core\n(ROS 2 Humble · CycloneDDS, lo-only)"
 package "zenoh-bridge-dds.json5\n(cross-host DDS config)" as ZBD_CFG #F8F8D8
 
 ' ─── External references ──────────────────────
-node "Pixhawk 6X FCC\n192.168.10.31" as FCC_HW #FFECD8
-node "GCS · QGC\n192.168.10.10" as GCS_HW #D8EED8
-node "MANET Peers\n192.168.10.12+" as PEER_HW #F5ECF5
+node "Pixhawk 6X FCC\n192.168.100.31" as FCC_HW #FFECD8
+node "GCS · QGC\n192.168.100.10" as GCS_HW #D8EED8
+node "MANET Peers\n192.168.100.12+" as PEER_HW #F5ECF5
 
 ' ═══════════════════════════════════════════════════
 ' CONNECTIONS
@@ -183,14 +183,14 @@ VIDDEV --> SVC_CAM : "DeviceAllow /dev/video0"
 ETH_INT --> SVC_FCC
 ETH_GIMCAM .[#888888,dashed].> SVC_INGEST : "DeviceAllow (network_mode=host)\n(not built)"
 
-SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.10.31:8888"
+SVC_FCC --> FCC_HW : "uXRCE-DDS\nttyTHS1 / 192.168.100.31:8888"
 SVC_MLR --> GCS_HW : "MAVLink 2/UDP\nChannel A/B (+ Channel C\nfor SVC_ORCH below)"
 SVC_ORCH .[#4060C0].> GCS_HW : "MAVLink 2/UDP\nChannel C, routed via\nSVC_MLR — see diagram 05"
 SVC_FCC --> SVC_ORCH : "required by\n(GCS-006 unit dependency)"
 SVC_CAM --> SVC_VIS : "/camera/image_raw\n(cross-container, same-host DDS)"
 SVC_FCC --> SVC_VIS : "IMU pre-integration scale\n(cross-container, same-host DDS)"
-SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.10.x"
-SVC_ZENOH --> PEER_HW : "Zenoh mesh (DDS bridge)\nTCP :7447 / 192.168.10.x"
+SVC_SWARM --> PEER_HW : "Swarm protocol/UDP\n192.168.100.x"
+SVC_ZENOH --> PEER_HW : "Zenoh mesh (DDS bridge)\nTCP :7447 / 192.168.100.x"
 ZBD_CFG --> SVC_ZENOH : "bind mount\n/etc/drone-mc"
 SVC_INGEST .[#888888,dashed].> SVC_VIDEO : "/mc/perception/front/detections\n/mc/perception/front/tracks\n(same-host DDS, cross-container)\n(neither service built yet)"
 SVC_VIDEO .[#888888,dashed].> GCS_HW : "RTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of MAVLink — not built yet"

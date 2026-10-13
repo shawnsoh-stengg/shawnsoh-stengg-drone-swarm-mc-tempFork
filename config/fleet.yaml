@@ -1,7 +1,7 @@
 # config/fleet.yaml — fleet-wide drone_id -> eth0 (MANET-facing) IP
 # manifest (INFRA-008).
 #
-# Single source of truth for every drone's 192.168.10.x address (matching
+# Single source of truth for every drone's 192.168.100.x address (matching
 # CLAUDE.md's Network/IP Reference: MC #1 at .11, peer MCs at .12+).
 # scripts/02-install-systemd-units.sh reads this file to render each
 # drone's own zenoh-bridge-dds.json5 connect-endpoint peer list — every
@@ -14,6 +14,8 @@
 # for scripts/02-install-systemd-units.sh's parser to pick up. Add one
 # line per physical drone as the fleet grows; remove a line to retire one.
 drones:
-  1: 192.168.10.11
-  2: 192.168.10.12
-  3: 192.168.10.13
+  1: 192.168.100.31
+  2: 192.168.100.39
+  3: 192.168.100.36
+  4: 192.168.100.37
+  5: 192.168.100.38

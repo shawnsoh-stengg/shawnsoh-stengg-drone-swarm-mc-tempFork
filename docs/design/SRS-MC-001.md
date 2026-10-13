@@ -57,7 +57,7 @@ Requirements apply to:
 |---|---|
 | MC | Mission Computer — Jetson Orin NX 16GB running the drone AI software stack |
 | FCC | Flight Control Computer — Pixhawk 6X running PX4 v1.17 |
-| GCS | Ground Control Station — QGroundControl laptop at 192.168.10.10 |
+| GCS | Ground Control Station — QGroundControl laptop at 192.168.100.10 |
 | AU | Air Unit — MANET mesh datalink radio |
 | MANET | Mobile Ad-hoc Network — mesh radio linking GCS and all drones |
 | uXRCE-DDS | Micro XRCE-DDS bridge between PX4 uORB and ROS 2 |
@@ -104,7 +104,7 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 │  │  Mission Computer (MC)       │   │  Pixhawk 6X (FCC)  │  │
 │  │  Jetson Orin NX 16GB         │◄──►  PX4 v1.17 / NuttX │  │
 │  │  JetPack 6.2.2 / Ubuntu 22   │   │  uORB topics       │  │
-│  │  192.168.10.11               │   │  192.168.10.31     │  │
+│  │  192.168.100.11             │   │  192.168.100.31   │  │
 │  │                              │   └────────────────────┘  │
 │  │  ROS 2 Humble / CycloneDDS   │      ▲ uXRCE-DDS          │
 │  │  Docker / drone-mc.target    │      │ ttyTHS1 / 12.x eth  │
@@ -113,10 +113,10 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 └───────────┼─────────────────────────────────────────────────┘
             │
    ┌─────────┼─────────────────────────────────────────────┐
-   │         │          MANET MESH  192.168.10.x            │
+   │         │          MANET MESH  192.168.100.x          │
    │  ┌──────▼──────┐   ┌─────────────┐  ┌─────────────┐  │
    │  │  GCS / QGC   │   │  Peer MC #2 │  │  Peer MC #3 │  │
-   │  │192.168.10.10 │   │192.168.10.12│  │192.168.10.13│  │
+   │  │192.168.100.10 │ │192.168.100.12││192.168.100.13││
    │  └─────────────┘   └─────────────┘  └─────────────┘  │
    └────────────────────────────────────────────────────────┘
 ```
@@ -125,10 +125,10 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 
 | Node | IP Address | Role |
 |---|---|---|
-| Jetson MC | 192.168.10.11 | Mission Computer — this system (`MC_ETH_IP`, single eth0 address, per-drone) |
-| Pixhawk FCC | 192.168.10.31 | Flight Control Computer (`FCC_ETH_IP`, per-drone). Its only IPv4 address — PX4's NuttX stack supports one — so all MC↔FCC Ethernet traffic uses this same 192.168.10.x subnet; there is no separate internal subnet. |
-| QGC Laptop | 192.168.10.10 | Ground Control Station |
-| Peer MCs | 192.168.10.12+ | Other drone MCs in swarm |
+| Jetson MC | 192.168.100.11 | Mission Computer — this system (`MC_ETH_IP`, single eth0 address, per-drone) |
+| Pixhawk FCC | 192.168.100.31 | Flight Control Computer (`FCC_ETH_IP`, per-drone). Its only IPv4 address — PX4's NuttX stack supports one — so all MC↔FCC Ethernet traffic uses this same 192.168.100.x subnet; there is no separate internal subnet. |
+| QGC Laptop | 192.168.100.10 | Ground Control Station |
+| Peer MCs | 192.168.100.12+ | Other drone MCs in swarm |
 
 ### 2.4 MAVLink Channel Separation
 
@@ -138,7 +138,7 @@ The overarching goal is a GNSS-denied-capable autonomous drone that operates as 
 |---|---|---|
 | GCS → FCC | MAVLink 2/UDP | Standard PX4 autopilot channel. MC does not inject traffic. |
 | GCS → MC | MAVLink 2/UDP | Dedicated channel for mission upload and MC telemetry. Routed via mavlink-router on the MC. |
-| MC ↔ FCC | MAVLink 2/UDP | Ethernet, to the FCC's single 192.168.10.x address (`FCC_ETH_IP`). Mission protocol channel (stock PX4 has no uXRCE-DDS-writable mission topic). |
+| MC ↔ FCC | MAVLink 2/UDP | Ethernet, to the FCC's single 192.168.100.x address (`FCC_ETH_IP`). Mission protocol channel (stock PX4 has no uXRCE-DDS-writable mission topic). |
 | MC ↔ FCC | uXRCE-DDS | Over ttyTHS1 serial. Not MAVLink. |
 
 ### 2.5 Mission Phases
@@ -190,6 +190,8 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | FR-003 | MUST | Test | The GCS shall be able to command a mission phase transition at any point during flight. The MC shall execute the command within 500 ms of receipt. |
 | FR-004 | MUST | Test | The MC shall broadcast its current mission phase to all swarm peers at ≥ 1 Hz as part of the swarm heartbeat message. |
 | FR-005 | SHOULD | Inspection | The MC shall log all mission phase transitions with timestamp, source (GCS or autonomous), and the triggering condition. Logs shall survive container restart. |
+| FR-006 | MUST | Test | After a normal mission end (mission complete, or GCS end-mission/abort), the MC shall return from LAND to PREFLIGHT once the FCC reports disarmed and on the ground, ready for the next mission without a restart. On that transition it shall discard the flown mission upload, including its persisted copy, and its ARM authorisation, so the next arm requires a new upload (FR-010). |
+| FR-007 | MUST | Test | FAULT shall be terminal: the MC shall reject every phase-transition request in FAULT, and only a restart shall leave it. This includes a FAULT forced by a GCS emergency command (DISARM, RTL or manual-mode takeover). Once the FCC reports disarmed and on the ground in FAULT, the MC shall notify the GCS once that a restart is required. |
 
 #### 4.1.2 FCC Control and Monitoring
 
@@ -300,7 +302,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
-| IR-001 | MUST | Test | The MC shall communicate with the FCC via uXRCE-DDS over ttyTHS1 serial (primary) and via MAVLink over the ethernet link to the FCC's single 192.168.10.x address (`FCC_ETH_IP`) (for the mission protocol channel). The active transport shall be indicated in `/mc/health`. |
+| IR-001 | MUST | Test | The MC shall communicate with the FCC via uXRCE-DDS over ttyTHS1 serial (primary) and via MAVLink over the ethernet link to the FCC's single 192.168.100.x address (`FCC_ETH_IP`) (for the mission protocol channel). The active transport shall be indicated in `/mc/health`. |
 | IR-002 | MUST | Inspection | Transport selection (serial vs. ethernet) shall be controlled by a deployment-time configuration parameter without code changes. |
 | IR-003 | MUST | Inspection | The FccBackend interface shall expose transport-agnostic ROS 2 topics: subscribed topics for vehicle state (position, velocity, attitude, status, battery) and published topics for commands (mission upload, mission item update, vehicle_command). Application code shall interact with the FccBackend interface only. |
 | IR-004 | MUST | Inspection | The MC shall subscribe to the following PX4 uORB topics via uXRCE-DDS: `vehicle_local_position`, `vehicle_global_position`, `vehicle_status`, `battery_status`, `vehicle_attitude`, `vehicle_odometry`, `sensor_combined`. |
@@ -312,7 +314,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
-| IR-010 | MUST | Inspection | The MC shall maintain a dedicated MAVLink 2/UDP channel to the GCS at 192.168.10.10, separate from the FCC autopilot channel. |
+| IR-010 | MUST | Inspection | The MC shall maintain a dedicated MAVLink 2/UDP channel to the GCS at 192.168.100.10, separate from the FCC autopilot channel. |
 | IR-011 | MUST | Test | The MC shall transmit a MAVLink `HEARTBEAT` at 1 Hz on the GCS channel, with `system_id` set to the drone's assigned ID and `component_id = MAV_COMP_ID_ONBOARD_COMPUTER`. |
 | IR-012 | MUST | Inspection | All MAVLink traffic on the GCS channel shall be routed through mavlink-router v4. mavlink-router shall be the sole ingress and egress point for this channel. |
 | IR-013 | MUST | Inspection | Swarm mission upload messages (waypoints, formation offsets, search polygon, swarm manifest) shall use the MAVLink `COMMAND_LONG` or mission item protocol. Custom payload encoding shall be documented in the ICD. |
@@ -322,7 +324,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
-| IR-020 | MUST | Test | The MC shall communicate with peer drones over the MANET mesh datalink using UDP on the 192.168.10.x subnet. Peer IPs shall be sourced from the GCS-uploaded swarm manifest. |
+| IR-020 | MUST | Test | The MC shall communicate with peer drones over the MANET mesh datalink using UDP on the 192.168.100.x subnet. Peer IPs shall be sourced from the GCS-uploaded swarm manifest. |
 | IR-021 | MUST | Inspection | All swarm coordination messages shall use a versioned binary protocol with a fixed header containing: protocol version (uint8), sender drone ID (uint8), message type (uint8), sequence number (uint16), and UTC timestamp (uint64, µs). |
 | IR-022 | MUST | Test | The swarm coordination layer shall tolerate peer message latency up to 500 ms without treating the peer as LOST. |
 | IR-023 | MUST | Test | Peer LOST shall be declared after 3 consecutive missed heartbeats at the nominal 1 Hz rate (i.e., > 3 s silence). |
@@ -340,7 +342,7 @@ Reverses the blanket MISSION-only constraint FR-020 previously stated, scoped na
 
 | ID | Priority | Verification | Requirement |
 |---|---|---|---|
-| IR-040 | MUST | Test | The MC shall ingest RTSP/H.265 video from the front gimbal IP camera over the HIF-007 Ethernet path — the baseboard's existing internal Ethernet switch, reached via Jetson's single `eth0` interface (192.168.10.11) to the camera at 192.168.10.200 — via `perception_front_node`, independent of the downward CSI camera interface (§4.2.4). |
+| IR-040 | MUST | Test | The MC shall ingest RTSP/H.265 video from the front gimbal IP camera over the HIF-007 Ethernet path — the baseboard's existing internal Ethernet switch, reached via Jetson's single `eth0` interface (192.168.100.11) to the camera at 192.168.100.200 — via `perception_front_node`, independent of the downward CSI camera interface (§4.2.4). |
 
 #### 4.2.6 MC ↔ GCS Video Downlink
 
@@ -605,6 +607,8 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | FR-003 | GCS phase command ≤ 500 ms | T | SITL |
 | FR-004 | Phase broadcast ≥ 1 Hz | T | SITL |
 | FR-005 | Transition logging persists | I | SITL |
+| FR-006 | LAND → PREFLIGHT recycle + mission reset | T | SITL |
+| FR-007 | FAULT terminal until restart | T | SITL |
 | FR-010 | ARM requires GCS authorisation | T | SITL |
 | FR-011 | DISARM on command / failsafe | T | SITL |
 | FR-012 | Flight mode commands | T | SITL |

@@ -13,7 +13,7 @@ first, read `docs/ARCHITECTURE.md`.
   directly on that Jetson.
 - A Pixhawk 6X (PX4 v1.17) wired per `HID-MC-001.md`, reachable over
   `ttyTHS1` (921600 baud) or the ethernet fallback (the Pixhawk's single
-  `FCC_ETH_IP` address on the shared `192.168.10.x` subnet).
+  `FCC_ETH_IP` address on the shared `192.168.100.x` subnet).
 - `sudo` access on the Jetson (the numbered scripts install udev rules,
   netplan config, sysctl floors, and systemd units).
 

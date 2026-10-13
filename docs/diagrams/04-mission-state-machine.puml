@@ -2,7 +2,7 @@
 ' ─────────────────────────────────────────────────────────────
 ' Diagram 04: Mission Phase State Machine
 ' mission_manager_node — Swarm Search Drone MC
-' MC-SRS-001  FR-001, FR-002, FR-003
+' MC-SRS-001  FR-001, FR-002, FR-003, FR-006, FR-007
 ' ─────────────────────────────────────────────────────────────
 
 title "04 — Mission Phase State Machine\nmission_manager_node"
@@ -35,7 +35,7 @@ skinparam StateArrowFontColor #4A6080
 
 [*] --> PREFLIGHT : Power-on /\nSystem boot
 
-state PREFLIGHT #B8D4F0 : **PREFLIGHT**\n──────────────\nSelf-test · Peer discovery\nAwait mission upload from GCS\nAll services operational check
+state PREFLIGHT #B8D4F0 : **PREFLIGHT**\n──────────────\nSelf-test · Peer discovery\nAwait mission upload from GCS\nAll services operational check\nRe-entered after LAND: flown upload\n+ ARM auth cleared [FR-006]
 
 state ARMING #C8E4F0 : **ARMING**\n──────────────\nGCS ARM authorisation received\nMC pre-arm checks pass\nFCC arm commanded
 
@@ -55,9 +55,7 @@ state RETURN #C8E8C8 : **RETURN**\n──────────────\nN
 
 state LAND #C8E8C8 : **LAND**\n──────────────\nFCC land mode commanded\nDescend · Touchdown\nFCC disarm on landing confirm
 
-state FAULT #F8D0D0 : **FAULT**\n──────────────\nCritical failure declared\nRTL commanded via FccBackend\nGCS notified with fault code
-
-[*] <-- LAND : Disarmed
+state FAULT #F8D0D0 : **FAULT**\n──────────────\nCritical failure declared\nRTL commanded via FccBackend\n(or GCS emergency cmd forwarded)\nTerminal: no exit until restart [FR-007]
 
 ' ── Nominal transitions (GCS-commanded or autonomous) ───────
 
@@ -79,7 +77,7 @@ SEARCH --> RETURN : Coverage path complete\nOR GCS: end-mission [FR-046]
 
 RETURN --> LAND : Home waypoint reached
 
-LAND --> [*]
+LAND -[norank]-> PREFLIGHT : FCC landed + disarmed\nlog mission complete,\nreset mission state [FR-006]
 
 ' ── GCS override transitions (any state → target) ───────────
 
@@ -95,16 +93,25 @@ INGRESS -[#CC3333]-> FAULT : FCC link lost >1 s\nOR battery <LOW_THRESHOLD [FR-0
 SEARCH -[#CC3333]-> FAULT : Node restart ×3 failed [FR-075]\nOR battery <LOW_THRESHOLD [FR-072]
 VORONOI_PARTITION -[#CC3333]-> FAULT : Critical fault
 MUSTER -[#CC3333]-> FAULT : Critical fault
+TAKEOFF -[#CC3333]-> FAULT : GCS emergency cmd\n(DISARM · RTL · MANUAL/\nALTCTL/POSCTL/STABILIZED)
 
 ' ── GCS-link-lost HOLD (shown as self-loop note) ────────────
 INGRESS -[#E07000]-> INGRESS : GCS link lost >10 s\n→ FCC HOLD commanded [SFR-007]
 SEARCH -[#E07000]-> SEARCH : GCS link lost >10 s\n→ FCC HOLD commanded [SFR-007]
 
-FAULT --> [*] : RTL complete\nSystem shutdown
+FAULT --> [*] : FCC landed + disarmed —\nrestart required\n(one-time GCS notice) [FR-007]
 
 ' ── Notes ───────────────────────────────────────────────────
 
 note right of FAULT
+  <b>Any phase → FAULT</b> (only a few
+  arrows drawn): health_monitor
+  CRITICAL_FAULT, mission-channel
+  retries exhausted, or a GCS
+  EMERGENCY-tier command.
+  Every phase-transition request is
+  rejected in FAULT; there is no
+  clear-fault command. [EXEC-006]
   SFR-003: Watchdog → HOLD on
   manager silence >5 s
   SFR-004: 3× restart failure → RTL

@@ -50,7 +50,7 @@ check "lo interface pinned"               grep -qE '<NetworkInterface name="lo"'
 check "lo multicast disabled"             grep -qE '<NetworkInterface name="lo"[^>]*multicast="false"' "${CDDS_XML}"
 check "AllowMulticast false"              grep -qE '<AllowMulticast>false</AllowMulticast>' "${CDDS_XML}"
 check "Peers list present"                grep -qE '<Peers>' "${CDDS_XML}"
-check "no cross-host peer address"        bash -c "! grep -qE '<Peer address=\"192\.168\.10\.[0-9]+\"/>' '${CDDS_XML}'"
+check "no cross-host peer address"        bash -c "! grep -qE '<Peer address=\"192\.168\.100\.[0-9]+\"/>' '${CDDS_XML}'"
 check "loopback peer address present"     grep -qE '<Peer address="127\.0\.0\.1"/>' "${CDDS_XML}"
 
 for unit in "${SERVICES[@]}"; do

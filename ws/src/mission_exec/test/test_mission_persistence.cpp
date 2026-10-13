@@ -81,7 +81,7 @@ mc_msgs::msg::MissionUpload sample_upload()
 
   mc_msgs::msg::SwarmPeer peer;
   peer.drone_id = 7;
-  peer.ip_address = "192.168.10.12";
+  peer.ip_address = "192.168.100.12";
   peer.mission_phase = 3;
   peer.lat = 1.3;
   peer.lon = 103.8;
@@ -150,7 +150,7 @@ TEST_F(MissionPersistenceTest, SaveThenLoadRoundTripsAllFields)
   ASSERT_EQ(loaded->swarm_manifest.size(), 1U);
   const auto & peer = loaded->swarm_manifest[0];
   EXPECT_EQ(peer.drone_id, 7);
-  EXPECT_EQ(peer.ip_address, "192.168.10.12");
+  EXPECT_EQ(peer.ip_address, "192.168.100.12");
   EXPECT_EQ(peer.mission_phase, 3);
   EXPECT_EQ(peer.sensor_flags, 0xAB);
   EXPECT_EQ(peer.fault_mask, 0x1234);
@@ -191,6 +191,22 @@ TEST_F(MissionPersistenceTest, SaveOverwritesPreviousContentAtomically)
 TEST_F(MissionPersistenceTest, SaveFailsGracefullyOnUnwritableDirectory)
 {
   EXPECT_FALSE(save_mission_upload("/nonexistent_dir_xyz/mission_upload.yaml", sample_upload()));
+}
+
+// --- EXEC-006: remove_mission_upload() ---
+
+TEST_F(MissionPersistenceTest, RemoveDeletesSavedUploadSoLoadReturnsNullopt)
+{
+  ASSERT_TRUE(save_mission_upload(path_, sample_upload()));
+  ASSERT_TRUE(load_mission_upload(path_).has_value());
+
+  EXPECT_TRUE(remove_mission_upload(path_));
+  EXPECT_FALSE(load_mission_upload(path_).has_value());
+}
+
+TEST_F(MissionPersistenceTest, RemoveSucceedsWhenNothingWasSaved)
+{
+  EXPECT_TRUE(remove_mission_upload(path_));
 }
 
 }  // namespace

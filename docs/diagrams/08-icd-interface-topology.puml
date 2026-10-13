@@ -48,32 +48,32 @@ skinparam note {
 ' ═══════════════════════════════════════════════════
 
 package "Flight Control Computer" as FCC_PKG #FFF0E0 {
-  rectangle "Pixhawk 6X  ·  192.168.10.31\nPX4 v1.14  ·  NuttX\nuORB topic bus" as FCC #FFD4A8
+  rectangle "Pixhawk 6X  ·  192.168.100.31\nPX4 v1.14  ·  NuttX\nuORB topic bus" as FCC #FFD4A8
 }
 
 package "Ground Control Station" as GCS_PKG #E8F4E8 {
-  rectangle "QGroundControl  ·  192.168.10.10\nMAVLink system_id = 255" as GCS #B8DCA8
+  rectangle "QGroundControl  ·  192.168.100.10\nMAVLink system_id = 255" as GCS #B8DCA8
 }
 
 package "Mission Orchestrator  (another team's app)\n[not yet built]" as ORCH_PKG #E0E8F8 {
-  rectangle "Mission Orchestrator  ·  192.168.10.10\nMAVLink system_id = 255  comp_id = 190" as ORCH #C8D8F0;line.dashed
+  rectangle "Mission Orchestrator  ·  192.168.100.10\nMAVLink system_id = 255  comp_id = 190" as ORCH #C8D8F0;line.dashed
 }
 
 package "Swarm Peers" as PEER_PKG #F0E8F8 {
-  rectangle "Peer MC #2  ·  192.168.10.12" as P2 #D8C0F0
-  rectangle "Peer MC #3  ·  192.168.10.13" as P3 #D8C0F0
+  rectangle "Peer MC #2  ·  192.168.100.12" as P2 #D8C0F0
+  rectangle "Peer MC #3  ·  192.168.100.13" as P3 #D8C0F0
 }
 
 rectangle "IMX219 CSI Camera\nSensor-id 0  ·  MIPI CSI-2" as CAM #EDE0F8
 
-rectangle "Gimbal IP Camera\n192.168.10.200  ·  shared switch (HIF-007)" as GIMCAM #EDE0F8
+rectangle "Gimbal IP Camera\n192.168.100.200  ·  shared switch (HIF-007)" as GIMCAM #EDE0F8
 
 ' ═══════════════════════════════════════════════════
 ' MISSION COMPUTER
 ' ═══════════════════════════════════════════════════
-package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as MC_PKG #E4EEF8 {
+package "Mission Computer (MC)  ·  192.168.100.11  ·  Jetson Orin NX 16GB" as MC_PKG #E4EEF8 {
 
-  rectangle "IFD-001\nfcc_bridge_node\n[FccBackend]\n─────────────────\nttyTHS1  921600 baud\n192.168.10.31  UDP:8888  uXRCE-DDS (ethernet fallback)\n192.168.10.31  UDP:14555  mission protocol (MAVLink, always on)" as IFD001 #C0D8F0
+  rectangle "IFD-001\nfcc_bridge_node\n[FccBackend]\n─────────────────\nttyTHS1  921600 baud\n192.168.100.31  UDP:8888  uXRCE-DDS (ethernet fallback)\n192.168.100.31  UDP:14555  mission protocol (MAVLink, always on)" as IFD001 #C0D8F0
 
   rectangle "IFD-002\nmavlink-router v4\ngcs_mavlink_node\n─────────────────\nUDP :14552 (recv)  :14551 (send)\nsys_id = drone_id  comp_id = 191\n·····································\nMAVROS also runs in this container\n(separate OS process) but mirrors\nChannel A telemetry, GCS-005 — not\nan IFD-002/Channel B participant" as IFD002 #A8D0A8
 
@@ -81,7 +81,7 @@ package "Mission Computer (MC)  ·  192.168.10.11  ·  Jetson Orin NX 16GB" as M
 
   rectangle "IFD-004\ncamera_node (gscam2)  ·  downward\n─────────────────\nCSI-2 · GStreamer pipeline\n1280×720 · ≥15 FPS · BGR8" as IFD004 #D0B8F8
 
-  rectangle "IFD-006\nperception_front_node\n─────────────────\nRTSP/H.265  ·  192.168.10.200:8554\nshared switch (HIF-007)" as IFD006 #C8E8D8
+  rectangle "IFD-006\nperception_front_node\n─────────────────\nRTSP/H.265  ·  192.168.100.200:8554\nshared switch (HIF-007)" as IFD006 #C8E8D8
 
   rectangle "IFD-007\nvideo_mux_node\n─────────────────\nRTSP/H.265 + metadata\nStream A :8555 (gimbal) · Stream B :8556 (downward)\nindependent of IFD-002 MAVLink" as IFD007 #A8D8C0
 
@@ -160,7 +160,7 @@ end note
 PEER_PKG <-[#7030A0]-> IFD003
 
 note on link #F0E8F8
-  <b>Bidirectional  ·  MANET 192.168.10.x</b>
+  <b>Bidirectional  ·  MANET 192.168.100.x</b>
   SWARM_HEARTBEAT (0x01)  1 Hz
   ─────────────────────────
   ISR_CANDIDATE (0x10)
@@ -196,7 +196,7 @@ GIMCAM -[#20A070]-> IFD006
 
 note on link #C8E8D8
   <b>Gimbal camera → MC  (unidirectional)</b>
-  RTSP/H.265  ·  192.168.10.200:8554
+  RTSP/H.265  ·  192.168.100.200:8554
   1920×1080 @ 30 FPS (configurable)
   Independent of IFD-004 (downward camera)
   Link silence > 3 s → GIMBAL_LINK_LOST
@@ -210,10 +210,10 @@ GCS <-[#107850]- IFD007
 
 note on link #A8D8C0
   <b>MC → GCS  (unidirectional, independent of IFD-002)</b>
-  <b>Stream A (gimbal):</b> 192.168.10.11:8555/mc_video
+  <b>Stream A (gimbal):</b> 192.168.100.11:8555/mc_video
     metadata: time_usec · track_id · class_id
     confidence · lat/lon/alt
-  <b>Stream B (downward):</b> 192.168.10.11:8556/mc_video_down
+  <b>Stream B (downward):</b> 192.168.100.11:8556/mc_video_down
     metadata: time_usec · class_id · confidence
     lat/lon/alt  (no track_id — no tracker on this pipeline)
   Additive — Stream B does not affect Stream A or

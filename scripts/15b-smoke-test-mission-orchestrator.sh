@@ -187,7 +187,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
                   [[ -n "${router_cid:-}" ]] && docker rm -f "${router_cid}" &>/dev/null || true
                   rm -rf "${E2E_DIR}" "${PLANS_DIR}"' EXIT
 
-            # Loopback rewrite: real 192.168.10.10 isn't routable in a
+            # Loopback rewrite: real 192.168.100.10 isn't routable in a
             # sandboxed test host — same technique
             # 09b-smoke-test-routing.sh's own LIVE_CHECK uses. Ports are
             # unchanged (README's "Testing against a real two-host
@@ -196,7 +196,7 @@ if [[ "${LIVE_CHECK:-0}" -eq 1 ]]; then
             # multi-port rewrites — ORCHESTRATOR_MC_RECV already listens on
             # 0.0.0.0 and ORCHESTRATOR_MAVLINK_NODE is already loopback).
             mkdir -p "${E2E_DIR}/etc-drone-mc"
-            sed 's/192\.168\.10\.10/127.0.0.1/' "${CONF_C}" \
+            sed 's/192\.168\.100\.10/127.0.0.1/' "${CONF_C}" \
                 > "${E2E_DIR}/etc-drone-mc/mavlink-router-channel-c.conf"
             # Channels A/B still need *some* valid conf for the container's
             # other two processes to start cleanly — the real confs are

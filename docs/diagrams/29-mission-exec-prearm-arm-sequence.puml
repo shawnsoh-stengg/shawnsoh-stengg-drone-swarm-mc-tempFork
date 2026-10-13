@@ -1,0 +1,169 @@
+@startuml 29-mission-exec-prearm-arm-sequence
+' ─────────────────────────────────────────────────────────────
+' Diagram 29: mission_manager_node — Pre-Arm Check Suite (EXEC-002)
+' and PREFLIGHT -> ARMING -> TAKEOFF transition sequence
+' SDD-MC-001 §4.1/§4.2, FR-010/FR-012, ICD-MC-001 §9
+' Grounded in ws/src/mission_exec/src/{mission_manager_node,pre_arm_checks}.cpp
+' and ws/src/fcc_bridge/src/{fcc_bridge_node,xrce_dds_backend}.cpp as of 2026-09-17.
+' ─────────────────────────────────────────────────────────────
+
+title "29 — mission_manager_node Pre-Arm Checks + ARM Sequence\nEXEC-001/EXEC-002 · FR-010/FR-012 · SDD-MC-001 §4.1/§4.2"
+
+skinparam BackgroundColor #FAFBFC
+skinparam DefaultFontColor #1C2334
+skinparam DefaultFontSize 10
+skinparam TitleFontSize 13
+skinparam TitleFontStyle bold
+skinparam shadowing false
+
+skinparam sequence {
+  ArrowColor #3D5A80
+  ArrowFontColor #1C2334
+  ArrowFontSize 9
+  ParticipantBorderColor #3D5A80
+  ParticipantFontSize 10
+  ParticipantFontStyle bold
+  LifeLineBorderColor #9AB0CC
+  BoxLineColor #8AA8C8
+  BoxBackgroundColor #F4F8FF
+  DividerBackgroundColor #E0EAFF
+  DividerBorderColor #3D5A80
+  DividerBorderThickness 1
+  DividerFontSize 10
+  DividerFontStyle bold
+  DividerFontColor #1C2334
+  GroupBodyBackgroundColor #F8FAFF
+  NoteBackgroundColor #FFFAE8
+  NoteBorderColor #C09030
+  NoteFontSize 9
+}
+
+participant "GCS Operator /\nmission_orchestrator_node\n(Channel B/C)" as GCS #B8DCA8
+participant "swarm_coordinator_node\n(peer states, optional)" as SWARM #D8CCEE
+
+box "Mission Computer (Jetson) — mission_exec package" #F4F8FF
+  participant "mission_manager_node\n(EXEC-001, 11-phase FSM)" as MGR #A8CCEE
+  participant "pre_arm_checks.cpp\n(EXEC-002, plain functions)" as CHECKS #C8E0F8
+end box
+
+box "Mission Computer (Jetson) — fcc_bridge package" #FFF4EC
+  participant "fcc_bridge_node" as BRIDGE #FFD4A8
+  participant "XrceDdsBackend\n(FccBackend impl)" as BACKEND #FFE0C0
+end box
+
+participant "PX4 FCC\n(Pixhawk v1.17, uXRCE-DDS)" as FCC #F8C8C8
+
+' ═══════════════════════════════════════════════════
+== PREFLIGHT entry: mission upload ==
+' ═══════════════════════════════════════════════════
+
+GCS -> MGR : /mc/gcs/mission_upload\nMissionUpload{arm_authorised, ingress_waypoints,\nformation_offsets, search_polygon, swarm_manifest,\nlow_battery_threshold}
+activate MGR
+MGR -> MGR : on_gcs_mission_upload():\nmission_upload_ = msg\narm_authorised_ = msg.arm_authorised
+MGR -> MGR : save_mission_upload()\n→ /var/drone-mc/mission_upload.yaml (EXEC-004,\nbest-effort — failure doesn't block this session)
+deactivate MGR
+
+note over GCS, MGR #FFFAE8
+  arm_authorised_ can also be flipped later, without a re-upload,
+  by GCS MC_CMD_ARM_AUTHORISE (50002) via handle_gcs_command() —
+  same effect on guard_preflight_to_arming().
+end note
+
+' ═══════════════════════════════════════════════════
+== Continuous state feed (independent of phase) ==
+' ═══════════════════════════════════════════════════
+
+FCC -> BACKEND : uXRCE-DDS: VehicleStatus / BatteryStatus /\nVehicleLocalPosition / SensorGps
+BACKEND -> BACKEND : get_vehicle_state():\narming_state, fcc_link_ok, battery_pct, gnss_ok, x/y/z
+BACKEND -> BRIDGE : (10 Hz publish timer)
+BRIDGE -> MGR : /mc/fcc/vehicle_state
+MGR -> MGR : on_vehicle_state(): cache vehicle_state_
+note right of MGR #FFFAE8
+  Cheap by design: on_vehicle_state() only assigns the
+  pointer. All guard/check logic reads this cached
+  vehicle_state_ later, off the control-loop timer —
+  never re-queries the FCC synchronously.
+end note
+
+SWARM -> MGR : /mc/swarm/peer_states\n(nullptr until first message — checks pass vacuously)
+MGR -> MGR : on_peer_states(): cache peer_states_
+
+' ═══════════════════════════════════════════════════
+== PREFLIGHT: pre-arm check suite (10 Hz control timer) ==
+' ═══════════════════════════════════════════════════
+
+loop on_control_timer() @ control_loop_period_s_ = 0.1 s, while current_phase_ == PREFLIGHT
+  MGR -> MGR : build_pre_arm_check_inputs()\n(vehicle_state_, mission_upload_, peer_states_,\narm_authorised_, visual_localisation_alive)
+  MGR -> CHECKS : evaluate_pre_arm_checks(in)
+  activate CHECKS
+  CHECKS -> CHECKS : check_fcc_link_alive()
+  CHECKS -> CHECKS : check_fcc_disarmed()\n(arming_state == DISARMED)
+  CHECKS -> CHECKS : check_gcs_arm_authorised()
+  CHECKS -> CHECKS : check_battery_margin()\n(battery_pct >= low_battery_threshold + margin)
+  CHECKS -> CHECKS : check_swarm_peers_preflight()\n(every ALIVE peer in PREFLIGHT/ARMING)
+  CHECKS -> CHECKS : check_mission_upload_complete()\n(waypoints/offsets/polygon/manifest all non-empty)
+  CHECKS -> CHECKS : check_visual_localisation_if_gnss_degraded()\n(VO alive if !gnss_ok)
+  CHECKS --> MGR : PreArmCheckReport{passed, failed_checks[]}\n(no short-circuit — all 7 always run)
+  deactivate CHECKS
+
+  alt failed_checks changed since last tick
+    MGR -> GCS : /mc/status_text\nStatusText(WARNING, reason) — one per failing check
+  end
+end
+
+note over MGR, CHECKS #FFFAE8
+  guard_preflight_to_arming() == arm_authorised_ && report.passed.
+  Re-evaluated fresh on every autonomous-transition sweep —
+  the loop above is what makes failures visible to the GCS operator
+  before that guard ever flips true.
+end note
+
+' ═══════════════════════════════════════════════════
+== PREFLIGHT → ARMING (autonomous, all 7 checks pass) ==
+' ═══════════════════════════════════════════════════
+
+MGR -> MGR : evaluate_autonomous_transitions():\nguard_preflight_to_arming() == true
+activate MGR
+MGR -> MGR : action_enter_arming():\nFccCommand{cmd=MAV_CMD_COMPONENT_ARM_DISARM (400),\nparams=[1,0,0,0,0,0,0]}
+MGR -> BRIDGE : /mc/fcc/send_command
+BRIDGE -> BACKEND : backend_->send_command(cmd, params)
+BACKEND -> FCC : uXRCE-DDS /fmu/in/vehicle_command\nVehicleCommand{command=400, param1=1.0}
+MGR -> MGR : commit_transition(ARMING, SOURCE_AUTONOMOUS)
+MGR -> GCS : /mc/mission_phase (phase=ARMING, forced publish)
+deactivate MGR
+
+' ═══════════════════════════════════════════════════
+== FCC arms; state feeds back ==
+' ═══════════════════════════════════════════════════
+
+FCC -> FCC : accept COMPONENT_ARM_DISARM\narming_state: DISARMED(1) → ARMED(2)
+FCC -> BACKEND : VehicleStatus{arming_state=ARMED}
+BACKEND -> BRIDGE : (10 Hz publish timer)
+BRIDGE -> MGR : /mc/fcc/vehicle_state (arming_state=ARMED)
+MGR -> MGR : on_vehicle_state(): cache vehicle_state_
+
+' ═══════════════════════════════════════════════════
+== ARMING → TAKEOFF (autonomous, FCC confirms ARMED) ==
+' ═══════════════════════════════════════════════════
+
+loop on_control_timer() next ticks, current_phase_ == ARMING
+  MGR -> MGR : guard_arming_to_takeoff():\nvehicle_state_.arming_state == ARMED
+  alt guard true
+    MGR -> MGR : action_send_takeoff():\nFccCommand{cmd=MAV_CMD_NAV_TAKEOFF (22),\nparam7=takeoff_altitude_m_ (default 30.0 m)}
+    MGR -> BRIDGE : /mc/fcc/send_command
+    BRIDGE -> BACKEND : backend_->send_command(cmd, params)
+    BACKEND -> FCC : uXRCE-DDS /fmu/in/vehicle_command\nVehicleCommand{command=22, param7=alt}
+    MGR -> MGR : commit_transition(TAKEOFF, SOURCE_AUTONOMOUS)
+    MGR -> GCS : /mc/mission_phase (phase=TAKEOFF, forced publish)
+  end
+end
+
+note over GCS, FCC #FFE0E0
+  If any pre-arm check keeps failing, or a critical fault/GCS
+  END_MISSION arrives while still in PREFLIGHT, the "Any -> FAULT"
+  / "Any -> RETURN" overlay guards (checked before the per-phase
+  table on every tick) take priority and this ARM sequence never
+  fires — see guard_any_fault()/guard_any_return().
+end note
+
+@enduml
