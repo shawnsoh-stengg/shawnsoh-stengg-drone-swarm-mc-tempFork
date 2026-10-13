@@ -19,6 +19,9 @@ mission_manager_node:
     home_position_tolerance_m: 5.0
     low_battery_margin: 0.10
     local_pose_stale_timeout_s: 2.0
+    # EXEC-006: max |vz| for a disarmed FCC to count as landed (LAND -> PREFLIGHT
+    # recycle, FAULT restart-required notice). VehicleState has no land flag.
+    landed_max_vertical_speed_mps: 0.5
 
 # search_planner_node — scaffold only, real tunables land with the
 # boustrophedon coverage implementation (SDD-MC-001 §7, out of scope for

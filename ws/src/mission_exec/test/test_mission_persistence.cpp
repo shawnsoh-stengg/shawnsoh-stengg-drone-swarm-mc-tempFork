@@ -193,5 +193,21 @@ TEST_F(MissionPersistenceTest, SaveFailsGracefullyOnUnwritableDirectory)
   EXPECT_FALSE(save_mission_upload("/nonexistent_dir_xyz/mission_upload.yaml", sample_upload()));
 }
 
+// --- EXEC-006: remove_mission_upload() ---
+
+TEST_F(MissionPersistenceTest, RemoveDeletesSavedUploadSoLoadReturnsNullopt)
+{
+  ASSERT_TRUE(save_mission_upload(path_, sample_upload()));
+  ASSERT_TRUE(load_mission_upload(path_).has_value());
+
+  EXPECT_TRUE(remove_mission_upload(path_));
+  EXPECT_FALSE(load_mission_upload(path_).has_value());
+}
+
+TEST_F(MissionPersistenceTest, RemoveSucceedsWhenNothingWasSaved)
+{
+  EXPECT_TRUE(remove_mission_upload(path_));
+}
+
 }  // namespace
 }  // namespace mission_exec

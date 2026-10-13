@@ -319,9 +319,12 @@ using TransitionTable = std::vector<Transition>;
 | `VORONOI_PARTITION` | `SEARCH` | Voronoi cell accepted AND coverage path received | Upload path to FCC; enable detection |
 | `SEARCH` | `RETURN` | FCC mission complete OR GCS END_MISSION | Disable detection pipeline |
 | `RETURN` | `LAND` | FCC at home waypoint | Send LAND command |
-| `LAND` | `[*]` | FCC disarmed AND on ground | Log mission complete |
+| `LAND` | `PREFLIGHT` | FCC disarmed AND on ground (\|vz\| ≤ `landed_max_vertical_speed_mps`) | Log mission complete; `reset_mission_state()` (EXEC-006) |
 | Any | `RETURN` | GCS ABORT command | Cancel active FCC mission |
-| Any | `FAULT` | `health_monitor_node` CRITICAL_FAULT event | Command RTL |
+| Any | `FAULT` | `health_monitor_node` CRITICAL_FAULT event, mission-channel retries exhausted, or a GCS EMERGENCY-tier command (DISARM, RTL, MANUAL/ALTCTL/POSCTL/STABILIZED — §4.3) | Command RTL (GCS EMERGENCY: forward the GCS command instead) |
+| `FAULT` | — | none: terminal until restart (FR-007) | Once FCC disarmed AND on ground: one-time GCS `StatusText` (CRITICAL) "FAULT: landed+disarmed, restart required" |
+
+**Mission recycle and terminal FAULT (EXEC-006, FR-006/FR-007).** A normal end (mission complete, or GCS END_MISSION/ABORT) goes `LAND` → `PREFLIGHT` once the FCC is down and disarmed, so the next mission needs no container restart. `VehicleState` has no land-detector flag, so "on ground" is disarmed with \|vz\| under a small threshold: PX4 only auto-disarms after its own land detector fires, and the vz check stops an in-air disarm (RC kill) from counting as landed while the vehicle is still falling. `reset_mission_state()` clears the flown mission upload (in memory, and its §4.5 persisted file) and ARM authorisation, the RETURN/FAULT latches, any pending mission-channel ack, and the ISR role, Voronoi cell and coverage path, so FR-010's "ARM authorisation as part of the *current* mission upload" can't be satisfied by the mission just flown. An upload that arrived *during* the mission (Channel B accepts one in any phase) is a different message from the one flown, so it survives the reset as the next mission's upload, with its own `arm_authorised`. `FAULT` has no outgoing row and no GCS "clear fault" command, deliberately including an operator EMERGENCY takeover: a faulted drone needs inspection and a restart (power cycle, or at least `mission-exec`) before it flies again. `mission_orchestrator_node`'s `PREFLIGHT`-only activate gate keeps refusing plans meanwhile.
 
 ### 4.1a Hybrid Mode Arbitration (MISSION ⇄ OFFBOARD)
 
