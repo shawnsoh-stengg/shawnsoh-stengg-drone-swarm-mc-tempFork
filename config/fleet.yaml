@@ -14,6 +14,8 @@
 # for scripts/02-install-systemd-units.sh's parser to pick up. Add one
 # line per physical drone as the fleet grows; remove a line to retire one.
 drones:
-  1: 192.168.100.11
+  1: 192.168.100.31
   2: 192.168.100.39
-  3: 192.168.100.13
+  3: 192.168.100.36
+  4: 192.168.100.37
+  5: 192.168.100.38

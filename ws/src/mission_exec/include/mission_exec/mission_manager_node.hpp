@@ -47,6 +47,10 @@ namespace mission_exec
 // table — OFFBOARD-MODE-SWITCHING-BACKLOG.md) and RETURN/LAND phase
 // detail beyond the abridged table's own two rows — both out of scope
 // per this ticket's own "Explicitly out of scope" section.
+//
+// EXEC-006: LAND recycles to PREFLIGHT once the FCC is landed and disarmed,
+// ready for the next mission. FAULT stays terminal: a faulted drone needs
+// inspection and a restart (SRS FR-006/FR-007).
 enum class Phase : uint8_t
 {
   PREFLIGHT = 0,
@@ -109,6 +113,13 @@ private:
   bool guard_voronoi_partition_to_search() const;
   bool guard_search_to_return() const;
   bool guard_return_to_land() const;
+  bool guard_land_to_preflight() const;
+  // EXEC-006: VehicleState has no land-detector flag, so "landed" is
+  // disarmed with |vz| under landed_max_vertical_speed_mps_. PX4 only
+  // auto-disarms once its own land detector fires (COM_DISARM_LAND); the vz
+  // check covers a disarm in the air (RC kill) so it doesn't count as
+  // landed until the vehicle has stopped moving.
+  bool fcc_landed_and_disarmed() const;
   // "Any -> ..." overlay guards (SDD §4.1's two Phase-less rows).
   bool guard_any_return() const;
   bool guard_any_fault() const;
@@ -123,6 +134,18 @@ private:
   void action_begin_coverage_path_upload();
   void action_send_land();
   void action_log_mission_complete();
+  // EXEC-006: LAND -> PREFLIGHT entry action — logs mission complete, then
+  // reset_mission_state().
+  void action_recycle_to_preflight();
+  // EXEC-006: clears every per-mission member so a recycled PREFLIGHT
+  // behaves like a fresh boot with no upload: FR-010's ARM authorisation
+  // must come from a new upload, not the one just flown. An upload that
+  // arrived *during* the mission (Channel B accepts uploads in any phase)
+  // is kept, since that is already the next mission's.
+  void reset_mission_state();
+  // EXEC-006: FAULT is terminal. Once the FCC reports landed and disarmed
+  // while in FAULT, tells the GCS once that a restart is needed.
+  void check_fault_ended();
   void action_cancel_active_mission();
   void action_command_rtl();
   void send_rtl_command();
@@ -205,6 +228,7 @@ private:
   double home_position_tolerance_m_{5.0};
   double low_battery_margin_{0.10};
   double local_pose_stale_timeout_s_{2.0};
+  double landed_max_vertical_speed_mps_{0.5};
   // EXEC-004: SDD §4.5 mission upload disk persistence path.
   std::string mission_upload_path_{"/var/drone-mc/mission_upload.yaml"};
 
@@ -221,6 +245,10 @@ private:
   // Latest received state, kept for guard evaluation.
   mc_msgs::msg::VehicleState::SharedPtr vehicle_state_;
   mc_msgs::msg::MissionUpload::SharedPtr mission_upload_;
+  // EXEC-006: the upload in effect when PREFLIGHT -> ARMING committed, i.e.
+  // the one being flown. reset_mission_state() compares against it to tell
+  // a flown upload from one received mid-mission for the next mission.
+  mc_msgs::msg::MissionUpload::SharedPtr flown_mission_upload_;
   mc_msgs::msg::SwarmPeerArray::SharedPtr peer_states_;
   mc_msgs::msg::IsrRole::SharedPtr isr_role_;
   mc_msgs::msg::VoronoiCell::SharedPtr voronoi_cell_;
@@ -271,7 +299,8 @@ private:
   // tick as a safety net.
   bool critical_fault_latched_{false};
   bool return_requested_latched_{false};
-  bool mission_complete_logged_{false};
+  // EXEC-006: check_fault_ended()'s one-shot restart-required notice.
+  bool fault_restart_notice_sent_{false};
 
   // Every callback that touches state-machine state (current_phase_,
   // pending_ack_*, the various latest-message members) shares one

@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <yaml-cpp/yaml.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -266,6 +267,12 @@ std::optional<mc_msgs::msg::MissionUpload> load_mission_upload(const std::string
   } catch (const YAML::Exception &) {
     return std::nullopt;
   }
+}
+
+bool remove_mission_upload(const std::string & path)
+{
+  ::unlink((path + ".tmp").c_str());
+  return ::unlink(path.c_str()) == 0 || errno == ENOENT;
 }
 
 }  // namespace mission_exec

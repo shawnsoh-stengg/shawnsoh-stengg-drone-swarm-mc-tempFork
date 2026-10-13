@@ -53,6 +53,8 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
   local_pose_stale_timeout_s_ =
     declare_parameter("local_pose_stale_timeout_s", local_pose_stale_timeout_s_);
   mission_upload_path_ = declare_parameter("mission_upload_path", mission_upload_path_);
+  landed_max_vertical_speed_mps_ =
+    declare_parameter("landed_max_vertical_speed_mps", landed_max_vertical_speed_mps_);
 
   build_transition_table();
 
@@ -181,11 +183,14 @@ void MissionManagerNode::build_transition_table()
   transition_table_[Phase::RETURN] = {
     {Phase::LAND, [this] {return guard_return_to_land();}, [this] {action_send_land();}},
   };
-  // LAND -> [*] (SDD's UML terminal state, not a further Phase): handled
-  // directly in on_control_timer() via action_log_mission_complete() rather
-  // than as a table row, since there is no target Phase to transition into
-  // — see the header's "Explicitly out of scope" doc comment.
-  transition_table_[Phase::LAND] = {};
+  // EXEC-006: a normal end recycles to PREFLIGHT for the next mission.
+  transition_table_[Phase::LAND] = {
+    {Phase::PREFLIGHT, [this] {return guard_land_to_preflight();},
+      [this] {action_recycle_to_preflight();}},
+  };
+  // EXEC-006: FAULT is terminal — no rows, so every phase-transition request
+  // is rejected (FR-002) and only a restart leaves it. check_fault_ended()
+  // tells the GCS once the drone is safely down.
   transition_table_[Phase::FAULT] = {};
 
   any_transitions_ = {
@@ -327,6 +332,19 @@ bool MissionManagerNode::guard_return_to_land() const
   return std::sqrt(dx * dx + dy * dy) <= home_position_tolerance_m_;
 }
 
+bool MissionManagerNode::fcc_landed_and_disarmed() const
+{
+  // DEP-009: PX4 v1.17 arming_state is DISARMED=1/ARMED=2 only (ICD §10.2).
+  constexpr uint8_t kArmingStateDisarmed = 1;
+  return vehicle_state_ && vehicle_state_->arming_state == kArmingStateDisarmed &&
+         std::abs(static_cast<double>(vehicle_state_->vz)) <= landed_max_vertical_speed_mps_;
+}
+
+bool MissionManagerNode::guard_land_to_preflight() const
+{
+  return fcc_landed_and_disarmed();
+}
+
 bool MissionManagerNode::guard_any_return() const
 {
   return return_requested_latched_ && current_phase_ != Phase::FAULT;
@@ -357,6 +375,7 @@ void MissionManagerNode::action_enter_arming()
   cmd.cmd = kMavCmdComponentArmDisarm;
   cmd.params = {1.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
   pub_send_command_->publish(cmd);
+  flown_mission_upload_ = mission_upload_;
   action_notify_swarm();
 }
 
@@ -496,6 +515,59 @@ void MissionManagerNode::action_send_land()
 void MissionManagerNode::action_log_mission_complete()
 {
   RCLCPP_INFO(get_logger(), "mission complete: FCC disarmed and on ground");
+}
+
+void MissionManagerNode::action_recycle_to_preflight()
+{
+  action_log_mission_complete();
+  reset_mission_state();
+}
+
+void MissionManagerNode::reset_mission_state()
+{
+  // Only drop the upload that was actually flown. One received mid-mission
+  // (a different message, so a different pointer) is already the next
+  // mission's, and its own arm_authorised is as current as FR-010 requires.
+  if (mission_upload_ && mission_upload_ == flown_mission_upload_) {
+    mission_upload_.reset();
+    if (!remove_mission_upload(mission_upload_path_)) {
+      RCLCPP_WARN(
+        get_logger(), "failed to remove persisted mission upload %s",
+        mission_upload_path_.c_str());
+    }
+  }
+  flown_mission_upload_.reset();
+  arm_authorised_ = mission_upload_ && mission_upload_->arm_authorised;
+
+  return_requested_latched_ = false;
+  critical_fault_latched_ = false;
+  pending_ack_kind_ = AckKind::NONE;
+  pending_ack_retries_ = 0;
+  isr_role_.reset();
+  voronoi_cell_.reset();
+  coverage_path_.reset();
+  // Re-report every pre-arm failure for the new mission, even if the set is
+  // unchanged from the last PREFLIGHT.
+  last_reported_pre_arm_failures_.clear();
+  RCLCPP_INFO(
+    get_logger(), "mission state reset for next mission (%s)",
+    mission_upload_ ? "next upload already received" : "awaiting new upload");
+}
+
+void MissionManagerNode::check_fault_ended()
+{
+  if (fault_restart_notice_sent_ || !fcc_landed_and_disarmed()) {
+    return;
+  }
+  fault_restart_notice_sent_ = true;
+  RCLCPP_ERROR(
+    get_logger(), "fault-ended mission: FCC landed and disarmed — restart required");
+  mc_msgs::msg::StatusText msg;
+  msg.header.stamp = now();
+  msg.severity = mc_msgs::msg::StatusText::SEVERITY_CRITICAL;
+  // ICD §4.7: the MAVLink STATUSTEXT relay truncates to 50 chars.
+  msg.text = "FAULT: landed+disarmed, restart required";
+  pub_status_text_->publish(msg);
 }
 
 void MissionManagerNode::send_rtl_command()
@@ -902,13 +974,8 @@ void MissionManagerNode::on_control_timer()
     evaluate_autonomous_transitions();
   }
 
-  if (current_phase_ == Phase::LAND && !mission_complete_logged_) {
-    // DEP-009: PX4 v1.17 arming_state is DISARMED=1/ARMED=2 only (ICD §10.2).
-    constexpr uint8_t kArmingStateDisarmed = 1;
-    if (vehicle_state_ && vehicle_state_->arming_state == kArmingStateDisarmed) {
-      action_log_mission_complete();
-      mission_complete_logged_ = true;
-    }
+  if (current_phase_ == Phase::FAULT) {
+    check_fault_ended();
   }
 
   publish_phase(/*force=*/ false);

@@ -35,4 +35,10 @@ bool save_mission_upload(const std::string & path, const mc_msgs::msg::MissionUp
 // yet. Never throws.
 std::optional<mc_msgs::msg::MissionUpload> load_mission_upload(const std::string & path);
 
+// EXEC-006: deletes `path` (and any leftover `<path>.tmp`), so a restart
+// after a mission recycle doesn't reload the already-flown upload and its
+// ARM authorisation (FR-010). Returns true if the file is gone afterwards,
+// including when it never existed. Never throws and does not log.
+bool remove_mission_upload(const std::string & path);
+
 }  // namespace mission_exec
