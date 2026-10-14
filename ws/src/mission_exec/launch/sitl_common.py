@@ -70,7 +70,6 @@ def require_valid_px4_dir(px4_dir):
 
 def build_drone_nodes(
     index, px4_dir, scratch_dir, use_gazebo=False, mission_upload_path=None,
-    extra_mission_manager_params=None,
 ):
     """
     Return the list of launch Actions for one drone's full SITL MC stack.
@@ -79,21 +78,6 @@ def build_drone_nodes(
     returned list shares one ROS_DOMAIN_ID, isolating this drone's ROS
     graph from any other instance's in the same `ros2 launch` invocation
     (see this module's own docstring for why).
-
-    `extra_mission_manager_params`, if given, is layered on top of
-    `mission_manager_node`'s normal params -- used ONLY by the automated
-    pytest suite to route around a real, separate bug this harness
-    surfaced (not a legitimate flight parameter, see
-    test_sitl_mission_scenarios.py's own comment on it and
-    PROJECT-PLAN-5-MONTH.md's TEST-002 entry): `action_send_takeoff()`
-    sends MAV_CMD_NAV_TAKEOFF's altitude as an absolute AMSL value, but
-    `guard_takeoff_to_ingress()` checks it against relative-to-home NED
-    altitude -- PX4 SITL's non-zero default home elevation means the
-    guard's tolerance is never satisfiable as currently written. Left at
-    its real, unmodified default for the standalone manual launch file
-    (`sitl_mission_test.launch.py` never passes this) so a developer
-    running it by hand rediscovers the real bug rather than having it
-    silently papered over.
     """
     drone_id = index + 1
     fcc_port = FCC_PORT_BASE + PORT_STRIDE * index
@@ -146,8 +130,6 @@ def build_drone_nodes(
         os.path.join(get_package_share_directory('mission_exec'), 'params', 'default.yaml'),
         {'mission_upload_path': mission_upload_path},
     ]
-    if extra_mission_manager_params:
-        mission_manager_params.append(extra_mission_manager_params)
 
     mission_manager_node = launch_ros.actions.Node(
         package='mission_exec',

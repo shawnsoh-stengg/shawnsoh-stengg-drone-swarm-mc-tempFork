@@ -28,12 +28,17 @@ entry for the full writeup and follow-up tracking):
    PX4 denies it ("Arming denied: Resolve system health failures first")
    and the mission is permanently stuck in ARMING. Worked around here with
    a fixed settling delay (test_01) rather than fixed in mission_exec.
-2. `action_send_takeoff()` sends MAV_CMD_NAV_TAKEOFF's altitude (param7) as
-   an absolute AMSL value, but `guard_takeoff_to_ingress()` checks it
-   against relative-to-home NED altitude (`-VehicleState.z`) -- PX4 SITL's
-   non-zero default home elevation (~490m) means the real 2.0m tolerance
-   is never satisfiable, and PX4 itself never climbs ("Already higher than
-   takeoff altitude"). Worked around via `extra_mission_manager_params`.
+2. NEAR-730, fixed 2026-10-14: `action_send_takeoff()` used to send
+   MAV_CMD_NAV_TAKEOFF's altitude (param7, AMSL to PX4) as the raw
+   `takeoff_altitude_m`, but `guard_takeoff_to_ingress()` checks that same
+   value as relative-to-home NED altitude (`-VehicleState.z`) -- PX4 SITL's
+   non-zero default home elevation (~490m) meant PX4 never climbed
+   ("Already higher than takeoff altitude") and the real 2.0m tolerance was
+   never satisfiable. Fixed by sending the local origin's AMSL altitude
+   (`alt_msl + z`) plus `takeoff_altitude_m`; this module's old
+   `takeoff_altitude_tolerance_m: 10000.0` workaround is gone. Like FCC-010
+   below, verified only by `test_mission_manager_node.cpp` so far -- not yet
+   by a live run of this module (test_03 is still skipped for FCC-010).
 3. FCC-010, fixed 2026-09-14 (see FCC-MISSION-CHANNEL-BACKLOG.md's entry):
    `send_formation_slot_item()` (entered via TAKEOFF -> INGRESS's
    `action_begin_formation_slot_reservation()`) used to send
@@ -103,21 +108,7 @@ def generate_test_description():
     sitl_common.require_valid_px4_dir(PX4_DIR)
     scratch_dir = tempfile.mkdtemp(prefix='sitl_mission_scenarios_')
     nodes = sitl_common.build_drone_nodes(
-        0, PX4_DIR, scratch_dir, use_gazebo=False,
-        # Routes around a real bug this test suite discovered --
-        # action_send_takeoff() sends MAV_CMD_NAV_TAKEOFF's altitude as an
-        # absolute AMSL value, but guard_takeoff_to_ingress() checks it
-        # against relative-to-home NED altitude; PX4 SITL's non-zero
-        # default home elevation means that guard's real 2.0m tolerance is
-        # never satisfiable as mission_manager_node is currently written
-        # (confirmed live: PX4 logs "Already higher than takeoff altitude"
-        # and never climbs). NOT a legitimate flight parameter -- see
-        # sitl_common.build_drone_nodes()'s own doc comment and
-        # PROJECT-PLAN-5-MONTH.md's TEST-002 entry, which flags the real
-        # fix as a follow-up. Widening the tolerance here lets the rest of
-        # the happy path (a real system concern, INGRESS through LAND) get
-        # genuinely exercised despite this one, separately-tracked defect.
-        extra_mission_manager_params={'takeoff_altitude_tolerance_m': 10000.0})
+        0, PX4_DIR, scratch_dir, use_gazebo=False)
     return (
         launch.LaunchDescription(nodes + [launch_testing.actions.ReadyToTest()]),
         {'nodes': nodes},

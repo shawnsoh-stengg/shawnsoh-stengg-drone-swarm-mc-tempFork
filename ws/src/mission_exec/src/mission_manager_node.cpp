@@ -396,7 +396,18 @@ void MissionManagerNode::action_send_takeoff()
   // only takes off in place when both are non-finite -- a finite (0, 0) is
   // an explicit target at Null Island, and on the bench the vehicle armed,
   // made no thrust, and auto-disarmed ~11 s later.
-  cmd.params = {0.F, 0.F, 0.F, NAN, NAN, NAN, static_cast<float>(takeoff_altitude_m_)};
+  //
+  // param7 is AMSL to PX4, but takeoff_altitude_m_ means "above home" --
+  // the same frame guard_takeoff_to_ingress() checks it in (-z). NEAR-730:
+  // sending it raw meant PX4 SITL (home ~490 m AMSL) never climbed
+  // ("Already higher than takeoff altitude"). alt_msl + z is the local
+  // NED origin's own AMSL altitude (alt_msl = origin_amsl - z), so this
+  // target lands exactly where the guard's -z reaches takeoff_altitude_m_,
+  // whether or not the vehicle is still sitting at z = 0. vehicle_state_ is
+  // always set here -- guard_arming_to_takeoff() requires it.
+  const double origin_amsl =
+    static_cast<double>(vehicle_state_->alt_msl) + static_cast<double>(vehicle_state_->z);
+  cmd.params = {0.F, 0.F, 0.F, NAN, NAN, NAN, static_cast<float>(origin_amsl + takeoff_altitude_m_)};
   pub_send_command_->publish(cmd);
 }
 
