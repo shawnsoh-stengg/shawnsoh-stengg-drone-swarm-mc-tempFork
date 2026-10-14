@@ -465,7 +465,36 @@ TEST_F(MissionManagerNodeTest, ArmingToTakeoff_GuardTrueSendsTakeoffCommand)
   // instead of climbing in place.
   EXPECT_TRUE(std::isnan(send_commands_.back()->params[4]));
   EXPECT_TRUE(std::isnan(send_commands_.back()->params[5]));
-  EXPECT_FLOAT_EQ(send_commands_.back()->params[6], 10.0F);
+  // NEAR-730: param7 is AMSL — origin 40 m AMSL + 10 m above home, not a
+  // raw 10.
+  EXPECT_FLOAT_EQ(send_commands_.back()->params[6], 50.0F);
+}
+
+// NEAR-730: PX4 SITL's ~490 m home elevation, with the local origin not
+// exactly at the vehicle (z = +0.5, slightly below origin) — param7 must
+// be origin_amsl (alt_msl + z) + takeoff_altitude_m, the AMSL point at
+// which guard_takeoff_to_ingress()'s -z reaches takeoff_altitude_m.
+TEST_F(MissionManagerNodeTest, ArmingToTakeoff_TakeoffAltitudeIsRelativeToLocalOrigin)
+{
+  auto vs = good_vehicle_state();
+  vs.alt_msl = 489.5F;
+  vs.z = 0.5F;
+  pub_mission_upload_->publish(full_mission_upload(true));
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+      std::chrono::seconds(2)));
+
+  vs.arming_state = kArmingStateArmed;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+      std::chrono::seconds(2)));
+  ASSERT_FALSE(send_commands_.empty());
+  EXPECT_EQ(send_commands_.back()->cmd, kMavCmdNavTakeoff);
+  EXPECT_FLOAT_EQ(send_commands_.back()->params[6], 500.0F);
 }
 
 // --- TAKEOFF -> INGRESS (mission-channel, ack-blocking) ---

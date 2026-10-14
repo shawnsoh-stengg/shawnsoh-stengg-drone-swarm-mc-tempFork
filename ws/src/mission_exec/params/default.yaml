@@ -13,6 +13,7 @@ mission_manager_node:
     # Minimum count of (self + ALIVE peers in MUSTER) required to advance
     # MUSTER -> ISR_SELECTION. Default 1 = solo drone, no peers required.
     muster_quorum_count: 1
+    # m above home (local NED -z), not AMSL -- converted for MAV_CMD_NAV_TAKEOFF (NEAR-730)
     takeoff_altitude_m: 30.0
     takeoff_altitude_tolerance_m: 2.0
     waypoint_acceptance_radius_m: 5.0
