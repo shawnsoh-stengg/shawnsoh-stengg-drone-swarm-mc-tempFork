@@ -17,6 +17,8 @@ IMAGE_TAG="${MC_VERSION:-dev}"
 ROS2_CORE_IMAGE="ros2-core:${IMAGE_TAG}"
 IMAGE="ghcr.io/drone-mc/mission-exec"
 
+"${SCRIPT_DIR}/require-docker.sh"
+
 if ! docker image inspect "${ROS2_CORE_IMAGE}" &>/dev/null; then
     echo "==> ERROR: ${ROS2_CORE_IMAGE} not found — run scripts/04-install-ros2-core.sh first" >&2
     exit 1

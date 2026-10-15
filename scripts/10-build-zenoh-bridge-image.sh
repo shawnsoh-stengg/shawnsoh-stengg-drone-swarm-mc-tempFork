@@ -17,6 +17,8 @@ REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
 IMAGE_TAG="${MC_VERSION:-dev}"
 IMAGE="ghcr.io/drone-mc/zenoh-bridge"
 
+"${SCRIPT_DIR}/require-docker.sh"
+
 # INFRA-006: see 08-build-fcc-bridge-image.sh's own comment on this —
 # fail in seconds with a clear diagnosis instead of burning minutes
 # inside a doomed `apt-get update`.
