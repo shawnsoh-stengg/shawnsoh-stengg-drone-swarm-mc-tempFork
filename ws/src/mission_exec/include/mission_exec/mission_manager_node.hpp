@@ -128,7 +128,7 @@ private:
   void action_enter_arming();
   void action_notify_swarm();
   void action_send_takeoff();
-  void action_begin_formation_slot_reservation();
+  void action_begin_ingress_route_upload();
   void action_disable_formation_ctrl();
   void action_disable_detection();
   void action_begin_coverage_path_upload();
@@ -185,14 +185,23 @@ private:
 
   // --- mission-channel ack-blocking (FCC-006) ---
   // Both kinds are full mission uploads at the wire level (FCC-010: PX4 has
-  // no MISSION_WRITE_PARTIAL_LIST handler at any known version, so even the
-  // one-item FORMATION_SLOT reservation goes through fcc_bridge's
-  // upload_mission()/`/mc/fcc/mission_upload`, not update_mission_item()/
-  // `/mc/fcc/mission_item_update`) — this enum only disambiguates which
-  // local send_*()/retry function is pending, not the ack's wire type.
-  enum class AckKind { NONE, FORMATION_SLOT_UPLOAD, COVERAGE_PATH_UPLOAD };
-  void send_formation_slot_item();
+  // no MISSION_WRITE_PARTIAL_LIST handler at any known version, so every
+  // mission change goes through fcc_bridge's upload_mission()/
+  // `/mc/fcc/mission_upload`) — this enum only disambiguates which local
+  // send_*()/retry function is pending, not the ack's wire type.
+  enum class AckKind { NONE, INGRESS_ROUTE_UPLOAD, COVERAGE_PATH_UPLOAD };
+  void send_ingress_route_upload();
   void send_coverage_path_upload();
+  // An uploaded mission doesn't fly itself: PX4 stays in whatever mode it
+  // was in (AUTO_LOITER after TAKEOFF) until MAV_CMD_MISSION_START switches
+  // it to AUTO_MISSION. Sent once each upload acks; check_mission_start()
+  // resends it a bounded number of times until vehicle_state reports
+  // AUTO_MISSION, then stops for good, so a later GCS/pilot mode change
+  // (FR-003 override authority) is never fought. A backend that doesn't
+  // decode nav_state (MavlinkUdpBackend/SITL) just gets every resend, which
+  // is harmless -- see send_mission_start().
+  void send_mission_start();
+  void check_mission_start();
   void check_ack_timeout();
   void on_mission_channel_ack_success();
   void on_mission_channel_ack_failure();
@@ -290,6 +299,13 @@ private:
   int pending_ack_retries_{0};
 
   uint32_t next_upload_id_{1};
+
+  // send_mission_start()/check_mission_start() bookkeeping. pending_ is
+  // true from the upload ack until AUTO_MISSION is observed, attempts run
+  // out, or the phase changes.
+  bool mission_start_pending_{false};
+  int mission_start_attempts_{0};
+  rclcpp::Time mission_start_sent_at_;
 
   // Latched by on_fault()/handle_gcs_command() respectively (event-driven,
   // not re-derived from other topics — see is_critical_fault()'s own doc

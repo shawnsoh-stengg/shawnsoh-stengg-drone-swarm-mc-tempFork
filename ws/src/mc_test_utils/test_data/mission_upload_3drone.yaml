@@ -5,35 +5,30 @@
 # gcs_mavlink_node only ever receives a mission over the real MAVLink
 # MISSION_COUNT/MISSION_ITEM_INT protocol, never a YAML file.
 #
-# ingress_waypoint/muster_point lat/lon are deliberately tiny
-# (near-(0,0), not a real-world location) rather than a realistic
-# geodetic position. This is a workaround for a real, separate limitation
-# TEST-002 surfaced but did not fix (out of scope -- a mission_exec change,
-# not a test-harness one): mission_manager_node's guard_ingress_to_muster()
-# compares MissionUpload.ingress_waypoints[].pose.position.x/y (which
-# gcs_mavlink_node's decode_ingress_or_muster_item() populates with raw
-# lat/lon *degrees*, ICD §4.6) directly against VehicleState.x/y (local
-# NED *metres*) with no unit conversion -- comparing degrees to metres.
-# Keeping both waypoints' lat/lon within ~0.001 degrees of (0,0) keeps that
-# comparison's magnitude trivially small (fractions of a "metre" either
-# way) regardless of the unit mismatch, so the guard is satisfiable without
-# masking the underlying bug or needing to fix mission_exec's own guard
-# logic under this ticket. See PROJECT-PLAN-5-MONTH.md's TEST-002 entry.
+# Positions sit around PX4 SITL/SIH's default home (SIH_LOC_LAT0/LON0,
+# 47.397742, 8.545594), so the ingress route is a short real flight: ~30 m
+# north to the ingress waypoint, then ~30 m east to the muster point.
+# mission_manager_node uploads these as the FCC mission for INGRESS and
+# checks arrival against the vehicle's lat/lon. alt_m is metres above home,
+# like takeoff_altitude_m. (These used to be pinned near (0,0) to dodge
+# guard_ingress_to_muster() comparing lat/lon degrees against local NED
+# metres -- fixed, so that workaround is gone; as a real mission, (0,0)
+# would now be a flight to Null Island.)
 ingress_waypoint:
-  lat_deg: 0.00010
-  lon_deg: 0.00010
+  lat_deg: 47.398012
+  lon_deg: 8.545594
   alt_m: 30.0
 muster_point:
-  lat_deg: 0.00010
-  lon_deg: 0.00010
+  lat_deg: 47.398012
+  lon_deg: 8.545994
   alt_m: 30.0
 search_polygon:
-  - lat_deg: 0.00010
-    lon_deg: 0.00010
-  - lat_deg: 0.00020
-    lon_deg: 0.00010
-  - lat_deg: 0.00020
-    lon_deg: 0.00020
+  - lat_deg: 47.398012
+    lon_deg: 8.545994
+  - lat_deg: 47.398462
+    lon_deg: 8.545994
+  - lat_deg: 47.398462
+    lon_deg: 8.546594
 formation_offsets:
   - drone_id: 1
     n_m: 0.0

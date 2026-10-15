@@ -84,6 +84,9 @@ constexpr uint8_t kNavStateAutoLoiter = 4;
 constexpr uint32_t kMavCmdComponentArmDisarm = 400;
 constexpr uint32_t kMavCmdNavReturnToLaunch = 20;
 constexpr uint32_t kMavCmdNavTakeoff = 22;
+constexpr uint32_t kMavCmdMissionStart = 300;
+constexpr uint8_t kNavStateAutoMission = 3;
+constexpr uint8_t kMavFrameGlobalRelativeAltInt = 6;
 constexpr uint32_t kMavCmdDoSetMode = 176;
 constexpr uint32_t kMcCmdEndMission = 50003;
 }  // namespace
@@ -219,16 +222,44 @@ protected:
     return vs;
   }
 
+  static geometry_msgs::msg::PoseStamped ingress_waypoint(double lat, double lon, double alt_m)
+  {
+    geometry_msgs::msg::PoseStamped wp;
+    wp.pose.position.x = lat;
+    wp.pose.position.y = lon;
+    wp.pose.position.z = alt_m;
+    wp.pose.orientation.w = 1.0;
+    return wp;
+  }
+
+  // full_mission_upload() with a two-leg route whose muster point is
+  // ~220 m north of good_vehicle_state(), so the node stays in INGRESS.
+  mc_msgs::msg::MissionUpload far_muster_mission_upload() const
+  {
+    auto up = full_mission_upload(/*arm_authorised=*/ true);
+    up.ingress_waypoints = {
+      ingress_waypoint(1.301, 103.8, 20.0),
+      ingress_waypoint(1.302, 103.801, 25.0)};
+    return up;
+  }
+
+  size_t mission_start_count() const
+  {
+    return static_cast<size_t>(
+      std::count_if(
+        send_commands_.begin(), send_commands_.end(),
+        [](const mc_msgs::msg::FccCommand::SharedPtr & c) {return c->cmd == kMavCmdMissionStart;}));
+  }
+
   mc_msgs::msg::MissionUpload full_mission_upload(bool arm_authorised) const
   {
     mc_msgs::msg::MissionUpload up;
     up.header.stamp = harness_->now();
     up.upload_id = 42;
-    geometry_msgs::msg::PoseStamped wp;
-    wp.pose.position.x = 0.0;
-    wp.pose.position.y = 0.0;
-    wp.pose.position.z = 0.0;
-    up.ingress_waypoints = {wp};
+    // Single ingress waypoint at good_vehicle_state()'s own lat/lon, so the
+    // muster check passes as soon as INGRESS is entered. position.x/.y are
+    // lat/lon (deg), z is metres above home -- as the GCS decoders fill them.
+    up.ingress_waypoints = {ingress_waypoint(1.3, 103.8, 10.0)};
     mc_msgs::msg::FormationOffset offset;
     offset.drone_id = 1;
     up.formation_offsets = {offset};
@@ -252,14 +283,18 @@ protected:
   }
 
   // Drives the node from PREFLIGHT through ARMING, TAKEOFF, and INGRESS
-  // (acking the FORMATION_SLOT reservation along the way — a full one-item
-  // mission upload, not a mission-item update; FCC-010) so later-phase
+  // (acking the ingress-route mission upload along the way) so later-phase
   // tests can start from a realistic precondition instead of re-deriving
   // every earlier phase's setup — mirrors TP-ST-001's own full-mission
   // structure.
   void advance_to_ingress()
   {
-    pub_mission_upload_->publish(full_mission_upload(/*arm_authorised=*/ true));
+    advance_to_ingress(full_mission_upload(/*arm_authorised=*/ true));
+  }
+
+  void advance_to_ingress(const mc_msgs::msg::MissionUpload & upload)
+  {
+    pub_mission_upload_->publish(upload);
     pub_vehicle_state_->publish(good_vehicle_state());
     ASSERT_TRUE(
       spin_until(
@@ -540,14 +575,13 @@ TEST_F(MissionManagerNodeTest, TakeoffToIngress_BlocksOnAckThenCommitsOnSuccess)
       std::chrono::seconds(2)));
 
   send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // PHASE_TRANSITION(INGRESS)
-  // FCC-010: the FORMATION_SLOT reservation is now a full (one-item)
-  // mission upload, not a mission-item update.
   ASSERT_TRUE(
     spin_until(
       {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
       std::chrono::seconds(2)));
   ASSERT_EQ(fcc_mission_uploads_.back()->items.size(), 1U);
   EXPECT_EQ(fcc_mission_uploads_.back()->items.back().seq, 0);
+  EXPECT_EQ(mission_start_count(), 0U) << "MISSION_START must wait for the upload ack";
 
   // No ack yet -> the state machine must not have optimistically advanced.
   spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
@@ -562,6 +596,47 @@ TEST_F(MissionManagerNodeTest, TakeoffToIngress_BlocksOnAckThenCommitsOnSuccess)
     spin_until(
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::INGRESS);},
       std::chrono::seconds(2)));
+}
+
+TEST_F(MissionManagerNodeTest, TakeoffToIngress_UploadsPlanIngressWaypointsAsTheMission)
+{
+  pub_mission_upload_->publish(far_muster_mission_upload());
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ARMING);},
+      std::chrono::seconds(2)));
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
+      std::chrono::seconds(2)));
+
+  send_gcs_command(50001, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // PHASE_TRANSITION(INGRESS)
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return !fcc_mission_uploads_.empty();},
+      std::chrono::seconds(2)));
+
+  // One item per ingress waypoint, in plan order -- not a placeholder at
+  // the vehicle's own position (lat 1.3, lon 103.8).
+  const auto & items = fcc_mission_uploads_.back()->items;
+  ASSERT_EQ(items.size(), 2U);
+  const std::array<std::array<double, 3>, 2> expected{{
+    {1.301, 103.8, 20.0}, {1.302, 103.801, 25.0}}};
+  for (size_t i = 0; i < items.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(items[i].seq, i);
+    EXPECT_EQ(items[i].command, 16U /*MAV_CMD_NAV_WAYPOINT*/);
+    // Altitude is above home, like takeoff_altitude_m (NEAR-730), not AMSL.
+    EXPECT_EQ(items[i].frame, kMavFrameGlobalRelativeAltInt);
+    EXPECT_EQ(items[i].lat, static_cast<int32_t>(std::lround(expected[i][0] * 1e7)));
+    EXPECT_EQ(items[i].lon, static_cast<int32_t>(std::lround(expected[i][1] * 1e7)));
+    EXPECT_FLOAT_EQ(items[i].alt, static_cast<float>(expected[i][2]));
+  }
 }
 
 TEST_F(MissionManagerNodeTest, TakeoffToIngress_FailedAckRetriesThenEscalatesToFault)
@@ -611,13 +686,17 @@ TEST_F(MissionManagerNodeTest, TakeoffToIngress_FailedAckRetriesThenEscalatesToF
 
 TEST_F(MissionManagerNodeTest, IngressToMuster_GuardFalseUntilMusterWaypointReached)
 {
-  advance_to_ingress();
-  // Still far from the mission upload's single (0,0) muster waypoint.
+  advance_to_ingress(far_muster_mission_upload());
+  // ~110 m short of the muster waypoint (1.302, 103.801). Local NED x/y
+  // happen to match the waypoint's lat/lon *numbers* -- the old check
+  // compared those directly and would have passed here.
   auto vs = good_vehicle_state();
   vs.arming_state = kArmingStateArmed;
   vs.z = -10.0F;
-  vs.x = 100.0F;
-  vs.y = 100.0F;
+  vs.lat = 1.301;
+  vs.lon = 103.8;
+  vs.x = 1.302F;
+  vs.y = 103.801F;
   pub_vehicle_state_->publish(vs);
   spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
@@ -625,17 +704,72 @@ TEST_F(MissionManagerNodeTest, IngressToMuster_GuardFalseUntilMusterWaypointReac
 
 TEST_F(MissionManagerNodeTest, IngressToMuster_GuardTrueOnReachingMusterWaypoint)
 {
-  advance_to_ingress();
+  advance_to_ingress(far_muster_mission_upload());
   auto vs = good_vehicle_state();
   vs.arming_state = kArmingStateArmed;
   vs.z = -10.0F;
-  vs.x = 0.0F;
-  vs.y = 0.0F;  // matches ingress_waypoints' single (0,0) waypoint
+  // ~1.1 m from the muster waypoint, inside the 3 m acceptance radius. x/y
+  // are far from it, but they're local NED metres and aren't consulted.
+  vs.lat = 1.30201;
+  vs.lon = 103.801;
+  vs.x = 250.0F;
+  vs.y = 120.0F;
   pub_vehicle_state_->publish(vs);
   ASSERT_TRUE(
     spin_until(
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::MUSTER);},
       std::chrono::seconds(2)));
+}
+
+// --- INGRESS: switching the FCC into MISSION mode ---
+
+TEST_F(MissionManagerNodeTest, Ingress_SendsMissionStartOnceFccEntersMissionMode)
+{
+  advance_to_ingress(far_muster_mission_upload());
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return mission_start_count() == 1U;},
+      std::chrono::seconds(2)));
+  EXPECT_FLOAT_EQ(send_commands_.back()->params[0], 0.0F);  // start from item 0
+
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  vs.nav_state = kNavStateAutoMission;
+  pub_vehicle_state_->publish(vs);
+  // Well past the 1 s resend period: no resend once AUTO_MISSION is seen.
+  spin_until({node_, harness_}, [] {return false;}, std::chrono::milliseconds(2500));
+  EXPECT_EQ(mission_start_count(), 1U);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
+}
+
+TEST_F(MissionManagerNodeTest, Ingress_ResendsMissionStartThenReportsAndStops)
+{
+  advance_to_ingress(far_muster_mission_upload());
+  auto vs = good_vehicle_state();
+  vs.arming_state = kArmingStateArmed;
+  vs.z = -10.0F;
+  vs.nav_state = kNavStateAutoLoiter;  // FCC never takes the mode change
+  pub_vehicle_state_->publish(vs);
+
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return any_status_text_contains(status_texts_, "MISSION_START");},
+      std::chrono::seconds(5)));
+  EXPECT_EQ(mission_start_count(), 3U);
+  // Only the first send picks item 0; resends must not rewind the route.
+  std::vector<float> first_items;
+  for (const auto & c : send_commands_) {
+    if (c->cmd == kMavCmdMissionStart) {
+      first_items.push_back(c->params[0]);
+    }
+  }
+  EXPECT_EQ(first_items, (std::vector<float>{0.F, -1.F, -1.F}));
+  // Gives up rather than fighting the FCC (or a pilot) forever, and holds
+  // in INGRESS rather than faulting.
+  spin_until({node_, harness_}, [] {return false;}, std::chrono::milliseconds(1500));
+  EXPECT_EQ(mission_start_count(), 3U);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
 }
 
 // --- MUSTER -> ISR_SELECTION ---
@@ -724,8 +858,8 @@ TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardFalseUntilCellAndPa
 
   spin_until({node_, harness_}, [this] {return heartbeats_.size() > 5;}, std::chrono::seconds(1));
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::VORONOI_PARTITION);
-  // advance_to_ingress() already produced exactly one upload (the
-  // FORMATION_SLOT reservation, FCC-010) — no coverage-path upload yet.
+  // advance_to_ingress() already produced exactly one upload (the ingress
+  // route) — no coverage-path upload yet.
   EXPECT_EQ(fcc_mission_uploads_.size(), 1U);
 }
 
@@ -749,8 +883,8 @@ TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardTrueUploadsCoverage
   cell.upload_id = 42;  // matches full_mission_upload()'s upload_id
   pub_voronoi_cell_->publish(cell);
 
-  // advance_to_ingress() already produced one upload (FORMATION_SLOT
-  // reservation, FCC-010) — wait for a *new* one past that baseline rather
+  // advance_to_ingress() already produced one upload (the ingress
+  // route) — wait for a *new* one past that baseline rather
   // than just "non-empty", so `.back()` below is really the coverage path.
   const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
 
@@ -804,8 +938,8 @@ TEST_F(MissionManagerNodeTest, SearchToReturn_GuardTrueOnFccMissionComplete)
   mc_msgs::msg::VoronoiCell cell;
   cell.upload_id = 42;
   pub_voronoi_cell_->publish(cell);
-  // advance_to_ingress() already produced one upload (FORMATION_SLOT
-  // reservation, FCC-010) — wait for a *new* one past that baseline.
+  // advance_to_ingress() already produced one upload (the ingress
+  // route) — wait for a *new* one past that baseline.
   const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
   nav_msgs::msg::Path path;
   geometry_msgs::msg::PoseStamped p1;
@@ -982,8 +1116,8 @@ TEST_F(MissionManagerNodeTest, EmergencyCommandDuringAutonomousSearchPhasePreemp
   mc_msgs::msg::VoronoiCell cell;
   cell.upload_id = 42;
   pub_voronoi_cell_->publish(cell);
-  // advance_to_ingress() already produced one upload (FORMATION_SLOT
-  // reservation, FCC-010) — wait for a *new* one past that baseline.
+  // advance_to_ingress() already produced one upload (the ingress
+  // route) — wait for a *new* one past that baseline.
   const size_t uploads_before_coverage_path = fcc_mission_uploads_.size();
   nav_msgs::msg::Path path;
   path.poses = {geometry_msgs::msg::PoseStamped()};
@@ -1320,7 +1454,7 @@ TEST_F(MissionManagerNodeTest, LateMissionAckAfterRecycleIsIgnored)
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::TAKEOFF);},
       std::chrono::seconds(2)));
 
-  // Start the FORMATION_SLOT upload but never ack it, then abort.
+  // Start the ingress-route upload but never ack it, then abort.
   wait_for_ticks();
   send_gcs_command(50001 /*MC_CMD_PHASE_TRANSITION*/, {3.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
   ASSERT_TRUE(
