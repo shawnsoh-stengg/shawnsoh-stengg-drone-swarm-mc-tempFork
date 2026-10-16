@@ -184,7 +184,23 @@ Set via QGroundControl → Parameters → UXRCE_DDS_CFG and UXRCE_DDS_BAUD befor
 
 **Jetson Linux device tree:**
 
-ttyTHS1 is exposed under `/dev/ttyTHS1` without additional configuration under JetPack 6.2.2. The device requires `dialout` group membership or a `udev` rule to be accessible within the Docker container:
+JetPack 6.2.2 exposes ttyTHS1 as `/dev/ttyTHS1` (controller `/bus@0/serial@3100000`). However, it needs a device-tree overlay before uXRCE-DDS works over it (INFRA-009). With the stock device tree, serial-tegra's RX DMA path returns zeros for every 16-byte FIFO-trigger burst. A 23-byte XRCE ping therefore arrives as 16 zero bytes followed by its intact 7-byte tail, and the Agent never establishes a session. This was root-caused on orin-nx (L4T R36.5.2) on 2026-09-24. Baud, wiring, flow control and the PX4 parameters were all correct; don't re-chase them. The overlay, `config/dt/ttyTHS1-rx-pio.dts`, renames `dma-names` to `"rx-off", "tx-off"`, so the driver falls back to PIO in both directions. Only RX DMA was proven broken, but both-off is the configuration verified on hardware, and the PIO CPU cost at 921600 baud is negligible on Orin.
+
+`scripts/01-install-os.sh` installs the overlay:
+
+1. It compiles the overlay with `dtc`, using this board's own top-level `compatible` (the UEFI loader rejects an overlay whose compatible doesn't match), and installs it as `/boot/ttyTHS1-rx-pio.dtbo`.
+2. It appends a `LABEL rxpio` entry to `/boot/extlinux/extlinux.conf`, cloned from the current `DEFAULT` entry plus `FDT` and `OVERLAYS` lines, and makes `rxpio` the new `DEFAULT`. The original entry stays in the boot menu as the fallback, and a backup is written to `extlinux.conf.pre-infra-009`.
+
+A reboot is required. `01b-smoke-test-os.sh` then checks the live device tree:
+
+```bash
+tr '\0' ' ' < /proc/device-tree/bus@0/serial@3100000/dma-names; echo   # expect: rx-off tx-off
+sudo dmesg | grep -i "PIO mode"                                        # expect RX + TX in PIO mode
+```
+
+If the `DEFAULT` entry already loads other overlays (for example a Jetson-IO entry for HIF-003's camera), the script stops rather than guess how to merge them. Add `/boot/ttyTHS1-rx-pio.dtbo` to that entry's `OVERLAYS` line by hand, then re-run the script. Re-run `01b` after any later Jetson-IO change or L4T upgrade that rewrites `extlinux.conf`.
+
+The device requires `dialout` group membership or a `udev` rule to be accessible within the Docker container:
 
 ```
 # /etc/udev/rules.d/99-drone-mc.rules
@@ -1056,7 +1072,7 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 
 ### 13.2 Software Configuration (one-time, per drone)
 
-- [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the Netplan config (single `MC_ETH_IP`/24, default `192.168.100.11/24`, on eth0) and the `/dev/ttyTHS1` udev rule. Verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
+- [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the Netplan config (single `MC_ETH_IP`/24, default `192.168.100.11/24`, on eth0) the `/dev/ttyTHS1` udev rule, and the ttyTHS1 PIO device-tree overlay + extlinux `rxpio` boot entry (INFRA-009, §3.3). Reboot, then verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
 - [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600`, `UXRCE_DDS_PTCFG = 2` via QGroundControl, then reboot the FCC (§3.3 — without `PTCFG = 2` no `/fmu/*` topic reaches `fcc_bridge_node`).
 - [ ] **HIF-002** Set the Pixhawk's Ethernet address: edit `/fs/microsd/net.cfg` so `IPADDR` = this drone's `FCC_ETH_IP` (`BOOTPROTO=static`, `NETMASK=255.255.255.0`, §4.2), reboot the FCC, verify with `netman show` in the MAVLink console.
 - [ ] **HIF-002** Set PX4 agent IP: `UXRCE_DDS_AG_IP = -1062706165` (default `MC_ETH_IP` 192.168.100.11 as signed int32 — recompute for a non-default `MC_ETH_IP`, §4.2), `UXRCE_DDS_PORT_CFG = 8888`.
