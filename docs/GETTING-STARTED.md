@@ -28,8 +28,10 @@ run it right after the matching build step to catch problems early rather
 than at the end of the chain.
 
 ```bash
-# 0. One-time OS setup: Netplan single-IP (eth0, MC_ETH_IP), ttyTHS1 udev rule, CycloneDDS sysctl floor
+# 0. One-time OS setup: Netplan single-IP (eth0, MC_ETH_IP), ttyTHS1 udev rule, CycloneDDS sysctl floor,
+#    ttyTHS1 PIO device-tree overlay (INFRA-009 — reboot before the smoke test)
 sudo ./scripts/01-install-os.sh
+sudo reboot
 sudo ./scripts/01b-smoke-test-os.sh
 
 # 1. Build the ros2-core base Docker image (all service images FROM this)
