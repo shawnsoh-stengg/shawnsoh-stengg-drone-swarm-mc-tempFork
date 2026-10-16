@@ -63,6 +63,18 @@ entry for the full writeup and follow-up tracking):
    instance -- do that re-run before removing the skips, per this repo's
    own "verify against real PX4/live behavior before trusting a fix"
    convention (this whole finding was itself only caught by a live run).
+   (Since superseded on the mission_exec side: TAKEOFF -> INGRESS now
+   uploads the plan's ingress_waypoints as the mission rather than a
+   one-item FORMATION_SLOT placeholder -- see item 4.)
+4. INGRESS never flew the plan, fixed 2026-10-15: the TAKEOFF -> INGRESS
+   upload was a one-item placeholder at the vehicle's own position, nothing
+   ever put PX4 into MISSION mode, and guard_ingress_to_muster() compared
+   the waypoints' lat/lon degrees against local NED metres. Now
+   `send_ingress_route_upload()` uploads ingress_waypoints (alt above home,
+   MAV_FRAME_GLOBAL_RELATIVE_ALT_INT), MAV_CMD_MISSION_START follows the
+   ack, and the guard compares lat/lon. The fixture's old near-(0,0)
+   workaround is gone. Verified by test_mission_manager_node.cpp only --
+   test_03/04 are still skipped, so not yet by a live SITL run.
 """
 import os
 import subprocess
@@ -213,10 +225,10 @@ class TestSitlMissionScenarios(unittest.TestCase):
 
     @unittest.skip(_BLOCKED_BY_PARTIAL_MISSION_UPDATE_BUG)
     def test_04_ingress_to_muster(self):
-        # Fixture's ingress/muster waypoint is deliberately near (0,0) --
-        # see mission_upload_3drone.yaml's own comment on why -- so this is
-        # satisfied almost immediately, no formation_controller_node needed.
-        self._wait_for_phase(MissionPhase.MUSTER, 10.0)
+        # A real ~60 m flight: the fixture's ingress route around SIH home
+        # is uploaded as the INGRESS mission and started with
+        # MAV_CMD_MISSION_START -- see mission_upload_3drone.yaml's comment.
+        self._wait_for_phase(MissionPhase.MUSTER, 60.0)
 
     @unittest.skip(_BLOCKED_BY_PARTIAL_MISSION_UPDATE_BUG)
     def test_05_muster_to_isr_selection(self):

@@ -15,6 +15,7 @@ namespace
 {
 // ICD-MC-001 §10.1/§10.2
 constexpr uint8_t kArmingStateArmed = 2;
+constexpr uint8_t kNavStateAutoMission = 3;
 constexpr uint8_t kNavStateAutoLoiter = 4;
 
 // ICD-MC-001 §10.5
@@ -24,6 +25,7 @@ constexpr uint32_t kMavCmdNavReturnToLaunch = 20;
 // the "gap note"s already present elsewhere in this ICD, e.g. IsrRole.msg).
 constexpr uint32_t kMavCmdNavLand = 21;
 constexpr uint32_t kMavCmdNavTakeoff = 22;
+constexpr uint32_t kMavCmdMissionStart = 300;
 constexpr uint32_t kMavCmdComponentArmDisarm = 400;
 constexpr uint32_t kMcCmdPhaseTransition = 50001;
 constexpr uint32_t kMcCmdArmAuthorise = 50002;
@@ -32,6 +34,28 @@ constexpr uint32_t kMcCmdGcsOverride = 50004;
 
 // MAV_SEVERITY (MAVLink common.xml): 0=EMERGENCY..2=CRITICAL..7=DEBUG.
 constexpr uint8_t kSeverityCritical = 2;
+
+// MAVLink MAV_FRAME / MAV_CMD values for FccMissionItem.
+constexpr uint8_t kMavFrameGlobalInt = 5;
+constexpr uint8_t kMavFrameGlobalRelativeAltInt = 6;
+constexpr uint16_t kMavCmdNavWaypoint = 16;
+
+// check_mission_start(): resend MISSION_START this often, at most this many
+// times in total, until vehicle_state reports AUTO_MISSION.
+constexpr double kMissionStartRetryPeriodS = 1.0;
+constexpr int kMissionStartMaxAttempts = 3;
+
+// Equirectangular approximation -- plenty for acceptance radii of a few
+// metres. lon difference is wrapped so the antimeridian doesn't break it.
+double horizontal_distance_m(double lat1_deg, double lon1_deg, double lat2_deg, double lon2_deg)
+{
+  constexpr double kEarthRadiusM = 6371008.8;
+  constexpr double kDegToRad = M_PI / 180.0;
+  const double dlat = (lat2_deg - lat1_deg) * kDegToRad;
+  const double dlon = std::remainder(lon2_deg - lon1_deg, 360.0) * kDegToRad *
+    std::cos(0.5 * (lat1_deg + lat2_deg) * kDegToRad);
+  return kEarthRadiusM * std::hypot(dlat, dlon);
+}
 }  // namespace
 
 MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
@@ -158,7 +182,7 @@ void MissionManagerNode::build_transition_table()
   };
   transition_table_[Phase::TAKEOFF] = {
     {Phase::INGRESS, [this] {return guard_takeoff_to_ingress();},
-      [this] {action_begin_formation_slot_reservation();}},
+      [this] {action_begin_ingress_route_upload();}},
   };
   transition_table_[Phase::INGRESS] = {
     {Phase::MUSTER, [this] {return guard_ingress_to_muster();},
@@ -261,19 +285,29 @@ bool MissionManagerNode::guard_takeoff_to_ingress() const
   if (!vehicle_state_) {
     return false;
   }
+  // Nothing to upload as the INGRESS mission otherwise. Pre-arm checks
+  // already require it, so this only matters for a malformed upload.
+  if (!flown_mission_upload_ || flown_mission_upload_->ingress_waypoints.empty()) {
+    return false;
+  }
   const double altitude_agl = -static_cast<double>(vehicle_state_->z);
   return std::abs(altitude_agl - takeoff_altitude_m_) <= takeoff_altitude_tolerance_m_;
 }
 
 bool MissionManagerNode::guard_ingress_to_muster() const
 {
-  if (!vehicle_state_ || !mission_upload_ || mission_upload_->ingress_waypoints.empty()) {
+  if (!vehicle_state_ || !flown_mission_upload_ ||
+    flown_mission_upload_->ingress_waypoints.empty())
+  {
     return false;
   }
-  const auto & muster_wp = mission_upload_->ingress_waypoints.back().pose.position;
-  const double dx = static_cast<double>(vehicle_state_->x) - muster_wp.x;
-  const double dy = static_cast<double>(vehicle_state_->y) - muster_wp.y;
-  return std::sqrt(dx * dx + dy * dy) <= waypoint_acceptance_radius_m_;
+  // ingress_waypoints carry lat/lon in degrees in position.x/.y (both
+  // gcs_mavlink_node and mission_orchestrator_node decode them that way),
+  // so compare against the vehicle's own lat/lon, not its local NED x/y.
+  const auto & muster_wp = flown_mission_upload_->ingress_waypoints.back().pose.position;
+  return horizontal_distance_m(
+    vehicle_state_->lat, vehicle_state_->lon, muster_wp.x, muster_wp.y) <=
+         waypoint_acceptance_radius_m_;
 }
 
 bool MissionManagerNode::guard_muster_to_isr_selection() const
@@ -411,52 +445,107 @@ void MissionManagerNode::action_send_takeoff()
   pub_send_command_->publish(cmd);
 }
 
-void MissionManagerNode::send_formation_slot_item()
+void MissionManagerNode::send_ingress_route_upload()
 {
-  // Reserves PX4 dataman seq 0 (FORMATION_SLOT) at the drone's own current
-  // position — a placeholder so a valid item exists before formation_
-  // controller_node (SC-001, out of scope here) takes over with the real
-  // computed target via its own continuous >=2 Hz mission_item_update
-  // stream (SDD §5.2/§5.3). Deriving the actual formation-slot geodetic
-  // target here would require the NED->WGS-84 home-anchored transform
-  // FR-024's owner (formation_controller_node) is responsible for, not
-  // this node.
+  // The plan's ingress_waypoints become the FCC mission for INGRESS, flown
+  // in MISSION mode once send_mission_start() switches PX4 into it. This
+  // replaces the old one-item FORMATION_SLOT placeholder at the vehicle's
+  // own position, which formation_controller_node (SC-001) was meant to
+  // overwrite but never does -- so the vehicle just held position. SC-001's
+  // follower behaviour is still to come; until then every drone flies the
+  // plan's route itself.
   //
-  // FCC-010: this reservation is a full (one-item) mission upload, not a
-  // mission-item *update* — fcc_bridge's update_mission_item() requires an
-  // already-uploaded base mission to patch an item into (PX4 has no
-  // MISSION_WRITE_PARTIAL_LIST handler at any known version, so it can't
-  // create dataman content from nothing either), and nothing has uploaded
-  // one yet at this point in the phase sequence. formation_controller_node's
-  // later per-tick replacements are real update_mission_item() calls against
-  // the single-item mission this establishes.
+  // position.x/.y are lat/lon (deg), as both GCS decoders store them.
+  // position.z is metres above home, the same frame as takeoff_altitude_m_
+  // (NEAR-730), so it goes up as MAV_FRAME_GLOBAL_RELATIVE_ALT_INT rather
+  // than AMSL -- sent as AMSL, a 50 m waypoint at a ~490 m AMSL SITL home
+  // would be a target underground.
   mc_msgs::msg::FccMission mission;
   mission.header.stamp = now();
   mission.upload_id = pending_upload_id_;
 
-  mc_msgs::msg::FccMissionItem item;
-  item.header.stamp = now();
-  item.seq = 0;
-  item.frame = 5;  // MAV_FRAME_GLOBAL_INT (ICD §9.2 FccMissionItem comment)
-  item.command = 16;  // MAV_CMD_NAV_WAYPOINT
-  item.lat = vehicle_state_ ? static_cast<int32_t>(vehicle_state_->lat * 1e7) : 0;
-  item.lon = vehicle_state_ ? static_cast<int32_t>(vehicle_state_->lon * 1e7) : 0;
-  item.alt = vehicle_state_ ? vehicle_state_->alt_msl : 0.F;
-  item.acceptance_radius = static_cast<float>(waypoint_acceptance_radius_m_);
-  mission.items.push_back(item);
+  uint16_t seq = 0;
+  for (const auto & wp : flown_mission_upload_->ingress_waypoints) {
+    mc_msgs::msg::FccMissionItem item;
+    item.header.stamp = now();
+    item.seq = seq++;
+    item.frame = kMavFrameGlobalRelativeAltInt;
+    item.command = kMavCmdNavWaypoint;
+    item.lat = static_cast<int32_t>(std::lround(wp.pose.position.x * 1e7));
+    item.lon = static_cast<int32_t>(std::lround(wp.pose.position.y * 1e7));
+    item.alt = static_cast<float>(wp.pose.position.z);
+    item.acceptance_radius = static_cast<float>(waypoint_acceptance_radius_m_);
+    mission.items.push_back(item);
+  }
   pub_mission_upload_->publish(mission);
 
-  pending_ack_kind_ = AckKind::FORMATION_SLOT_UPLOAD;
+  pending_ack_kind_ = AckKind::INGRESS_ROUTE_UPLOAD;
   pending_ack_sent_at_ = now();
 }
 
-void MissionManagerNode::action_begin_formation_slot_reservation()
+void MissionManagerNode::action_begin_ingress_route_upload()
 {
   pending_target_phase_ = Phase::INGRESS;
   pending_source_ = mc_msgs::msg::MissionPhase::SOURCE_GCS_COMMAND;
   pending_ack_retries_ = 0;
   pending_upload_id_ = next_upload_id_++;
-  send_formation_slot_item();
+  send_ingress_route_upload();
+}
+
+void MissionManagerNode::send_mission_start()
+{
+  mc_msgs::msg::FccCommand cmd;
+  cmd.header.stamp = now();
+  cmd.cmd = kMavCmdMissionStart;
+  // param1 = first item; only param1 is read. PX4 v1.17's Commander
+  // accepts -1..seq_total-1 and switches to AUTO_MISSION; its navigator
+  // then jumps to that item if it's >= 0. So the first send starts at item
+  // 0 and resends use -1, which leaves the current item alone -- a resend
+  // that lands after PX4 did switch (the ack or vehicle_state was just
+  // slow) must not rewind the route.
+  const float first_item = mission_start_attempts_ == 0 ? 0.F : -1.F;
+  cmd.params = {first_item, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
+  pub_send_command_->publish(cmd);
+  ++mission_start_attempts_;
+  mission_start_sent_at_ = now();
+}
+
+void MissionManagerNode::check_mission_start()
+{
+  if (!mission_start_pending_) {
+    return;
+  }
+  if (current_phase_ != Phase::INGRESS) {
+    mission_start_pending_ = false;
+    return;
+  }
+  if (vehicle_state_ && vehicle_state_->nav_state == kNavStateAutoMission) {
+    RCLCPP_INFO(get_logger(), "INGRESS: FCC in MISSION mode, flying ingress route");
+    mission_start_pending_ = false;
+    return;
+  }
+  if ((now() - mission_start_sent_at_).seconds() < kMissionStartRetryPeriodS) {
+    return;
+  }
+  if (mission_start_attempts_ >= kMissionStartMaxAttempts) {
+    // Not a FAULT: the vehicle is holding safely, and the GCS can still
+    // start the mission or abort. Just make sure the operator knows.
+    mission_start_pending_ = false;
+    RCLCPP_ERROR(
+      get_logger(), "INGRESS: FCC not in MISSION mode after %d MISSION_START attempts",
+      mission_start_attempts_);
+    mc_msgs::msg::StatusText msg;
+    msg.header.stamp = now();
+    msg.severity = mc_msgs::msg::StatusText::SEVERITY_CRITICAL;
+    // ICD §4.7: the MAVLink STATUSTEXT relay truncates to 50 chars.
+    msg.text = "INGRESS: FCC rejected MISSION_START, holding";
+    pub_status_text_->publish(msg);
+    return;
+  }
+  RCLCPP_WARN(
+    get_logger(), "INGRESS: FCC not in MISSION mode yet, resending MISSION_START (%d/%d)",
+    mission_start_attempts_ + 1, kMissionStartMaxAttempts);
+  send_mission_start();
 }
 
 void MissionManagerNode::action_disable_formation_ctrl()
@@ -487,8 +576,8 @@ void MissionManagerNode::send_coverage_path_upload()
     mc_msgs::msg::FccMissionItem item;
     item.header.stamp = now();
     item.seq = seq++;
-    item.frame = 5;  // MAV_FRAME_GLOBAL_INT
-    item.command = 16;  // MAV_CMD_NAV_WAYPOINT
+    item.frame = kMavFrameGlobalInt;
+    item.command = kMavCmdNavWaypoint;
     item.lat = static_cast<int32_t>(pose.pose.position.y * 1e7);
     item.lon = static_cast<int32_t>(pose.pose.position.x * 1e7);
     item.alt = static_cast<float>(pose.pose.position.z);
@@ -554,6 +643,7 @@ void MissionManagerNode::reset_mission_state()
   critical_fault_latched_ = false;
   pending_ack_kind_ = AckKind::NONE;
   pending_ack_retries_ = 0;
+  mission_start_pending_ = false;
   isr_role_.reset();
   voronoi_cell_.reset();
   coverage_path_.reset();
@@ -760,8 +850,14 @@ void MissionManagerNode::on_mission_channel_ack_success()
 {
   const Phase target = pending_target_phase_;
   const uint8_t source = pending_source_;
+  const AckKind kind = pending_ack_kind_;
   pending_ack_kind_ = AckKind::NONE;
   commit_transition(target, source);
+  if (kind == AckKind::INGRESS_ROUTE_UPLOAD) {
+    mission_start_attempts_ = 0;
+    mission_start_pending_ = true;
+    send_mission_start();
+  }
 }
 
 void MissionManagerNode::on_mission_channel_ack_failure()
@@ -779,8 +875,8 @@ void MissionManagerNode::on_mission_channel_ack_failure()
   RCLCPP_WARN(
     get_logger(), "mission-channel request failed, retry %d/%d", pending_ack_retries_,
     mission_ack_max_retries_);
-  if (pending_ack_kind_ == AckKind::FORMATION_SLOT_UPLOAD) {
-    send_formation_slot_item();
+  if (pending_ack_kind_ == AckKind::INGRESS_ROUTE_UPLOAD) {
+    send_ingress_route_upload();
   } else if (pending_ack_kind_ == AckKind::COVERAGE_PATH_UPLOAD) {
     send_coverage_path_upload();
   }
@@ -973,6 +1069,7 @@ void MissionManagerNode::on_control_timer()
 {
   drain_gcs_command_queue();
   check_ack_timeout();
+  check_mission_start();
   if (current_phase_ == Phase::PREFLIGHT) {
     publish_pre_arm_status();
   }
