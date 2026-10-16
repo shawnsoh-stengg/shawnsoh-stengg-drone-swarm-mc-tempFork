@@ -15,6 +15,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
 IMAGE_TAG="${MC_VERSION:-dev}"
 
+"${SCRIPT_DIR}/require-docker.sh"
+
 # INFRA-006: see 08-build-fcc-bridge-image.sh's own comment on this —
 # fail in seconds with a clear diagnosis instead of burning minutes
 # inside a doomed `apt-get update` (this Dockerfile's ros2-apt-source

@@ -20,6 +20,8 @@ IMAGE="${MC_VERSION:+ros2-core:${MC_VERSION}}"
 IMAGE="${IMAGE:-ros2-core:latest}"
 BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 
+"${SCRIPT_DIR}/require-docker.sh"
+
 # Ensure host install dir exists and is writable by the current user.
 if [[ ! -d "${INSTALL_DIR}" ]]; then
     echo "==> Creating ${INSTALL_DIR}"
