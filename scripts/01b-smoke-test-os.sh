@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 01b-smoke-test-os.sh — Verify base OS configuration on the Jetson.
 # TP-SM-001: Ubuntu 22.04 · aarch64 · kernel >= 5.10 · /dev/ttyTHS1 exists ·
-# CycloneDDS socket buffer floor (INFRA-004)
+# CycloneDDS socket buffer floor (INFRA-004) · ttyTHS1 PIO overlay live (INFRA-009)
 # Ref: SDD §13.2 smoke test pattern, HID-MC-001 §3.3 (HIF-001), §4.2 (HIF-002/004)
 set -euo pipefail
 
@@ -48,6 +48,14 @@ sysctl_at_least() {
     [[ "$(sysctl -n "${key}" 2>/dev/null)" -ge "${min_bytes}" ]]
 }
 
+# INFRA-009: ttyTHS1 RX DMA zeroes 16-byte bursts on this baseboard
+# (config/dt/ttyTHS1-rx-pio.dts) — check the live device tree, not just the
+# installed .dtbo, since a missing reboot or an overlay the UEFI loader
+# rejected (compatible mismatch) leaves the UART on DMA.
+ttyths1_pio_live() {
+    [[ "$(tr '\0' ' ' < /proc/device-tree/bus@0/serial@3100000/dma-names)" == "rx-off tx-off " ]]
+}
+
 check "Ubuntu 22.04"                  grep -q 'VERSION_ID="22.04"' /etc/os-release
 check "aarch64"                       bash -c '[[ "$(uname -m)" == "aarch64" ]]'
 check "kernel >= 5.10"                kernel_at_least_5_10
@@ -56,6 +64,8 @@ check "/etc/netplan/01-drone-mc.yaml" test -f /etc/netplan/01-drone-mc.yaml
 check "/etc/udev/rules.d/99-drone-mc.rules" test -f /etc/udev/rules.d/99-drone-mc.rules
 check "eth0 has MC_ETH_IP (single address)" netplan_has_mc_ip
 check "ttyTHS1 group is dialout"      bash -c '[[ "$(stat -c %G /dev/ttyTHS1)" == "dialout" ]]'
+check "/boot/ttyTHS1-rx-pio.dtbo"     test -f /boot/ttyTHS1-rx-pio.dtbo
+check "ttyTHS1 DMA off (dma-names rx-off tx-off; reboot after 01-install-os.sh)" ttyths1_pio_live
 check "/etc/sysctl.d/99-drone-mc.conf" test -f /etc/sysctl.d/99-drone-mc.conf
 check "net.core.rmem_max >= 10MB (CycloneDDS floor)" sysctl_at_least net.core.rmem_max 10485760
 check "net.core.wmem_max >= 1MB (CycloneDDS floor)"  sysctl_at_least net.core.wmem_max 1048576

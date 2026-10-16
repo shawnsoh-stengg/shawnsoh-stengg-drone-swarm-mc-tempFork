@@ -1,0 +1,28 @@
+// ttyTHS1-rx-pio.dts — INFRA-009: run ttyTHS1 (HIF-001) in PIO mode, no DMA.
+//
+// envsubst template: ${JETSON_DT_COMPATIBLE} is filled in by
+// scripts/01-install-os.sh with this board's own top-level compatible string
+// (first entry of /proc/device-tree/compatible), because the UEFI overlay
+// loader only applies an overlay whose compatible matches the base DTB.
+// Compiled to /boot/ttyTHS1-rx-pio.dtbo and loaded by the extlinux.conf
+// `LABEL rxpio` entry that 01-install-os.sh adds.
+//
+// Why: on the Holybro Pixhawk Jetson Baseboard (L4T R36.5.2), serial-tegra's
+// RX DMA path returns zeros for every 16-byte FIFO-trigger burst, so a 23-byte
+// uXRCE-DDS ping arrives as 16 zero bytes plus its 7-byte PIO tail and the
+// Agent never establishes a session (root-caused on orin-nx, 2026-09-24).
+// serial-tegra.c's parse_dt falls back to PIO when dma-names has no "rx"/"tx"
+// entry, so renaming them is enough. Only RX DMA was proven broken; TX is off
+// too because both-off is the configuration verified on hardware.
+/dts-v1/;
+/plugin/;
+/ {
+    overlay-name = "drone-mc ttyTHS1 RX/TX PIO";
+    compatible = "${JETSON_DT_COMPATIBLE}";
+    fragment@0 {
+        target-path = "/bus@0/serial@3100000";
+        __overlay__ {
+            dma-names = "rx-off", "tx-off";
+        };
+    };
+};

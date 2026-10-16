@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 01-install-os.sh — Base OS configuration on the Jetson: eth0 Netplan
-# (HIF-002/HIF-004), the ttyTHS1 udev rule (HIF-001), and the CycloneDDS
-# socket buffer sysctl floor (INFRA-004).
+# (HIF-002/HIF-004), the ttyTHS1 udev rule (HIF-001), the CycloneDDS
+# socket buffer sysctl floor (INFRA-004), and the ttyTHS1 PIO device-tree
+# overlay + extlinux boot entry (INFRA-009 — needs a reboot to take effect).
 # Companion smoke test: 01b-smoke-test-os.sh
 #
 # Prerequisite: the Jetson module has already been flashed with JetPack 6.2.2
@@ -300,6 +301,134 @@ udevadm trigger --subsystem-match=tty
 echo "==> Installing /etc/sysctl.d/99-drone-mc.conf (CycloneDDS socket buffer floor)"
 install -m 644 "${REPO_ROOT}/config/sysctl/99-drone-mc.conf" /etc/sysctl.d/99-drone-mc.conf
 sysctl --system &>/dev/null
+
+# INFRA-009: ttyTHS1 RX DMA zeroes every 16-byte burst on this baseboard, so
+# the uXRCE-DDS Agent never gets a session — the overlay switches the UART to
+# PIO (root cause in config/dt/ttyTHS1-rx-pio.dts). Installs the .dtbo plus a
+# new extlinux `LABEL rxpio` cloned from the current DEFAULT entry, which
+# stays in the boot menu as the fallback. Takes effect on the next reboot.
+# Skipped under ALLOW_NON_JETSON=1: a dev workstation's /boot isn't L4T's.
+TTYTHS1_DT_PATH=/bus@0/serial@3100000
+TTYTHS1_DTBO=/boot/ttyTHS1-rx-pio.dtbo
+EXTLINUX_CONF=/boot/extlinux/extlinux.conf
+ttyths1_dma_names() {
+    tr '\0' ' ' < "/proc/device-tree${TTYTHS1_DT_PATH}/dma-names" 2>/dev/null | sed 's/ $//'
+}
+if [[ "${ALLOW_NON_JETSON:-0}" -eq 1 ]]; then
+    echo "==> Skipping ttyTHS1 PIO overlay (ALLOW_NON_JETSON=1)"
+else
+    echo "==> Installing ${TTYTHS1_DTBO} (INFRA-009 ttyTHS1 RX/TX PIO overlay)"
+    # The overlay targets the controller by DT path, so confirm ttyTHS1
+    # really is that controller before pointing a boot entry at it.
+    ttyths1_dev="$(basename "$(readlink -f /sys/class/tty/ttyTHS1/device 2>/dev/null)")"
+    if [[ "${ttyths1_dev}" != "${TTYTHS1_DT_PATH##*@}.serial" ]]; then
+        echo "ERROR: /dev/ttyTHS1 is backed by '${ttyths1_dev:-nothing}', not" \
+             "${TTYTHS1_DT_PATH##*@}.serial (${TTYTHS1_DT_PATH}) — the overlay would" \
+             "change the wrong UART. Check the carrier board/L4T release (HID-MC-001 §3)." >&2
+        exit 1
+    fi
+    if ! command -v dtc &>/dev/null; then
+        echo "==> dtc not found, installing device-tree-compiler"
+        if ! timeout 10 getent hosts archive.ubuntu.com &>/dev/null; then
+            echo "ERROR: cannot resolve archive.ubuntu.com — check network connectivity" \
+                 "and retry." >&2
+            exit 1
+        fi
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10
+        apt-get install -y --no-install-recommends device-tree-compiler
+    fi
+
+    JETSON_DT_COMPATIBLE="$(tr '\0' '\n' < /proc/device-tree/compatible | head -n1)"
+    if [[ -z "${JETSON_DT_COMPATIBLE}" ]]; then
+        echo "ERROR: /proc/device-tree/compatible is empty — can't match the overlay to this board." >&2
+        exit 1
+    fi
+    export JETSON_DT_COMPATIBLE
+    RENDERED_DTBO="$(mktemp)"
+    trap 'rm -f "${RENDERED_NETPLAN}" "${RENDERED_DTBO}"' EXIT
+    envsubst '$JETSON_DT_COMPATIBLE' < "${REPO_ROOT}/config/dt/ttyTHS1-rx-pio.dts" |
+        dtc -@ -q -I dts -O dtb -o "${RENDERED_DTBO}" -
+    if cmp -s "${RENDERED_DTBO}" "${TTYTHS1_DTBO}"; then
+        echo "    ${TTYTHS1_DTBO} already up to date (compatible ${JETSON_DT_COMPATIBLE})"
+    else
+        install -m 644 "${RENDERED_DTBO}" "${TTYTHS1_DTBO}"
+        echo "    Installed ${TTYTHS1_DTBO} (compatible ${JETSON_DT_COMPATIBLE})"
+    fi
+
+    if [[ ! -f "${EXTLINUX_CONF}" ]]; then
+        echo "ERROR: ${EXTLINUX_CONF} not found — expected L4T's extlinux boot config." >&2
+        exit 1
+    fi
+    extlinux_entry() {
+        awk -v l="$1" '/^[[:space:]]*LABEL[[:space:]]/{in_e=($2==l)} in_e' "${EXTLINUX_CONF}"
+    }
+    base_label="$(awk '/^[[:space:]]*DEFAULT[[:space:]]/{print $2; exit}' "${EXTLINUX_CONF}")"
+    base_entry="$(extlinux_entry "${base_label}")"
+    if grep -qE "^[[:space:]]*OVERLAYS[[:space:]].*${TTYTHS1_DTBO}" <<<"${base_entry}"; then
+        # DEFAULT already loads it — LABEL rxpio itself, or an entry that
+        # loads other overlays too, merged by hand per the error below.
+        echo "    DEFAULT entry '${base_label}' already loads ${TTYTHS1_DTBO}"
+    elif grep -qE '^[[:space:]]*LABEL[[:space:]]+rxpio[[:space:]]*$' "${EXTLINUX_CONF}"; then
+        # Already added (by a previous run, or by hand on orin-nx 2026-09-24
+        # with the same label/path) — just confirm it loads this overlay.
+        if ! extlinux_entry rxpio | grep -qE "^[[:space:]]*OVERLAYS[[:space:]].*${TTYTHS1_DTBO}"; then
+            echo "ERROR: ${EXTLINUX_CONF} has a LABEL rxpio entry without" \
+                 "'OVERLAYS ${TTYTHS1_DTBO}'. Fix or delete that entry and re-run." >&2
+            exit 1
+        fi
+        echo "    ${EXTLINUX_CONF} already has LABEL rxpio"
+        [[ -f "${EXTLINUX_CONF}.pre-infra-009" ]] ||
+            cp -p "${EXTLINUX_CONF}" "${EXTLINUX_CONF}.pre-infra-009"
+        sed -i -E 's/^([[:space:]]*DEFAULT[[:space:]]+).*/\1rxpio/' "${EXTLINUX_CONF}"
+        echo "    Set DEFAULT rxpio in ${EXTLINUX_CONF} (was '${base_label}')"
+    else
+        if [[ -z "${base_entry}" ]]; then
+            echo "ERROR: ${EXTLINUX_CONF}'s DEFAULT '${base_label}' has no LABEL entry to clone." >&2
+            exit 1
+        fi
+        # A DEFAULT that already loads overlays (e.g. a Jetson-IO entry for
+        # HIF-003's camera) needs both merged by hand, not silently dropped.
+        if grep -qE '^[[:space:]]*OVERLAYS[[:space:]]' <<<"${base_entry}"; then
+            echo "ERROR: DEFAULT entry '${base_label}' in ${EXTLINUX_CONF} already loads" \
+                 "overlays — add ${TTYTHS1_DTBO} to it by hand (HID-MC-001 §3.3), then re-run." >&2
+            exit 1
+        fi
+        fdt_line="$(grep -E '^[[:space:]]*FDT[[:space:]]' <<<"${base_entry}" || true)"
+        if [[ -z "${fdt_line}" ]]; then
+            # L4T's stock entry omits FDT (UEFI passes its own DTB), but
+            # extlinux OVERLAYS only apply on top of an explicit FDT.
+            dtbs=(/boot/dtb/kernel_*.dtb)
+            if [[ "${#dtbs[@]}" -ne 1 || ! -f "${dtbs[0]}" ]]; then
+                echo "ERROR: expected exactly one /boot/dtb/kernel_*.dtb for the rxpio entry's" \
+                     "FDT line, found: ${dtbs[*]}" >&2
+                exit 1
+            fi
+            fdt_line="      FDT ${dtbs[0]}"
+        fi
+        [[ -f "${EXTLINUX_CONF}.pre-infra-009" ]] ||
+            cp -p "${EXTLINUX_CONF}" "${EXTLINUX_CONF}.pre-infra-009"
+        {
+            echo
+            echo "LABEL rxpio"
+            echo "      MENU LABEL ttyTHS1 RX/TX PIO (drone-mc INFRA-009)"
+            grep -E '^[[:space:]]*(LINUX|INITRD)[[:space:]]' <<<"${base_entry}"
+            echo "${fdt_line}"
+            grep -E '^[[:space:]]*APPEND[[:space:]]' <<<"${base_entry}"
+            echo "      OVERLAYS ${TTYTHS1_DTBO}"
+        } >> "${EXTLINUX_CONF}"
+        sed -i -E 's/^([[:space:]]*DEFAULT[[:space:]]+).*/\1rxpio/' "${EXTLINUX_CONF}"
+        echo "    Added LABEL rxpio as DEFAULT (cloned from '${base_label}', which stays" \
+             "as the boot-menu fallback; backup at ${EXTLINUX_CONF}.pre-infra-009)"
+    fi
+    if [[ "$(ttyths1_dma_names)" != "rx-off tx-off" ]]; then
+        echo "    NOTE: reboot to load the overlay (live dma-names:" \
+             "'$(ttyths1_dma_names)'), then run 01b-smoke-test-os.sh. If it fails to boot," \
+             "pick the previous entry in the extlinux menu (HDMI/debug UART);" \
+             "${EXTLINUX_CONF}.pre-infra-009 has the pre-overlay config if this script" \
+             "made the change."
+    fi
+fi
 
 TARGET_USER="${SUDO_USER:-${USER}}"
 if ! id -nG "${TARGET_USER}" | grep -qw dialout; then
