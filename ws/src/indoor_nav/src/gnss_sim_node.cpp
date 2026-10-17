@@ -71,6 +71,20 @@ GnssSimNode::WgsFix local_to_wgs84(
   fix.alt_msl = origin_alt_msl - down_m;
   return fix;
 }
+
+// Inverse of local_to_wgs84() (same projection and radius, so the two
+// round-trip): WGS-84 lat/lon -> local north/east metres from the origin.
+// The lon difference is wrapped so the antimeridian doesn't produce a
+// ~40000 km offset (IGS-006).
+void wgs84_to_local(
+  double origin_lat_deg, double origin_lon_deg, double lat_deg, double lon_deg,
+  double & north_m, double & east_m)
+{
+  constexpr double kDegToRad = M_PI / 180.0;
+  north_m = (lat_deg - origin_lat_deg) * kDegToRad * kEarthRadiusM;
+  east_m = std::remainder(lon_deg - origin_lon_deg, 360.0) * kDegToRad *
+    kEarthRadiusM * std::cos(origin_lat_deg * kDegToRad);
+}
 }  // namespace
 
 namespace
@@ -405,23 +419,39 @@ void GnssSimNode::publish_gnss_sim_status(const rclcpp::Time & stamp)
 // which waypoint a well-behaved autopilot would currently be flying
 // toward (that state lives in mission_manager_node/formation_controller_
 // node, not published anywhere this node subscribes to). A documented
-// simplification, not silently assumed -- see this class's own doc
-// comment for the frame-matching caveat too (assumes the operator's
-// false-origin anchor sits at/near the FCC's own local-position origin).
+// simplification, not silently assumed.
+//
+// IGS-006: ingress_waypoints carry lat/lon in degrees in position.x/.y
+// (both gcs_mavlink_node and mission_orchestrator_node decode them that
+// way), so each one is projected into the false-origin local frame before
+// comparing -- subtracting raw degrees from local metres put every
+// waypoint ~100 "m" away at Singapore's longitude and tripped the bound on
+// the first tick after any real plan was uploaded. Horizontal only:
+// position.z is metres above *home*, z_ is NED-down from the baro anchor,
+// and nothing here relates home to the false origin's altitude, so a
+// vertical term would just add a fixed unknown bias (mission_manager_node's
+// guard_ingress_to_muster() is horizontal-only for the same reason).
 float GnssSimNode::compute_waypoint_deviation() const
 {
   if (!latest_mission_upload_ || latest_mission_upload_->ingress_waypoints.empty()) {
     return 0.0F;  // nothing uploaded yet -- not a fabricated "zero deviation"
   }
-
-  float min_dist_sq = std::numeric_limits<float>::max();
-  for (const auto & wp : latest_mission_upload_->ingress_waypoints) {
-    const float dx = x_ - static_cast<float>(wp.pose.position.x);
-    const float dy = y_ - static_cast<float>(wp.pose.position.y);
-    const float dz = z_ - static_cast<float>(wp.pose.position.z);
-    min_dist_sq = std::min(min_dist_sq, dx * dx + dy * dy + dz * dz);
+  if (!active_) {
+    return 0.0F;  // no false origin yet, so no local frame to project into
   }
-  return std::sqrt(min_dist_sq);
+
+  double min_dist_sq = std::numeric_limits<double>::max();
+  for (const auto & wp : latest_mission_upload_->ingress_waypoints) {
+    double wp_north_m = 0.0;
+    double wp_east_m = 0.0;
+    wgs84_to_local(
+      false_origin_lat_deg_, false_origin_lon_deg_, wp.pose.position.x, wp.pose.position.y,
+      wp_north_m, wp_east_m);
+    const double dx = static_cast<double>(x_) - wp_north_m;
+    const double dy = static_cast<double>(y_) - wp_east_m;
+    min_dist_sq = std::min(min_dist_sq, dx * dx + dy * dy);
+  }
+  return static_cast<float>(std::sqrt(min_dist_sq));
 }
 
 // IGS-005. Driven from hil_gps_timer_ (via the constructor's lambda), not

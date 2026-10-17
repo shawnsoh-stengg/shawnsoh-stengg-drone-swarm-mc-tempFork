@@ -17,6 +17,7 @@
 
 #include <mavlink/v2.0/common/mavlink.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <string>
 
@@ -127,13 +128,16 @@ protected:
     return msg;
   }
 
-  mc_msgs::msg::GcsCommand anchor_command(double t_s)
+  // Default anchor is near Singapore -- a longitude well over the 50 m
+  // deviation bound when misread as metres (IGS-006).
+  mc_msgs::msg::GcsCommand anchor_command(
+    double t_s, float lat_deg = kAnchorLatDeg, float lon_deg = kAnchorLonDeg)
   {
     mc_msgs::msg::GcsCommand msg;
     msg.header.stamp = stamp_at(t_s);
     msg.command = indoor_nav::kMcCmdIndoorGnssSimAnchor;
-    msg.params[0] = 1.5F;
-    msg.params[1] = 103.8F;
+    msg.params[0] = lat_deg;
+    msg.params[1] = lon_deg;
     msg.params[2] = 50.0F;
     return msg;
   }
@@ -141,13 +145,42 @@ protected:
   // Anchors the node at t_s using a preceding no-real-fix vehicle_state
   // and baro sample -- the common "get to a streaming baseline" setup every
   // test below starts from.
-  void anchor_at(double t_s)
+  void anchor_at(double t_s, float lat_deg = kAnchorLatDeg, float lon_deg = kAnchorLonDeg)
   {
     node_->on_vehicle_state(no_real_fix_vehicle_state(t_s));
     node_->on_baro_altitude(baro(t_s));
-    node_->on_gcs_command(anchor_command(t_s));
+    node_->on_gcs_command(anchor_command(t_s, lat_deg, lon_deg));
     ASSERT_TRUE(node_->wgs84_fix().valid);
   }
+
+  // Fresh vehicle_state/baro/optical_flow samples at t_s, so a
+  // check_self_supervision(t_s) call can only trip on deviation/drift.
+  void feed_fresh_inputs(double t_s)
+  {
+    node_->on_vehicle_state(no_real_fix_vehicle_state(t_s));
+    node_->on_baro_altitude(baro(t_s));
+    mc_msgs::msg::OpticalFlow flow;
+    flow.header.stamp = stamp_at(t_s);
+    node_->on_optical_flow(flow);
+  }
+
+  // A one-waypoint plan. x/y are lat/lon (deg), z metres above home --
+  // how both GCS decoders fill ingress_waypoints (IGS-006).
+  static mc_msgs::msg::MissionUpload one_waypoint_plan(
+    double t_s, double lat_deg, double lon_deg, double alt_m = 10.0)
+  {
+    mc_msgs::msg::MissionUpload mission;
+    mission.header.stamp = stamp_at(t_s);
+    geometry_msgs::msg::PoseStamped wp;
+    wp.pose.position.x = lat_deg;
+    wp.pose.position.y = lon_deg;
+    wp.pose.position.z = alt_m;
+    mission.ingress_waypoints.push_back(wp);
+    return mission;
+  }
+
+  static constexpr float kAnchorLatDeg = 1.5F;
+  static constexpr float kAnchorLonDeg = 103.8F;
 
   MockFcc fcc_;
   std::shared_ptr<indoor_nav::GnssSimNode> node_;
@@ -254,16 +287,11 @@ TEST_F(SelfSupervisionTest, ForcedLargeWaypointDeviationFaultsWithoutChangingEst
 {
   anchor_at(3000.0);
 
-  // A single ingress waypoint at local (0, 0, 0) -- i.e. right at the false
-  // origin the anchor above just declared.
-  mc_msgs::msg::MissionUpload mission;
-  mission.header.stamp = stamp_at(3000.0);
-  geometry_msgs::msg::PoseStamped wp;
-  wp.pose.position.x = 0.0;
-  wp.pose.position.y = 0.0;
-  wp.pose.position.z = 0.0;
-  mission.ingress_waypoints.push_back(wp);
-  node_->on_mission_upload(mission);
+  // A single ingress waypoint right at the false origin the anchor above
+  // just declared, given as lat/lon like a real plan (IGS-006).
+  node_->on_mission_upload(
+    one_waypoint_plan(
+      3000.0, static_cast<double>(kAnchorLatDeg), static_cast<double>(kAnchorLonDeg)));
 
   // Drive the local estimate far north -- well past max_waypoint_
   // deviation_m_'s default (50 m) -- via two optical_flow samples, the same
@@ -279,6 +307,8 @@ TEST_F(SelfSupervisionTest, ForcedLargeWaypointDeviationFaultsWithoutChangingEst
   flow1.vx = 400.0F;  // -> x_ += 400 * 0.3 = 120 m north
   node_->on_optical_flow(flow1);
 
+  EXPECT_NEAR(node_->compute_waypoint_deviation(), 120.0F, 0.01F);
+
   const nav_msgs::msg::Odometry estimate_before = node_->local_estimate();
 
   node_->check_self_supervision(stamp_at(3000.3));
@@ -293,4 +323,85 @@ TEST_F(SelfSupervisionTest, ForcedLargeWaypointDeviationFaultsWithoutChangingEst
   EXPECT_EQ(estimate_before.pose.pose.position.x, estimate_after.pose.pose.position.x);
   EXPECT_EQ(estimate_before.pose.pose.position.y, estimate_after.pose.pose.position.y);
   EXPECT_EQ(estimate_before.pose.pose.position.z, estimate_after.pose.pose.position.z);
+}
+
+// IGS-006 regression: a real plan whose waypoint sits at the anchor must
+// not fault. Before the fix, its raw lat/lon degrees were subtracted from
+// local metres -- ~104 "m" at this longitude, over the 50 m bound -- so the
+// first tick after any real upload latched INDOOR_GNSS_SIM_LOST.
+TEST_F(SelfSupervisionTest, RealPlanAtAnchorDoesNotFault)
+{
+  anchor_at(4000.0);
+  node_->on_mission_upload(
+    one_waypoint_plan(
+      4000.0, static_cast<double>(kAnchorLatDeg), static_cast<double>(kAnchorLonDeg)));
+  feed_fresh_inputs(4000.0);
+
+  EXPECT_NEAR(node_->compute_waypoint_deviation(), 0.0F, 0.01F);
+  node_->check_self_supervision(stamp_at(4000.0));
+  EXPECT_FALSE(node_->gps_sim_lost());
+}
+
+// Waypoint z is above *home*, the estimate's z is from the baro anchor --
+// unrelated datums, so the bound is horizontal only.
+TEST_F(SelfSupervisionTest, WaypointAltitudeIgnored)
+{
+  anchor_at(4100.0);
+  node_->on_mission_upload(
+    one_waypoint_plan(
+      4100.0, static_cast<double>(kAnchorLatDeg), static_cast<double>(kAnchorLonDeg), 500.0));
+  feed_fresh_inputs(4100.0);
+
+  EXPECT_NEAR(node_->compute_waypoint_deviation(), 0.0F, 0.01F);
+  node_->check_self_supervision(stamp_at(4100.0));
+  EXPECT_FALSE(node_->gps_sim_lost());
+}
+
+// No false origin yet -> no local frame to project a waypoint into.
+TEST_F(SelfSupervisionTest, NoDeviationBeforeAnchor)
+{
+  node_->on_mission_upload(one_waypoint_plan(4200.0, 45.0, 90.0));
+  EXPECT_EQ(node_->compute_waypoint_deviation(), 0.0F);
+}
+
+// Anchor just west of +180 deg, waypoint 0.0003 deg further east, written
+// on the -180 side: ~33 m, not ~40000 km.
+TEST_F(SelfSupervisionTest, DeviationWrapsAtAntimeridian)
+{
+  constexpr float kLonDeg = 179.9998F;
+  anchor_at(4300.0, 0.0F, kLonDeg);
+  node_->on_mission_upload(
+    one_waypoint_plan(4300.0, 0.0, static_cast<double>(kLonDeg) + 0.0003 - 360.0));
+
+  const double expected_m = 0.0003 * M_PI / 180.0 * 6371000.0;
+  EXPECT_NEAR(node_->compute_waypoint_deviation(), expected_m, 0.01);
+}
+
+// The waypoint projection is the inverse of wgs84_fix()'s: a waypoint at
+// the fix the node itself would send sits on the estimate.
+TEST_F(SelfSupervisionTest, WaypointAtOwnFixRoundTrips)
+{
+  anchor_at(4400.0);
+  node_->on_mission_upload(
+    one_waypoint_plan(
+      4400.0, static_cast<double>(kAnchorLatDeg), static_cast<double>(kAnchorLonDeg)));
+
+  mc_msgs::msg::OpticalFlow flow0;
+  flow0.header.stamp = stamp_at(4400.0);
+  node_->on_optical_flow(flow0);
+  mc_msgs::msg::OpticalFlow flow1;
+  flow1.header.stamp = stamp_at(4400.3);
+  flow1.vx = 100.0F;   // 30 m north
+  flow1.vy = -200.0F;  // 60 m west
+  node_->on_optical_flow(flow1);
+
+  const nav_msgs::msg::Odometry estimate = node_->local_estimate();
+  const double expected_m =
+    std::hypot(estimate.pose.pose.position.x, estimate.pose.pose.position.y);
+  ASSERT_GT(expected_m, 50.0);
+  EXPECT_NEAR(node_->compute_waypoint_deviation(), expected_m, 0.01);
+
+  const auto fix = node_->wgs84_fix();
+  node_->on_mission_upload(one_waypoint_plan(4400.3, fix.lat_deg, fix.lon_deg));
+  EXPECT_NEAR(node_->compute_waypoint_deviation(), 0.0F, 0.01F);
 }
