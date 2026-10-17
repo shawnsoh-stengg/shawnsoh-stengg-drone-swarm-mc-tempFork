@@ -117,10 +117,9 @@ constexpr uint32_t kMcCmdIndoorGnssSimAnchor = 50005;
 //     not real leg-progress tracking (no such signal reaches this node) --
 //     a coarse "is the estimate anywhere near the planned route" bound,
 //     not track-following; documented simplification, not silently
-//     assumed. Also assumes the operator's false-origin anchor is placed
-//     at/near the FCC's own local-position origin, since ingress_waypoints
-//     are local Cartesian, not WGS-84 -- unverified elsewhere in this
-//     repo, flagged here rather than silently relied upon.
+//     assumed. Waypoints are lat/lon (deg) and are projected into the
+//     false-origin local frame first; the comparison is horizontal only
+//     (IGS-006 -- see the method's .cpp doc comment).
 class GnssSimNode : public rclcpp::Node
 {
 public:
@@ -153,6 +152,15 @@ public:
   // IGS-005: caches the latest uploaded mission for
   // compute_waypoint_deviation() -- see this class's own doc comment.
   void on_mission_upload(const mc_msgs::msg::MissionUpload & msg);
+
+  // IGS-005: read-only by construction -- only ever reads x_/y_ and
+  // latest_mission_upload_, never writes them (Safety Considerations #2).
+  // Horizontal distance (m) from the estimate to the nearest ingress
+  // waypoint (IGS-006: lat/lon projected into the false-origin frame).
+  // Returns 0.0 before the first anchor or if no mission (or no
+  // ingress_waypoints) has been uploaded yet -- nothing to compare
+  // against, not a fabricated "zero deviation". Public as a test seam.
+  float compute_waypoint_deviation() const;
 
   // Test seam: the last message this node published on
   // /mc/indoor/local_estimate, without needing a subscriber of its own.
@@ -199,12 +207,6 @@ private:
   void publish_estimate(const rclcpp::Time & stamp);
   void publish_gnss_sim_status(const rclcpp::Time & stamp);
   int open_hil_gps_socket();
-
-  // IGS-005: read-only by construction -- only ever reads x_/y_/z_ and
-  // latest_mission_upload_, never writes them (Safety Considerations #2).
-  // Returns 0.0 if no mission (or no ingress_waypoints) has been uploaded
-  // yet -- nothing to compare against, not a fabricated "zero deviation".
-  float compute_waypoint_deviation() const;
 
   // IGS-005: publishes INDOOR_GNSS_SIM_LOST on /mc/fault (edge-triggered --
   // check_self_supervision() only calls this once per latch, matching
