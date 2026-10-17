@@ -284,11 +284,11 @@ Driven by: `fcc_bridge_node`'s `FccBackend` implementation, on behalf of `search
 
 | Field | Type | Unit | Description |
 |---|---|---|---|
-| `seq` | `uint16` | — | Item index; `0` is reserved as `FORMATION_SLOT` during INGRESS (SDD §5) |
-| `frame` | `uint8` | — | `MAV_FRAME_GLOBAL_INT` |
+| `seq` | `uint16` | — | Item index. Design: `0` reserved as `FORMATION_SLOT` during INGRESS (SDD §5, SC-001 — not yet implemented); today INGRESS uploads the plan's `ingress_waypoints` as items `0..N-1` |
+| `frame` | `uint8` | — | `MAV_FRAME_GLOBAL_INT` (6, `MAV_FRAME_GLOBAL_RELATIVE_ALT_INT`, for the INGRESS route — its `alt` is m above home) |
 | `command` | `uint16` | — | `MAV_CMD_NAV_WAYPOINT` (16); `MAV_CMD_NAV_LOITER_UNLIM` (17) for terminal items |
 | `lat`, `lon` | `int32` | 1e7 deg | Target position |
-| `alt` | `float32` | m MSL | Target altitude |
+| `alt` | `float32` | m MSL (m above home when `frame` = 6) | Target altitude |
 | `acceptance_radius` | `float32` | m | See SDD §5.2 for the widened radius used on `FORMATION_SLOT` |
 
 **`upload_mission(items)` — full handshake** (`search_planner_node` via `mission_manager_node`, FR-013; infrequent, on mission change only):
@@ -1341,7 +1341,9 @@ float32 d              # m NED Down offset
 # Full mission data uploaded by GCS
 std_msgs/Header header
 uint32 upload_id                          # Unique ID for this upload
-# Ingress waypoints
+# Ingress waypoints: position.x = lat (deg), position.y = lon (deg),
+# position.z = alt (m above home) -- as both gcs_mavlink_node and
+# mission_orchestrator_node decode them. Last entry = muster point.
 geometry_msgs/PoseStamped[] ingress_waypoints
 # Formation offsets [drone_id, N, E, D]
 mc_msgs/FormationOffset[] formation_offsets

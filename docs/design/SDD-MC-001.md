@@ -312,8 +312,10 @@ using TransitionTable = std::vector<Transition>;
 |---|---|---|---|
 | `PREFLIGHT` | `ARMING` | GCS ARM auth received AND pre-arm checks pass | Log entry; notify swarm |
 | `ARMING` | `TAKEOFF` | FCC arming_state == ARMED | Send TAKEOFF command to FCC |
-| `TAKEOFF` | `INGRESS` | FCC at target altitude AND GCS INGRESS command | Upload reserved formation slot (seq 0), switch FCC to MISSION mode targeting it, enable formation controller |
-| `INGRESS` | `MUSTER` | FCC waypoint complete (muster point reached) | Disable formation ctrl; notify GCS |
+| `TAKEOFF` | `INGRESS` | FCC at target altitude AND GCS INGRESS command AND the plan has ≥1 `ingress_waypoints` entry | Upload the plan's `ingress_waypoints` as the FCC mission (`MAV_FRAME_GLOBAL_RELATIVE_ALT_INT`, alt above home); on `MISSION_ACK`, send `MAV_CMD_MISSION_START` (resent ≤3× at 1 s until `nav_state` = AUTO_MISSION, then a CRITICAL STATUSTEXT and hold — never a FAULT) |
+| `INGRESS` | `MUSTER` | Vehicle within `waypoint_acceptance_radius_m` (horizontal, lat/lon) of the last `ingress_waypoints` entry (muster point) | Disable formation ctrl; notify GCS |
+
+> **Ingress fix (2026-10-15, PR #21):** TAKEOFF → INGRESS used to upload a one-item `FORMATION_SLOT` placeholder at the vehicle's own position, which `formation_controller_node` (SC-001) was meant to overwrite but never does, and nothing ever switched PX4 into MISSION mode — so the vehicle just held. Every drone now flies the plan's own ingress route; SC-001's follower behaviour (§5) will build on this once implemented. `send_ingress_route_upload()`/`send_mission_start()`/`check_mission_start()` in `mission_manager_node.cpp`.
 | `MUSTER` | `ISR_SELECTION` | All peers in MUSTER AND quorum count met | Signal swarm_coordinator |
 | `ISR_SELECTION` | `VORONOI_PARTITION` | ISR result ACKed by all peers | Signal swarm_coordinator |
 | `VORONOI_PARTITION` | `SEARCH` | Voronoi cell accepted AND coverage path received | Upload path to FCC; enable detection |

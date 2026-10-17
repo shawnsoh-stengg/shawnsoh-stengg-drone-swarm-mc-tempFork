@@ -41,7 +41,7 @@ state ARMING #C8E4F0 : **ARMING**\n──────────────\nG
 
 state TAKEOFF #C8E4F0 : **TAKEOFF**\n──────────────\nFCC commanded to takeoff mode\nClimb to assigned altitude\nConfirm position hold
 
-state INGRESS #B8E0C8 : **INGRESS**\n──────────────\nFormation keeping active (MISSION or\nOFFBOARD, per-leg plan flag — FCC-009)\nFormation controller → FCC ≥2 Hz (MISSION, FCC-010)\nGCS retains authority
+state INGRESS #B8E0C8 : **INGRESS**\n──────────────\nPlan's ingress route uploaded as FCC mission\nMISSION_START → PX4 AUTO_MISSION (≤3 tries)\nFormation keeping (SC-001, not yet implemented) (MISSION or\nOFFBOARD, per-leg plan flag — FCC-009)\nFormation controller → FCC ≥2 Hz (MISSION, FCC-010)\nGCS retains authority
 
 state MUSTER #B8E0C8 : **MUSTER**\n──────────────\nNavigate to muster waypoint\nReport arrival to GCS + peers\nAwait swarm quorum
 
@@ -65,7 +65,7 @@ ARMING --> TAKEOFF : FCC armed ✓\n[FR-012]
 
 TAKEOFF --> INGRESS : Altitude hold confirmed\nGCS: begin ingress
 
-INGRESS --> MUSTER : Muster waypoint reached\n(via FCC mission complete)
+INGRESS --> MUSTER : Within acceptance radius of\nlast ingress waypoint (lat/lon)
 
 MUSTER --> ISR_SELECTION : Swarm quorum reached\n[FR-033]
 

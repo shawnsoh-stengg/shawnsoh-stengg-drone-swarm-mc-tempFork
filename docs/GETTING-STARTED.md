@@ -35,6 +35,8 @@ sudo reboot
 sudo ./scripts/01b-smoke-test-os.sh
 
 # 1. Build the ros2-core base Docker image (all service images FROM this)
+#    Every build script runs scripts/require-docker.sh first: if Docker is missing
+#    or its daemon is down, it says so (with install steps) instead of a misleading DNS error.
 sudo ./scripts/04-install-ros2-core.sh
 sudo ./scripts/04b-smoke-test-ros2.sh
 sudo ./scripts/04c-smoke-test-dds.sh
