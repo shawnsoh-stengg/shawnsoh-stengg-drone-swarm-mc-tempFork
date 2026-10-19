@@ -83,6 +83,8 @@ protected:
     setenv("FCC_ETH_IP", "127.0.0.1", 1);
     setenv("FCC_MISSION_PORT", "14555", 1);
     setenv("FCC_FLOW_PORT", "14655", 1);
+    // Not PX4's default 1, so a hard-coded target_system can't pass by accident.
+    setenv("DRONE_ID", "2", 1);
 
     node_ = std::make_shared<rclcpp::Node>("xrce_dds_backend_test");
     backend_ = std::make_unique<fcc_bridge::XrceDdsBackend>(node_.get());
@@ -117,6 +119,7 @@ protected:
     unsetenv("FCC_ETH_IP");
     unsetenv("FCC_MISSION_PORT");
     unsetenv("FCC_FLOW_PORT");
+    unsetenv("DRONE_ID");
   }
 
   rclcpp::Node::SharedPtr node_;
@@ -343,6 +346,12 @@ TEST_F(XrceDdsBackendTest, SendCommandPublishesVehicleCommandWithAllParams)
   EXPECT_FLOAT_EQ(last_command_->param1, 1.0F);
   EXPECT_FLOAT_EQ(last_command_->param7, 7.0F);
   EXPECT_TRUE(last_command_->from_external);
+  // PX4 Commander drops, without an ACK, a command not addressed to its own
+  // MAV_SYS_ID (== DRONE_ID), so this must follow DRONE_ID, never PX4's default 1.
+  EXPECT_EQ(last_command_->target_system, 2U);
+  EXPECT_EQ(last_command_->target_component, 1U);
+  EXPECT_EQ(last_command_->source_system, 2U);
+  EXPECT_EQ(last_command_->source_component, 191U);
 }
 
 // FCC-009: stream_offboard_setpoint() publishes OffboardControlMode

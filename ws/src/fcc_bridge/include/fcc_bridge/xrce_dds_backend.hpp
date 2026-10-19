@@ -77,6 +77,13 @@ private:
   void flow_recv_loop();
 
   rclcpp::Node * node_;
+  // DRONE_ID: this MC's MAVLink system ID and, by the DRONE_ID == MAV_SYS_ID
+  // rule, the FCC's -- the target of every vehicle command and mission item
+  // (mavlink_ids.hpp).
+  uint8_t drone_id_;
+  // Last VehicleStatus.system_id seen (0 = none yet), so a DRONE_ID mismatch
+  // is logged once per change rather than at the status rate.
+  uint8_t reported_fcc_system_id_{0};
 
   // Subscriptions  /fmu/out/  (uXRCE-DDS)
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr sub_local_pos_;

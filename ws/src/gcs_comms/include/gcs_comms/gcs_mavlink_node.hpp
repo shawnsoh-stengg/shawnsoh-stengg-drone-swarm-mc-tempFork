@@ -10,16 +10,20 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 #include "mc_msgs/msg/detection.hpp"
 #include "mc_msgs/msg/detection_array.hpp"
 #include "mc_msgs/msg/gcs_command.hpp"
+#include "mc_msgs/msg/gcs_command_ack.hpp"
 #include "mc_msgs/msg/link_status.hpp"
 #include "mc_msgs/msg/localisation_mode.hpp"
 #include "mc_msgs/msg/mission_phase.hpp"
 #include "mc_msgs/msg/mission_upload.hpp"
+#include "mc_msgs/msg/status_text.hpp"
 #include "mc_msgs/msg/system_health.hpp"
 #include "mc_msgs/msg/vehicle_state.hpp"
+#include "gcs_comms/upload_id.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 // GCS-001/GCS-002/GCS-003: gcs_mavlink_node — GCS<->MC Channel B transport
@@ -108,6 +112,21 @@ private:
   void send_mc_detection(const mc_msgs::msg::Detection & detection);
   void send_mc_health(const mc_msgs::msg::SystemHealth & health);
 
+  // TEST-007 finding: mission_manager_node's outcome-level ack and its
+  // /mc/status_text reasons (e.g. EXEC-002 pre-arm failures) never reached
+  // the GCS, so a rejected MC_CMD_PHASE_TRANSITION looked identical to an
+  // accepted one. handle_command_long() now answers that command with
+  // MAV_RESULT_IN_PROGRESS, and on_command_ack() sends the final
+  // COMMAND_ACK (ACCEPTED/DENIED) plus a STATUSTEXT carrying the reason.
+  void on_command_ack(const mc_msgs::msg::GcsCommandAck::SharedPtr msg);
+  // Relays every /mc/status_text (mission_manager_node, health_monitor_node,
+  // gnss_sim_node) as a MAVLink STATUSTEXT (ICD §4.7).
+  void on_status_text(const mc_msgs::msg::StatusText::SharedPtr msg);
+  // Splits texts over 50 chars into MAVLink v2 STATUSTEXT chunks; anything
+  // beyond kMaxStatustextChunks * 50 chars is cut.
+  void send_statustext(uint8_t severity, const std::string & text);
+  static constexpr size_t kMaxStatustextChunks = 4;
+
   mc_msgs::msg::VehicleState latest_vehicle_state_;
   // Gates on_mc_status_timer() — nothing meaningful to report before
   // fcc_bridge_node's first /mc/fcc/vehicle_state publish.
@@ -124,6 +143,8 @@ private:
   rclcpp::Subscription<mc_msgs::msg::LocalisationMode>::SharedPtr sub_localisation_mode_;
   rclcpp::Subscription<mc_msgs::msg::SystemHealth>::SharedPtr sub_health_;
   rclcpp::Subscription<mc_msgs::msg::DetectionArray>::SharedPtr sub_detections_;
+  rclcpp::Subscription<mc_msgs::msg::GcsCommandAck>::SharedPtr sub_command_ack_;
+  rclcpp::Subscription<mc_msgs::msg::StatusText>::SharedPtr sub_status_text_;
   rclcpp::CallbackGroup::SharedPtr mux_sub_cb_group_;
   rclcpp::CallbackGroup::SharedPtr mux_timer_cb_group_;
   rclcpp::TimerBase::SharedPtr mc_status_timer_;
@@ -138,12 +159,15 @@ private:
   // per-channel state (MAVLINK_COMM_0's outbound sequence counter) that was
   // never designed for concurrent callers — this mutex is the fix.
   std::mutex send_mutex_;
+  // Last STATUSTEXT chunk-sequence id used (send_mutex_); 0 is never sent
+  // for a chunked text.
+  uint16_t statustext_id_{0};
 
   MissionUploadState mission_state_{MissionUploadState::IDLE};
   uint16_t mission_expected_count_{0};
   uint16_t mission_items_received_{0};
   mc_msgs::msg::MissionUpload mission_upload_msg_;
-  uint32_t next_upload_id_{1};
+  UploadIdAllocator upload_ids_{UploadSource::kChannelB};  // see upload_id.hpp
   // The GCS peer's own MAVLink identity, captured from the MISSION_COUNT
   // frame that opened this upload — outbound MISSION_REQUEST_INT/MISSION_ACK
   // target these rather than a hardcoded broadcast address (unlike

@@ -1228,6 +1228,22 @@ TEST_F(MissionManagerNodeTest, PhaseTransitionRejectedGetsAckWithReasonWithin500
       std::chrono::steady_clock::now() - t0).count(),
     500);
   EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_REJECTED);
+  EXPECT_EQ(command_acks_.back()->reason, "no transition PREFLIGHT -> SEARCH");
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
+}
+
+// TEST-007 finding: a rejected PREFLIGHT -> ARMING names the first failing
+// pre-arm check, not a bare "guard failed".
+TEST_F(MissionManagerNodeTest, ArmingRejectedNamesFailingPreArmCheck)
+{
+  pub_vehicle_state_->publish(good_vehicle_state());
+  wait_for_ticks();
+  send_gcs_command(50001, {1.F, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});  // PHASE_TRANSITION(ARMING)
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return !command_acks_.empty();}, std::chrono::milliseconds(500)));
+  EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_REJECTED);
+  EXPECT_NE(command_acks_.back()->reason.rfind("guard failed", 0), 0U);
   EXPECT_FALSE(command_acks_.back()->reason.empty());
   EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
 }

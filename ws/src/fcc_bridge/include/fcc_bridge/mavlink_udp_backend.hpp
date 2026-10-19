@@ -33,8 +33,9 @@ class MavlinkUdpBackend : public FccBackend
 {
 public:
   // Reads SITL_FCC_PORT (local bind port, default 14540 — SDD §13.1) and
-  // DRONE_ID from the environment. Throws std::runtime_error if the UDP
-  // socket cannot be created/bound.
+  // DRONE_ID from the environment (mavlink_ids.hpp: required, also the SITL
+  // FCC's MAV_SYS_ID). Throws std::runtime_error if DRONE_ID is unset or
+  // invalid, or if the UDP socket cannot be created/bound.
   explicit MavlinkUdpBackend(rclcpp::Node * node);
   ~MavlinkUdpBackend() override;
 
@@ -92,6 +93,7 @@ private:
   bool ensure_mission_client();
 
   rclcpp::Node * node_;
+  uint8_t drone_id_;  // MC and FCC MAVLink system ID (mavlink_ids.hpp)
   int sock_fd_{-1};
 
   std::thread recv_thread_;

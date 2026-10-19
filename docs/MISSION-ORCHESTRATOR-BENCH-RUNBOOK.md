@@ -17,6 +17,14 @@ Background, if you need it:
 JSON format, §6), `docs/GCS-MAVLINK-API-REFERENCE.md` (Channel C
 reference), and `tools/mission-orchestrator-sim/README.md` (the tool).
 
+**GUI alternative:** every step in §3 can also be run from
+`tools/gcs-test-panel` (TEST-007), using its *Mission plans* tab (Refresh,
+Create on MC, Open in editor, Update on MC, Activate, Delete). It logs each
+step's MAVFTP Ack/Nak and `MC_MISSION_PLAN_ACK` to `events.jsonl` and a
+Channel C `.tlog` for the test record. It binds the same 14571 listen port,
+so close the CLI (and its `ss -ulpn` check still applies) before connecting
+it.
+
 ---
 
 ## 0. Before you start

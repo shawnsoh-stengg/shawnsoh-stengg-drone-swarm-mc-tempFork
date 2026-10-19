@@ -30,10 +30,13 @@ class MissionProtocolClient
 public:
   // sock_fd: an already-bound, already-connected (or sendto-ready) UDP
   // socket. Not owned — caller manages its lifetime.
+  // target_system: the FCC's MAV_SYS_ID. PX4's mission handler
+  // (mavlink_mission.cpp CHECK_SYSID_COMPID_MISSION) needs an exact match,
+  // not 0/broadcast, and silently ignores anything else.
   // system_id/component_id: this MC's MAVLink identity for outgoing frames.
   MissionProtocolClient(
-    int sock_fd, sockaddr_in target_addr, uint8_t system_id, uint8_t component_id,
-    rclcpp::Logger logger);
+    int sock_fd, sockaddr_in target_addr, uint8_t target_system, uint8_t system_id,
+    uint8_t component_id, rclcpp::Logger logger);
 
   // Full handshake: MISSION_COUNT -> MISSION_ITEM_INT x N -> MISSION_ACK
   // (search paths, ingress/muster legs — FR-013; also FORMATION_SLOT
@@ -72,6 +75,7 @@ private:
 
   int sock_fd_;
   sockaddr_in target_addr_;
+  uint8_t target_system_;
   uint8_t system_id_;
   uint8_t component_id_;
   uint8_t seq_{0};  // MAVLink frame sequence counter, wraps at 256

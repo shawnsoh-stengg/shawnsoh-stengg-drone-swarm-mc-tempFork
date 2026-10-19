@@ -623,6 +623,8 @@ TEST_F(MissionOrchestratorNodeTest, ActivateAcceptsValidPlanAndPublishesMissionU
         return !mission_upload_msgs_.empty();
       }, std::chrono::seconds(1)));
   const auto & upload = *mission_upload_msgs_.back();
+  // Channel C half of the upload_id space, never Channel B's (upload_id.hpp).
+  EXPECT_EQ(upload.upload_id >> gcs_comms::kUploadIdCounterBits, 1U);
   EXPECT_TRUE(upload.arm_authorised);
   EXPECT_FLOAT_EQ(upload.low_battery_threshold, 0.25F);
   ASSERT_EQ(upload.formation_offsets.size(), 1U);

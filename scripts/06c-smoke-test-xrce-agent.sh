@@ -82,6 +82,7 @@ cid="$(docker run -d --rm --network=host --name mc-xrce-agent-smoke \
     -e FCC_ETH_PORT="${AGENT_PORT}" \
     -e FCC_ETH_IP=127.0.0.1 \
     -e FCC_MISSION_PORT=15558 \
+    -e DRONE_ID=1 \
     "${IMAGE}")"
 
 check "container is running" docker inspect -f '{{.State.Running}}' "${cid}"

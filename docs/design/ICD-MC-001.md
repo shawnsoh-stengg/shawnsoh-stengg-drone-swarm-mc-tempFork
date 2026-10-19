@@ -411,9 +411,9 @@ Published by: `fcc_bridge_node` on behalf of `mission_manager_node` or `health_m
 | `timestamp` | `uint64` | MC monotonic timestamp (µs) |
 | `command` | `uint32` | MAVLink command ID (see §10.5) |
 | `param1`–`param7` | `float32` | Command parameters (MAVLink-defined per command) |
-| `target_system` | `uint8` | PX4 system ID (typically 1) |
+| `target_system` | `uint8` | FCC's `MAV_SYS_ID` = `DRONE_ID`. PX4 Commander silently ignores any other value except 0 (v1.17 `Commander.cpp` `handle_command()`). Was hard-coded `1` until 2026-10-18 |
 | `target_component` | `uint8` | PX4 component ID (typically 1) |
-| `source_system` | `uint8` | MC system ID |
+| `source_system` | `uint8` | MC system ID (`DRONE_ID`, shared with its FCC) |
 | `source_component` | `uint8` | MC component ID (= `MAV_COMP_ID_ONBOARD_COMPUTER`) |
 | `from_external` | `bool` | Set `true` when relaying a GCS command |
 
@@ -546,10 +546,14 @@ Port = 14553       # internal: MAVROS (gcs-comms container) listens here
 Mode = Normal
 Address = 192.168.100.10
 Port = 14551
+Group = gcs        # shares sysids learned on GCS_MC_RECV: no echo of GCS frames
 
 [UdpEndpoint GCS_MC_RECV]
 Mode = Server
+Address = 0.0.0.0
 Port = 14552
+Group = gcs
+AllowSrcSysOut = 0 # ingress-only: GCS_CHANNEL_B is the sole egress (TEST-007)
 
 [UdpEndpoint GCS_MAVLINK_NODE]
 Mode = Normal
@@ -731,6 +735,13 @@ Rate: ≥ 1 Hz (FR-071).
 | `MAV_SEVERITY_NOTICE` | 5 | Phase transition, significant state change |
 | `MAV_SEVERITY_INFO` | 6 | Routine informational messages |
 | `MAV_SEVERITY_DEBUG` | 7 | Debug (suppressed in operational builds) |
+
+`gcs_mavlink_node` relays every `/mc/status_text` as a Channel B `STATUSTEXT`
+with its severity unchanged. A text over the 50-char field is split into
+MAVLink v2 chunks: one nonzero `id` per text, `chunk_seq` from 0, and the
+first chunk holding a NUL ends it (an empty chunk follows a text that fills
+its last chunk exactly). At most 4 chunks (200 chars) per text; `id` 0 means
+a single-frame text. QGroundControl reassembles these.
 
 ### 4.8 Timing and Error Handling
 
@@ -1340,7 +1351,8 @@ float32 d              # m NED Down offset
 ```
 # Full mission data uploaded by GCS
 std_msgs/Header header
-uint32 upload_id                          # Unique ID for this upload
+uint32 upload_id                          # Unique ID for this upload; < 2^24, bit 23 = source
+                                          # (0 Channel B, 1 Channel C) -- gcs_comms/upload_id.hpp
 # Ingress waypoints: position.x = lat (deg), position.y = lon (deg),
 # position.z = alt (m above home) -- as both gcs_mavlink_node and
 # mission_orchestrator_node decode them. Last entry = muster point.

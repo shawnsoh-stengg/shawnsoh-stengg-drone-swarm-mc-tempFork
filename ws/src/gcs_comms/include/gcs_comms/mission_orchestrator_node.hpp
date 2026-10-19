@@ -15,6 +15,7 @@
 
 #include "mc_msgs/msg/mission_phase.hpp"
 #include "mc_msgs/msg/mission_upload.hpp"
+#include "gcs_comms/upload_id.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 // GCS-004: mission_orchestrator_node — MAVLink Channel C mission-plan
@@ -194,7 +195,7 @@ private:
   // activated. In-memory only: does not need to survive a node restart any
   // more than mission_manager_node's own in-memory phase state does.
   std::string active_plan_filename_;
-  uint32_t next_upload_id_{1};
+  UploadIdAllocator upload_ids_{UploadSource::kChannelC};  // see upload_id.hpp
 
   // Gates MC_MISSION_PLAN_ACTIVATE (interface spec §5.2/§9 item 2, resolved
   // here as: restrict to PREFLIGHT, the recommended "before ARMING" window —

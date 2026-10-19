@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -26,6 +27,10 @@ namespace gcs_comms
 namespace
 {
 constexpr double kDefaultGcsLinkTimeoutS = 10.0;  // ICD §4.8
+
+// ICD §10.5 MC_CMD_PHASE_TRANSITION — the only command mission_manager_node
+// outcome-acks on /mc/gcs/command_ack (see handle_command_long()).
+constexpr uint16_t kMcCmdPhaseTransition = 50001;
 
 // GCS-002: mission upload state machine (SDD §11.2, ICD §4.6 MC_MISSION_UPLOAD).
 // A custom mission_type distinguishes this handshake from any (channel-
@@ -243,6 +248,14 @@ GcsMavlinkNode::GcsMavlinkNode(const rclcpp::NodeOptions & options)
     "/mc/detections", rclcpp::QoS(10),
     [this](const mc_msgs::msg::DetectionArray::SharedPtr msg) {on_detections(msg);},
     mux_sub_opts);
+  sub_command_ack_ = create_subscription<mc_msgs::msg::GcsCommandAck>(
+    "/mc/gcs/command_ack", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::GcsCommandAck::SharedPtr msg) {on_command_ack(msg);},
+    mux_sub_opts);
+  sub_status_text_ = create_subscription<mc_msgs::msg::StatusText>(
+    "/mc/status_text", rclcpp::QoS(10),
+    [this](const mc_msgs::msg::StatusText::SharedPtr msg) {on_status_text(msg);},
+    mux_sub_opts);
 
   mux_timer_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   mc_status_timer_ = create_wall_timer(
@@ -365,7 +378,13 @@ void GcsMavlinkNode::handle_command_long(const mavlink_message_t & msg, const so
   // Acknowledges receipt/decode only — actual command execution and its
   // result belong to whichever node consumes /mc/gcs/command (SDD §11
   // "zero business logic" adapter philosophy, matching fcc_bridge_node).
-  send_command_ack(from, cmd.command, MAV_RESULT_ACCEPTED);
+  // MC_CMD_PHASE_TRANSITION is the one command whose consumer
+  // (mission_manager_node) publishes an outcome on /mc/gcs/command_ack, so
+  // it gets IN_PROGRESS here and its final ACCEPTED/DENIED from
+  // on_command_ack() — a guard rejection must not read as success.
+  send_command_ack(
+    from, cmd.command,
+    cmd.command == kMcCmdPhaseTransition ? MAV_RESULT_IN_PROGRESS : MAV_RESULT_ACCEPTED);
 }
 
 void GcsMavlinkNode::on_heartbeat_timer()
@@ -457,7 +476,7 @@ void GcsMavlinkNode::handle_mission_count(const mavlink_message_t & msg)
   mission_gcs_sysid_ = msg.sysid;
   mission_gcs_compid_ = msg.compid;
   mission_upload_msg_ = mc_msgs::msg::MissionUpload{};
-  mission_upload_msg_.upload_id = next_upload_id_++;
+  mission_upload_msg_.upload_id = upload_ids_.next();
   mission_last_activity_ = now();
 
   RCLCPP_INFO(
@@ -685,6 +704,66 @@ void GcsMavlinkNode::on_detections(const mc_msgs::msg::DetectionArray::SharedPtr
   // carry several detections from one frame — one MC_DETECTION per element.
   for (const auto & detection : msg->detections) {
     send_mc_detection(detection);
+  }
+}
+
+void GcsMavlinkNode::on_command_ack(const mc_msgs::msg::GcsCommandAck::SharedPtr msg)
+{
+  sockaddr_in to{};
+  {
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    if (!has_gcs_endpoint_) {
+      return;
+    }
+    to = last_gcs_endpoint_;
+  }
+  const bool accepted = msg->result == mc_msgs::msg::GcsCommandAck::RESULT_ACCEPTED;
+  send_command_ack(
+    to, static_cast<uint16_t>(msg->command), accepted ? MAV_RESULT_ACCEPTED : MAV_RESULT_DENIED);
+  if (!accepted) {
+    send_statustext(
+      mc_msgs::msg::StatusText::SEVERITY_WARNING,
+      msg->reason.empty() ? std::string("command rejected") : msg->reason);
+  }
+}
+
+void GcsMavlinkNode::on_status_text(const mc_msgs::msg::StatusText::SharedPtr msg)
+{
+  send_statustext(msg->severity, msg->text);
+}
+
+void GcsMavlinkNode::send_statustext(uint8_t severity, const std::string & text)
+{
+  std::lock_guard<std::mutex> lock(send_mutex_);
+  if (!has_gcs_endpoint_) {
+    return;
+  }
+  // STATUSTEXT.text is char[50] (ICD §4.7). Longer texts (gnss_sim_node's
+  // anchor confirmations, pre-arm reasons) go out as MAVLink v2 chunks: one
+  // nonzero `id` per text, `chunk_seq` from 0, and the first chunk holding a
+  // NUL marks the end, so a text filling its last chunk exactly gets an
+  // empty terminator chunk. QGC reassembles these; id 0 means "single frame".
+  constexpr size_t kChunkLen = MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN;
+  const std::string body = text.substr(0, kChunkLen * kMaxStatustextChunks);
+  uint16_t id = 0;
+  if (body.size() > kChunkLen) {
+    id = ++statustext_id_;
+    if (id == 0) {
+      id = ++statustext_id_;
+    }
+  }
+  for (size_t offset = 0, seq = 0; ; offset += kChunkLen, ++seq) {
+    // Zero-filled: the pack function copies all 50 bytes from this buffer.
+    char chunk[kChunkLen] = {};
+    const size_t n = offset < body.size() ? std::min(kChunkLen, body.size() - offset) : 0;
+    body.copy(chunk, n, offset);
+    mavlink_message_t msg;
+    mavlink_msg_statustext_pack(
+      system_id_, kComponentId, &msg, severity, chunk, id, static_cast<uint8_t>(seq));
+    send_frame(msg, last_gcs_endpoint_);
+    if (id == 0 || n < kChunkLen) {
+      break;
+    }
   }
 }
 

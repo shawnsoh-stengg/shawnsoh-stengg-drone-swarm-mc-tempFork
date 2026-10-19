@@ -281,6 +281,10 @@ private:
   // immediately after that one evaluation.
   std::optional<Phase> gcs_phase_request_;
 
+  // Why the last try_transition() returned REJECTED/NO_MATCH — relayed as
+  // GcsCommandAck.reason and, by gcs_mavlink_node, as a GCS STATUSTEXT.
+  std::string last_reject_reason_;
+
   // arm_authorised_ mirrors mission_upload_->arm_authorised (FR-010) but
   // can also be flipped live by MC_CMD_ARM_AUTHORISE (ICD §10.5, 50002)
   // without requiring a full mission re-upload.
