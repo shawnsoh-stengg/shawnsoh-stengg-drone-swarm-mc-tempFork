@@ -2,6 +2,7 @@
 // Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §3, ICD-MC-001 §3).
 
 #include "fcc_bridge/xrce_dds_backend.hpp"
+#include "fcc_bridge/mavlink_ids.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -51,7 +52,9 @@ std::string env_or(const char * name, const std::string & fallback)
 }  // namespace
 
 XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
-: node_(node), last_fcc_msg_time_(node->now())
+: node_(node),
+  drone_id_(drone_id_from_env()),
+  last_fcc_msg_time_(node->now())
 {
   const auto qos = px4_qos();
 
@@ -114,12 +117,9 @@ XrceDdsBackend::XrceDdsBackend(rclcpp::Node * node)
     throw std::runtime_error("XrceDdsBackend: invalid FCC_ETH_IP '" + fcc_ip + "'");
   }
 
-  // MC's own MAVLink identity on the mission-protocol channel. DRONE_ID
-  // doubles as system_id, matching gcs_mavlink_node's convention (ICD §4.1).
-  const uint8_t system_id = static_cast<uint8_t>(std::stoi(env_or("DRONE_ID", "1")));
-  constexpr uint8_t kCompIdOnboardComputer = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
+  // DRONE_ID is both this MC's system ID and the FCC's (mavlink_ids.hpp).
   mission_client_ = std::make_unique<MissionProtocolClient>(
-    mission_sock_fd_, target_addr, system_id, kCompIdOnboardComputer, node_->get_logger());
+    mission_sock_fd_, target_addr, drone_id_, drone_id_, kMcComponentId, node_->get_logger());
 
   flow_sock_fd_ = open_flow_socket();
   const int flow_port = std::stoi(env_or("FCC_FLOW_PORT", "14556"));
@@ -268,6 +268,23 @@ void XrceDdsBackend::on_vehicle_status(const px4_msgs::msg::VehicleStatus::Share
   // read directly instead of approximated.
   state_.failure_flags = msg->failure_detector_status;
   last_fcc_msg_time_ = node_->now();
+
+  // The FCC states its own MAV_SYS_ID here. Commands and mission items go to
+  // DRONE_ID, so a mismatch means PX4 is silently ignoring all of them: say
+  // so once per change instead of leaving arm/takeoff to fail without a trace.
+  if (msg->system_id != reported_fcc_system_id_) {
+    reported_fcc_system_id_ = msg->system_id;
+    if (msg->system_id != drone_id_) {
+      RCLCPP_ERROR(
+        node_->get_logger(),
+        "FCC reports MAV_SYS_ID=%u but DRONE_ID=%u: PX4 will ignore every command and "
+        "mission upload from this MC. Set them equal (FCC param MAV_SYS_ID, or DRONE_ID "
+        "in /etc/drone-mc/environment).",
+        msg->system_id, drone_id_);
+    } else {
+      RCLCPP_INFO(node_->get_logger(), "FCC MAV_SYS_ID=%u matches DRONE_ID", msg->system_id);
+    }
+  }
 }
 
 void XrceDdsBackend::on_battery(const px4_msgs::msg::BatteryStatus::SharedPtr msg)
@@ -391,10 +408,12 @@ void XrceDdsBackend::send_command(uint32_t cmd, const std::array<float, 7> & par
   msg.param5 = params[4];
   msg.param6 = params[5];
   msg.param7 = params[6];
-  msg.target_system = 1;
-  msg.target_component = 1;
-  msg.source_system = static_cast<uint8_t>(std::stoi(env_or("DRONE_ID", "1")));
-  msg.source_component = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
+  // PX4 v1.17 Commander::handle_command() ignores, without an ACK, any
+  // command whose target_system is neither its MAV_SYS_ID nor 0.
+  msg.target_system = drone_id_;
+  msg.target_component = kFccComponentId;
+  msg.source_system = drone_id_;
+  msg.source_component = kMcComponentId;
   msg.from_external = true;
   pub_vehicle_command_->publish(msg);
 }

@@ -107,6 +107,13 @@ check "channel-b: no Channel A port 14550" bash -c "! grep -qE 'Port = 14550' '$
 check "channel-b: no FCC address 192.168.100.31" bash -c "! grep -qE '192\.168\.100\.31' '${CONF_B}'"
 check "channel-b: no Channel C ports (14571/14572/14580)" \
     bash -c "! grep -qE 'Port = 1457[12]$|Port = 14580' '${CONF_B}'"
+# TEST-007 double delivery: the GCS-facing Server endpoint must be
+# ingress-only and grouped with the fixed egress endpoint, or a GCS sending
+# from its own listen port gets every MC frame twice (see the conf's comment).
+check "channel-b: GCS_MC_RECV is ingress-only (AllowSrcSysOut = 0)" \
+    bash -c "awk '/\\[UdpEndpoint GCS_MC_RECV\\]/{f=1;next} /^\\[/{f=0} f' '${CONF_B}' | grep -qE '^AllowSrcSysOut = 0$'"
+check "channel-b: GCS_CHANNEL_B and GCS_MC_RECV share Group = gcs" \
+    bash -c "[ \"\$(grep -cE '^Group = gcs$' '${CONF_B}')\" -eq 2 ]"
 
 # Channel C (GCS-006): Orchestrator<->MC only, ports 14571/14572/14580.
 # mission_orchestrator_node's own deployment (container/unit/persistence/
@@ -125,6 +132,13 @@ check "channel-c: no Channel A port 14550" bash -c "! grep -qE 'Port = 14550' '$
 check "channel-c: no Channel B ports (14551/14552/14560)" \
     bash -c "! grep -qE 'Port = 1455[12]$|Port = 14560' '${CONF_C}'"
 check "channel-c: no FCC address 192.168.100.31" bash -c "! grep -qE '192\.168\.100\.31' '${CONF_C}'"
+# TEST-007 double delivery: the GCS-facing Server endpoint must be
+# ingress-only and grouped with the fixed egress endpoint, or a GCS sending
+# from its own listen port gets every MC frame twice (see the conf's comment).
+check "channel-c: ORCHESTRATOR_MC_RECV is ingress-only (AllowSrcSysOut = 0)" \
+    bash -c "awk '/\\[UdpEndpoint ORCHESTRATOR_MC_RECV\\]/{f=1;next} /^\\[/{f=0} f' '${CONF_C}' | grep -qE '^AllowSrcSysOut = 0$'"
+check "channel-c: ORCHESTRATOR_CHANNEL_C and ORCHESTRATOR_MC_RECV share Group = orchestrator" \
+    bash -c "[ \"\$(grep -cE '^Group = orchestrator$' '${CONF_C}')\" -eq 2 ]"
 
 # Isolation is by construction (independent processes, no shared config) —
 # verify the entrypoint actually launches three independent mavlink-routerd

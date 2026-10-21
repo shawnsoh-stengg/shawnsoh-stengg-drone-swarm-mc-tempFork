@@ -1,0 +1,6 @@
+pymavlink==2.4.49
+PySide6-Essentials==6.12.0
+pyqtgraph==0.14.0
+numpy>=1.26
+# tests only
+pytest>=8

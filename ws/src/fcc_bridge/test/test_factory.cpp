@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <stdexcept>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -33,9 +34,14 @@ protected:
   void SetUp() override
   {
     unsetenv("SIMULATION_MODE");
+    setenv("DRONE_ID", "1", 1);  // both backends require it (mavlink_ids.hpp)
     node_ = std::make_shared<rclcpp::Node>("fcc_bridge_factory_test");
   }
-  void TearDown() override {unsetenv("SIMULATION_MODE");}
+  void TearDown() override
+  {
+    unsetenv("SIMULATION_MODE");
+    unsetenv("DRONE_ID");
+  }
 
   rclcpp::Node::SharedPtr node_;
 };
@@ -63,4 +69,10 @@ TEST_F(FactoryTest, SimulationModeTrueSelectsMavlinkUdpBackend)
   auto backend = fcc_bridge::make_fcc_backend(node_.get());
   ASSERT_NE(backend, nullptr);
   unsetenv("SITL_FCC_PORT");
+}
+
+TEST_F(FactoryTest, MissingDroneIdRefusesToStartRatherThanTargetingSystemOne)
+{
+  unsetenv("DRONE_ID");
+  EXPECT_THROW(fcc_bridge::make_fcc_backend(node_.get()), std::runtime_error);
 }

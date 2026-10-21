@@ -86,6 +86,7 @@ protected:
     setenv("FCC_ETH_IP", "127.0.0.1", 1);
     setenv("FCC_MISSION_PORT", "15556", 1);
     setenv("FCC_FLOW_PORT", "15656", 1);
+    setenv("DRONE_ID", "1", 1);  // required by XrceDdsBackend (mavlink_ids.hpp)
     unsetenv("SIMULATION_MODE");
 
     node_ = std::make_shared<fcc_bridge::FccBridgeNode>();
@@ -123,6 +124,7 @@ protected:
     unsetenv("FCC_ETH_IP");
     unsetenv("FCC_MISSION_PORT");
     unsetenv("FCC_FLOW_PORT");
+    unsetenv("DRONE_ID");
   }
 
   // Sends one OPTICAL_FLOW_RAD frame from a mock H-Flow-relay peer directly

@@ -808,7 +808,7 @@ MissionOrchestratorNode::ActivateResult MissionOrchestratorNode::load_and_activa
   }
 
   out_msg.header.stamp = now();
-  out_msg.upload_id = next_upload_id_++;  // fresh upload_id (interface spec §6.4)
+  out_msg.upload_id = upload_ids_.next();  // fresh upload_id (interface spec §6.4)
   return kActivateAccepted;
 }
 

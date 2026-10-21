@@ -2,6 +2,7 @@
 // Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §3, ICD-MC-001 §3).
 
 #include "fcc_bridge/mission_protocol_client.hpp"
+#include "fcc_bridge/mavlink_ids.hpp"
 
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -12,17 +13,12 @@
 namespace fcc_bridge
 {
 
-namespace
-{
-constexpr uint8_t kTargetSystem = 1;     // PX4 default system ID (ICD §3.3)
-constexpr uint8_t kTargetComponent = 1;  // PX4 default component ID
-}  // namespace
-
 MissionProtocolClient::MissionProtocolClient(
-  int sock_fd, sockaddr_in target_addr, uint8_t system_id, uint8_t component_id,
-  rclcpp::Logger logger)
+  int sock_fd, sockaddr_in target_addr, uint8_t target_system, uint8_t system_id,
+  uint8_t component_id, rclcpp::Logger logger)
 : sock_fd_(sock_fd),
   target_addr_(target_addr),
+  target_system_(target_system),
   system_id_(system_id),
   component_id_(component_id),
   logger_(logger)
@@ -33,7 +29,7 @@ void MissionProtocolClient::send_mission_count(uint16_t count)
 {
   mavlink_message_t msg;
   mavlink_msg_mission_count_pack(
-    system_id_, component_id_, &msg, kTargetSystem, kTargetComponent, count,
+    system_id_, component_id_, &msg, target_system_, kFccComponentId, count,
     MAV_MISSION_TYPE_MISSION, 0);
 
   uint8_t buf[MAVLINK_MAX_PACKET_LEN];
@@ -50,7 +46,7 @@ void MissionProtocolClient::send_mission_item_int(const MissionItem & item)
   // MAV_CMD_DO_SET_MISSION_CURRENT / MISSION_START drives activation
   // (mission_manager_node, SDD §7.2). autocontinue=1: proceed to next item.
   mavlink_msg_mission_item_int_pack(
-    system_id_, component_id_, &msg, kTargetSystem, kTargetComponent, item.seq, item.frame,
+    system_id_, component_id_, &msg, target_system_, kFccComponentId, item.seq, item.frame,
     item.command, /*current=*/ 0, /*autocontinue=*/ 1, /*param1 hold_time=*/ 0.0F,
     /*param2 acceptance_radius=*/ item.acceptance_radius, /*param3 pass_radius=*/ 0.0F,
     /*param4 yaw=*/ NAN, item.lat, item.lon, item.alt, MAV_MISSION_TYPE_MISSION);

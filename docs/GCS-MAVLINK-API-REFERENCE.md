@@ -9,7 +9,7 @@ External MAVLink interface reference for the two GCS-facing channels that termin
 - ✅ **implemented** — the message/command is actually sent, received, or acted on in code today.
 - 🧭 **designed** — documented in `ICD-MC-001.md` as part of this interface, not yet wired up.
 
-Channel B (`gcs_mavlink_node`) implements the full custom telemetry/status set (`MC_STATUS`/`MC_DETECTION`/`MC_HEALTH`), the mission-upload protocol, and three of four custom commands end-to-end; a handful of ICD-designed standard messages (`COMMAND_INT`, inbound `MISSION_ACK`, `PARAM_*`, `STATUSTEXT`) have no code behind them yet. Channel C
+Channel B (`gcs_mavlink_node`) implements the full custom telemetry/status set (`MC_STATUS`/`MC_DETECTION`/`MC_HEALTH`), the mission-upload protocol, and three of four custom commands end-to-end; a handful of ICD-designed standard messages (`COMMAND_INT`, inbound `MISSION_ACK`, `PARAM_*`) have no code behind them yet. Channel C
 (`mission_orchestrator_node`) is fully implemented (GCS-004, done 2026-08-05/06) except MAVLink 2 packet signing, which the spec requires but the code doesn't yet apply.
 
 ---
@@ -19,7 +19,7 @@ Channel B (`gcs_mavlink_node`) implements the full custom telemetry/status set (
 ### Transport
 
 - MAVLink 2 over UDP, routed by its own `mavlink-router` instance/config (`mavlink-router-channel-b.conf`) — isolated from Channel A and Channel C.
-- GCS laptop: `192.168.100.10`. Port `14551` is the GCS's own receive port (MC→GCS — `mavlink-router`'s `GCS_CHANNEL_B` endpoint, a fixed remote address:port). Port `14552` is the MC's own receive port (GCS→MC — `GCS_MC_RECV`, bound `0.0.0.0:14552` on the MC). `ICD-MC-001.md`'s §11.2/ §11.4 summary tables previously had this backwards; §4.1/§4.2's own `mavlink-router-channel-b.conf` snippet, the real `config/mavlink-router-channel-b.conf`, and `scripts/09b-smoke-test-routing.sh` all agree with the direction stated here. - `gcs_mavlink_node` itself listens on a loopback socket `GCS_MAVLINK_LOOPBACK_PORT` (env, default `14560`), bound to `INADDR_LOOPBACK` — `mavlink-router` is the only process with a real network-facing socket for this channel.
+- GCS laptop: `192.168.100.10`. Port `14551` is the GCS's own receive port (MC→GCS — `mavlink-router`'s `GCS_CHANNEL_B` endpoint, a fixed remote address:port). Port `14552` is the MC's own receive port (GCS→MC — `GCS_MC_RECV`, bound `0.0.0.0:14552` on the MC). `ICD-MC-001.md`'s §11.2/ §11.4 summary tables previously had this backwards; §4.1/§4.2's own `mavlink-router-channel-b.conf` snippet, the real `config/mavlink-router-channel-b.conf`, and `scripts/09b-smoke-test-routing.sh` all agree with the direction stated here. `GCS_MC_RECV` is ingress-only (`AllowSrcSysOut = 0`), so every MC→GCS frame arrives exactly once, on `GCS_IP:14551`, whatever source port the GCS sends from; before TEST-007's fix a GCS sending from its own `14551` got every frame twice. - `gcs_mavlink_node` itself listens on a loopback socket `GCS_MAVLINK_LOOPBACK_PORT` (env, default `14560`), bound to `INADDR_LOOPBACK` — `mavlink-router` is the only process with a real network-facing socket for this channel.
 - MC `system_id` = the drone's numeric ID; `component_id = 191` (`MAV_COMP_ID_ONBOARD_COMPUTER`). GCS operator `system_id = 255`.
 
 ### Messages: GCS → MC
@@ -47,7 +47,7 @@ Channel B (`gcs_mavlink_node`) implements the full custom telemetry/status set (
 | `MC_DETECTION` | 50101 | event-driven, ≤1 s (FR-043) | ✅ |
 | `MC_HEALTH` | 50103 | ≥1 Hz (FR-071), event-driven on `/mc/health` | ✅ |
 | `PARAM_VALUE` | 22 | — | 🧭 |
-| `STATUSTEXT` | 253 | severity-tagged text (8 levels, EMERGENCY→DEBUG) | 🧭 (no send site in code yet) |
+| `STATUSTEXT` | 253 | severity-tagged text (8 levels, EMERGENCY→DEBUG): every `/mc/status_text` (pre-arm failures, `gnss_sim_node` anchor results, …), plus the reason after a `DENIED` `MC_CMD_PHASE_TRANSITION`. Texts over 50 chars go out as MAVLink v2 chunks (same nonzero `id`, `chunk_seq` from 0, a chunk shorter than 50 chars ends the text), up to 200 chars | ✅ |
 
 ### `COMMAND_LONG` handling
 
@@ -59,9 +59,10 @@ Channel B (`gcs_mavlink_node`) implements the full custom telemetry/status set (
 | Command | ID | Tier | Params | Effect | Status |
 |---|---|---|---|---|---|
 | `MC_CMD_PHASE_TRANSITION` | 50001 | PHASE | param1 = target phase (§ below) | requests a mission-phase transition | ✅ |
-| `MC_CMD_ARM_AUTHORISE` | 50002 | PHASE | param1 = mission-upload ID | authorises arming for that upload | ✅ |
+| `MC_CMD_ARM_AUTHORISE` | 50002 | PHASE | param1 = mission-upload ID (from `MISSION_ACK.opaque_id`; below 2^24, so exact as a float) | authorises arming — `mission_manager_node` currently checks only that param1 is nonzero, not that it matches the current upload | ✅ |
 | `MC_CMD_END_MISSION` | 50003 | PHASE | — | ends the active mission | ✅ |
 | `MC_CMD_GCS_OVERRIDE` | 50004 | PHASE | param1 = enable (1/0), param2 = override type | received/logged here; **effect implemented in `health_monitor_node`**, not here (see below) | ✅ (split) |
+| `MC_CMD_INDOOR_GNSS_SIM_ANCHOR` | 50005 | — (not `mission_manager_node`'s: consumed by `indoor_nav`'s `gnss_sim_node`) | param1 = lat (deg), param2 = lon (deg), param3 = alt MSL (m). float32, so lon near 100° resolves to ~0.85 m | anchors or re-anchors the indoor GNSS sim's false origin (ICD §4.5, IGS-003). The ACK is receipt-only. The result arrives separately as a `STATUSTEXT` (relayed from `/mc/status_text`, chunked because it runs past 50 chars): `gnss_sim_node: anchored false origin lat=… lon=… alt_msl=…` (INFO) or `gnss_sim_node: rejected …` (ERROR: a real GPS fix is present, or lat/lon out of range). No `STATUSTEXT` within a second or two means `drone-mc-indoor-nav` isn't running. Needs `drone-mc-indoor-nav` running (start-on-demand). Not available on Channel C | ✅ |
 | `MAV_CMD_COMPONENT_ARM_DISARM` | 400 | EMERGENCY (disarm only) | param1 = 0 | forces FAULT phase, bypasses queue | ✅ |
 | `MAV_CMD_NAV_RETURN_TO_LAUNCH` | 20 | EMERGENCY | — | forces FAULT phase, bypasses queue | ✅ |
 | `MAV_CMD_DO_SET_MODE` | 176 | EMERGENCY (for PX4 `custom_main` ∈ {MANUAL, ALTCTL, POSCTL, STABILIZED}) | param2 = PX4 custom_main | forces FAULT phase, bypasses queue | ✅ |

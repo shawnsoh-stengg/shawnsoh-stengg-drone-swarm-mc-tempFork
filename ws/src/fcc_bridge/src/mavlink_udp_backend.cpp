@@ -2,6 +2,7 @@
 // Proprietary — Swarm Search Drone Mission Computer (SDD-MC-001 §3, ICD-MC-001 §3).
 
 #include "fcc_bridge/mavlink_udp_backend.hpp"
+#include "fcc_bridge/mavlink_ids.hpp"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -23,20 +24,12 @@ std::string env_or(const char * name, const std::string & fallback)
   return v != nullptr ? std::string(v) : fallback;
 }
 
-constexpr uint8_t kCompIdOnboardComputer = 191;  // MAV_COMP_ID_ONBOARD_COMPUTER
-constexpr uint8_t kTargetSystem = 1;              // PX4 SITL default system ID
-constexpr uint8_t kTargetComponent = 1;           // PX4 SITL default component ID
 constexpr uint8_t kArmingStateDisarmed = 1;  // ICD-MC-001 §10.2
 constexpr uint8_t kArmingStateArmed = 2;     // ICD-MC-001 §10.2
-
-uint8_t drone_id()
-{
-  return static_cast<uint8_t>(std::stoi(env_or("DRONE_ID", "1")));
-}
 }  // namespace
 
 MavlinkUdpBackend::MavlinkUdpBackend(rclcpp::Node * node)
-: node_(node), last_fcc_msg_time_(node->now())
+: node_(node), drone_id_(drone_id_from_env()), last_fcc_msg_time_(node->now())
 {
   sock_fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
   if (sock_fd_ < 0) {
@@ -287,7 +280,8 @@ bool MavlinkUdpBackend::ensure_mission_client()
   }
   if (!mission_client_) {
     mission_client_ = std::make_unique<MissionProtocolClient>(
-      sock_fd_, peer_addr_, drone_id(), kCompIdOnboardComputer, node_->get_logger());
+      sock_fd_, peer_addr_, drone_id_, drone_id_, kMcComponentId,
+      node_->get_logger());
   }
   return true;
 }
@@ -343,8 +337,8 @@ void MavlinkUdpBackend::stream_offboard_setpoint(const OffboardSetpoint & sp)
 
   mavlink_message_t msg;
   mavlink_msg_set_position_target_local_ned_pack(
-    drone_id(), kCompIdOnboardComputer, &msg,
-    static_cast<uint32_t>(node_->now().nanoseconds() / 1000000), kTargetSystem, kTargetComponent,
+    drone_id_, kMcComponentId, &msg,
+    static_cast<uint32_t>(node_->now().nanoseconds() / 1000000), drone_id_, kFccComponentId,
     MAV_FRAME_LOCAL_NED, kTypeMask, sp.x, sp.y, sp.z,
     /*vx=*/ 0, /*vy=*/ 0, /*vz=*/ 0, /*afx=*/ 0, /*afy=*/ 0, /*afz=*/ 0, sp.yaw, /*yaw_rate=*/ 0);
 
@@ -369,7 +363,7 @@ void MavlinkUdpBackend::send_command(uint32_t cmd, const std::array<float, 7> & 
 
   mavlink_message_t msg;
   mavlink_msg_command_long_pack(
-    drone_id(), kCompIdOnboardComputer, &msg, kTargetSystem, kTargetComponent,
+    drone_id_, kMcComponentId, &msg, drone_id_, kFccComponentId,
     static_cast<uint16_t>(cmd), /*confirmation=*/ 0, params[0], params[1], params[2], params[3],
     params[4], params[5], params[6]);
 

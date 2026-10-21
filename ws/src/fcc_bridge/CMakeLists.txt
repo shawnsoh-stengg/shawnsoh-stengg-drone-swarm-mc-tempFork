@@ -86,6 +86,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_factory test/test_factory.cpp)
   target_link_libraries(test_factory fcc_backend)
 
+  ament_add_gtest(test_mavlink_ids test/test_mavlink_ids.cpp)
+  target_include_directories(test_mavlink_ids PRIVATE include ${mavlink_INCLUDE_DIRS})
+
   # FCC-002: mission-protocol handshake correctness against a loopback UDP
   # peer that plays the FCC's part of the microservice.
   ament_add_gtest(test_mission_protocol_client test/test_mission_protocol_client.cpp)

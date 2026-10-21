@@ -25,7 +25,8 @@ check() {
 # default netns (those sysctls are per-netns, not global), so
 # rmw_cyclonedds_cpp's domain creation fails the same way it would if the
 # host had never been tuned.
-RUN=(docker run --rm --network=host --volume "${INSTALL_DIR}:/opt/drone-mc/install:ro" "${IMAGE}")
+# DRONE_ID: fcc_bridge refuses to start without it (mavlink_ids.hpp).
+RUN=(docker run --rm --network=host -e DRONE_ID=1 --volume "${INSTALL_DIR}:/opt/drone-mc/install:ro" "${IMAGE}")
 SOURCE="source /opt/ros/humble/install/setup.bash && source /opt/drone-mc/install/setup.bash"
 
 check "fcc_bridge package registered" "${RUN[@]}" bash -c \

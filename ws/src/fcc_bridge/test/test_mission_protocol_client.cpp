@@ -105,7 +105,8 @@ protected:
 TEST_F(MissionProtocolClientTest, UploadMissionCompletesFullHandshake)
 {
   fcc_bridge::MissionProtocolClient client(
-    mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
+    mc_.fd(), fcc_.addr(), /*target_system=*/ 1, /*system_id=*/ 1, /*component_id=*/ 191,
+    rclcpp::get_logger("test"));
 
   const std::vector<fcc_bridge::MissionItem> items = {make_item(0), make_item(1), make_item(2)};
 
@@ -208,7 +209,8 @@ bool run_mock_fcc_full_handshake(
 TEST_F(MissionProtocolClientTest, UpdateMissionItemReUploadsFullMissionAfterInitialUpload)
 {
   fcc_bridge::MissionProtocolClient client(
-    mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
+    mc_.fd(), fcc_.addr(), /*target_system=*/ 1, /*system_id=*/ 1, /*component_id=*/ 191,
+    rclcpp::get_logger("test"));
 
   const std::vector<fcc_bridge::MissionItem> items = {make_item(0), make_item(1), make_item(2)};
 
@@ -246,10 +248,33 @@ TEST_F(MissionProtocolClientTest, UpdateMissionItemReUploadsFullMissionAfterInit
   EXPECT_EQ(received[2].first, items[2].lat);
 }
 
+TEST_F(MissionProtocolClientTest, AddressesFramesToTheGivenFccSystemId)
+{
+  // PX4's mission handler needs target_system == its MAV_SYS_ID exactly;
+  // a hard-coded 1 is silently ignored by any FCC with MAV_SYS_ID != 1.
+  fcc_bridge::MissionProtocolClient client(
+    mc_.fd(), fcc_.addr(), /*target_system=*/ 2, /*system_id=*/ 2, /*component_id=*/ 191,
+    rclcpp::get_logger("test"));
+
+  std::thread uploader([&] {client.upload_mission({make_item(0)}, 0.3);});
+  mavlink_message_t msg;
+  const bool got = recv_frame(fcc_.fd(), 2.0, msg);
+  uploader.join();
+
+  ASSERT_TRUE(got);
+  ASSERT_EQ(msg.msgid, MAVLINK_MSG_ID_MISSION_COUNT);
+  mavlink_mission_count_t count_msg{};
+  mavlink_msg_mission_count_decode(&msg, &count_msg);
+  EXPECT_EQ(count_msg.target_system, 2);
+  EXPECT_EQ(count_msg.target_component, 1);
+  EXPECT_EQ(msg.sysid, 2);
+}
+
 TEST_F(MissionProtocolClientTest, UpdateMissionItemFailsFastWithoutAPriorUpload)
 {
   fcc_bridge::MissionProtocolClient client(
-    mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
+    mc_.fd(), fcc_.addr(), /*target_system=*/ 1, /*system_id=*/ 1, /*component_id=*/ 191,
+    rclcpp::get_logger("test"));
 
   // No upload_mission() call at all — current_mission_ is empty, so seq 0
   // is out of range and this must fail without ever touching the network
@@ -265,7 +290,8 @@ TEST_F(MissionProtocolClientTest, UpdateMissionItemFailsFastWithoutAPriorUpload)
 TEST_F(MissionProtocolClientTest, UpdateMissionItemAbortsOnTimeoutRatherThanBlocking)
 {
   fcc_bridge::MissionProtocolClient client(
-    mc_.fd(), fcc_.addr(), /*system_id=*/ 1, /*component_id=*/ 191, rclcpp::get_logger("test"));
+    mc_.fd(), fcc_.addr(), /*target_system=*/ 1, /*system_id=*/ 1, /*component_id=*/ 191,
+    rclcpp::get_logger("test"));
 
   // Seed current_mission_ first so seq=0 is in range and the timeout below
   // is exercised by the re-upload's own handshake, not the range guard.

@@ -176,6 +176,13 @@ class ChannelCClient:
         self._seq = (self._seq + 1) % 256
         return seq
 
+    def _recv_match(self, types: list[str], timeout: float):
+        """Every reply this client waits for comes through here -- a single
+        seam so a caller that already owns the socket's receive loop (the
+        TEST-007 GUI panel's reader thread) can feed replies in from its own
+        queue instead of this client reading the socket directly."""
+        return self.link.recv_match(type=types, blocking=True, timeout=timeout)
+
     def _send_ftp(self, op: FTP_OP) -> None:
         payload = bytearray(op.pack())
         pad_to = 12 + MAX_FTP_DATA
@@ -190,9 +197,7 @@ class ChannelCClient:
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise MavftpError(f"timed out waiting for a reply to opcode {req_opcode}")
-            msg = self.link.recv_match(
-                type=["FILE_TRANSFER_PROTOCOL"], blocking=True, timeout=remaining
-            )
+            msg = self._recv_match(["FILE_TRANSFER_PROTOCOL"], remaining)
             if msg is None:
                 continue
             if msg.get_srcSystem() != self.mc_system_id:
@@ -337,9 +342,7 @@ class ChannelCClient:
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise MavftpError("timed out waiting for MC_MISSION_PLAN_ACK")
-            msg = self.link.recv_match(
-                type=["MC_MISSION_PLAN_ACK"], blocking=True, timeout=remaining
-            )
+            msg = self._recv_match(["MC_MISSION_PLAN_ACK"], remaining)
             if (
                 msg is not None
                 and msg.get_srcSystem() == self.mc_system_id

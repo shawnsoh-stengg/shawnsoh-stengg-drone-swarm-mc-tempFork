@@ -106,6 +106,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_mission_orchestrator_node test/test_mission_orchestrator_node.cpp)
   target_link_libraries(test_mission_orchestrator_node mission_orchestrator_node_lib)
   target_include_directories(test_mission_orchestrator_node PRIVATE ${mavlink_INCLUDE_DIRS})
+
+  ament_add_gtest(test_upload_id test/test_upload_id.cpp)
+  target_include_directories(test_upload_id PRIVATE include)
 endif()
 
 ament_package()

@@ -111,6 +111,21 @@ already installed or built — HIF-001 (ttyTHS1) wiring from
 anything of their own, so there was never a `06` step for them to pair
 with.
 
+### GCS-side functional tests: the GCS test panel (TEST-007)
+
+`tools/gcs-test-panel/` is a PySide6 GUI that stands in for the ground
+Mission Orchestrator app on Channel B (`gcs_mavlink_node`) and Channel C
+(`mission_orchestrator_node`), for manual functional testing on the bench or
+in the field. It sends commands and grades their `COMMAND_ACK` against the
+500 ms bound. It uploads missions over either channel and monitors
+`MC_STATUS`/`MC_HEALTH`/`MC_DETECTION` against their rate requirements.
+Each session is logged as per-channel `.tlog`s plus an `events.jsonl` of
+every action with its pass/fail and test-case ID, exportable as a zip for
+`test-results/`. Channel A stays with QGroundControl. Usage, the meaning of
+each panel and its own test suite (a loopback fake MC, plus an opt-in
+`GCS_PANEL_REAL_MC=<ip>` acceptance run against the real nodes) are in
+`tools/gcs-test-panel/README.md`.
+
 ### Node-integration tests (TP-NI)
 
 ```bash

@@ -711,6 +711,27 @@ bool MissionManagerNode::evaluate_any_transitions()
   return false;
 }
 
+namespace
+{
+const char * phase_name(Phase p)
+{
+  switch (p) {
+    case Phase::PREFLIGHT: return "PREFLIGHT";
+    case Phase::ARMING: return "ARMING";
+    case Phase::TAKEOFF: return "TAKEOFF";
+    case Phase::INGRESS: return "INGRESS";
+    case Phase::MUSTER: return "MUSTER";
+    case Phase::ISR_SELECTION: return "ISR_SELECTION";
+    case Phase::VORONOI_PARTITION: return "VORONOI_PARTITION";
+    case Phase::SEARCH: return "SEARCH";
+    case Phase::RETURN: return "RETURN";
+    case Phase::LAND: return "LAND";
+    case Phase::FAULT: return "FAULT";
+    default: return "UNKNOWN";
+  }
+}
+}  // namespace
+
 MissionManagerNode::TransitionResult MissionManagerNode::try_transition(
   Phase target, bool from_gcs_command)
 {
@@ -718,6 +739,8 @@ MissionManagerNode::TransitionResult MissionManagerNode::try_transition(
     return TransitionResult::COMMITTED;
   }
 
+  last_reject_reason_ = std::string("no transition ") + phase_name(current_phase_) + " -> " +
+    phase_name(target);
   const auto it = transition_table_.find(current_phase_);
   if (it == transition_table_.end()) {
     return TransitionResult::NO_MATCH;
@@ -740,6 +763,12 @@ MissionManagerNode::TransitionResult MissionManagerNode::try_transition(
   gcs_phase_request_.reset();
 
   if (!guard_ok) {
+    // PREFLIGHT -> ARMING's guard is the pre-arm check set; name the first
+    // failing check so the GCS operator sees why (TEST-007 finding).
+    const auto report = current_phase_ == Phase::PREFLIGHT && target == Phase::ARMING ?
+      pre_arm_check_report() : PreArmCheckReport{};
+    last_reject_reason_ = !report.failed_checks.empty() ? report.failed_checks.front() :
+      std::string("guard failed ") + phase_name(current_phase_) + " -> " + phase_name(target);
     RCLCPP_WARN(
       get_logger(), "rejected phase transition request: guard failed for %u -> %u",
       static_cast<unsigned>(current_phase_), static_cast<unsigned>(target));
@@ -803,27 +832,6 @@ void MissionManagerNode::commit_transition(Phase target, uint8_t source)
   phase_entered_at_ = now();
   publish_phase(/*force=*/ true);
 }
-
-namespace
-{
-const char * phase_name(Phase p)
-{
-  switch (p) {
-    case Phase::PREFLIGHT: return "PREFLIGHT";
-    case Phase::ARMING: return "ARMING";
-    case Phase::TAKEOFF: return "TAKEOFF";
-    case Phase::INGRESS: return "INGRESS";
-    case Phase::MUSTER: return "MUSTER";
-    case Phase::ISR_SELECTION: return "ISR_SELECTION";
-    case Phase::VORONOI_PARTITION: return "VORONOI_PARTITION";
-    case Phase::SEARCH: return "SEARCH";
-    case Phase::RETURN: return "RETURN";
-    case Phase::LAND: return "LAND";
-    case Phase::FAULT: return "FAULT";
-    default: return "UNKNOWN";
-  }
-}
-}  // namespace
 
 void MissionManagerNode::publish_phase(bool force)
 {
@@ -990,8 +998,7 @@ void MissionManagerNode::publish_command_ack(uint32_t command, TransitionResult 
   ack.command = command;
   if (result == TransitionResult::REJECTED || result == TransitionResult::NO_MATCH) {
     ack.result = mc_msgs::msg::GcsCommandAck::RESULT_REJECTED;
-    ack.reason = result == TransitionResult::NO_MATCH ?
-      "no such transition from current phase" : "guard failed";
+    ack.reason = last_reject_reason_;
   } else {
     // PENDING_ACK just means the FCC-side mission-channel follow-through
     // (FCC-006) is still in flight — the GCS's own request was accepted.

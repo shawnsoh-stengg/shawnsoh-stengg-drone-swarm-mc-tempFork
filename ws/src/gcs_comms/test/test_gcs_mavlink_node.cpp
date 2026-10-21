@@ -35,10 +35,12 @@
 #include <mc_msgs/msg/detection.hpp>
 #include <mc_msgs/msg/detection_array.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
+#include <mc_msgs/msg/gcs_command_ack.hpp>
 #include <mc_msgs/msg/link_status.hpp>
 #include <mc_msgs/msg/localisation_mode.hpp>
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
+#include <mc_msgs/msg/status_text.hpp>
 #include <mc_msgs/msg/system_health.hpp>
 #include <mc_msgs/msg/vehicle_state.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -590,7 +592,9 @@ TEST_F(GcsMavlinkNodeTest, MissionUploadAssemblesAllItemKindsWithDroppedRetriedI
   EXPECT_TRUE(mock_gcs_ok) << "mock GCS did not see a well-formed handshake with a retried item";
 
   const auto & up = *mission_upload_msgs_.back();
-  EXPECT_EQ(up.upload_id, 1U);
+  // Channel B half of the upload_id space (upload_id.hpp), echoed in MISSION_ACK.
+  EXPECT_NE(up.upload_id, 0U);
+  EXPECT_EQ(up.upload_id >> gcs_comms::kUploadIdCounterBits, 0U);
 
   ASSERT_EQ(up.ingress_waypoints.size(), 2U);
   EXPECT_NEAR(up.ingress_waypoints[0].pose.position.x, 1.3, 1e-5);
@@ -893,4 +897,178 @@ TEST_F(GcsMavlinkNodeTest, DetectionFloodDoesNotDelayCommandDecode)
   flood_timer->cancel();
 
   EXPECT_EQ(command_msgs_.back()->command, 50001U);
+}
+
+// TEST-007 finding: a guard-rejected MC_CMD_PHASE_TRANSITION used to get
+// the same immediate MAV_RESULT_ACCEPTED as a successful one. It now gets
+// IN_PROGRESS on receipt, then mission_manager_node's real outcome
+// (/mc/gcs/command_ack) as a final DENIED COMMAND_ACK plus a STATUSTEXT
+// carrying the reason.
+TEST_F(GcsMavlinkNodeTest, PhaseTransitionRelaysOutcomeAck)
+{
+  auto pub_ack = node_->create_publisher<mc_msgs::msg::GcsCommandAck>(
+    "/mc/gcs/command_ack", rclcpp::QoS(10));
+  spin_until(node_, [] {return false;}, std::chrono::milliseconds(200));
+
+  peer_->send_command_long(1, 191, 50001, {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F});
+
+  auto recv_until = [this](uint32_t msgid, mavlink_message_t & out) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (std::chrono::steady_clock::now() < deadline) {
+        rclcpp::spin_some(node_);
+        if (peer_->recv_frame(0.05, out) && out.msgid == msgid) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+  mavlink_message_t frame;
+  ASSERT_TRUE(recv_until(MAVLINK_MSG_ID_COMMAND_ACK, frame));
+  mavlink_command_ack_t ack{};
+  mavlink_msg_command_ack_decode(&frame, &ack);
+  EXPECT_EQ(ack.command, 50001U);
+  EXPECT_EQ(ack.result, MAV_RESULT_IN_PROGRESS);
+
+  mc_msgs::msg::GcsCommandAck outcome;
+  outcome.command = 50001;
+  outcome.result = mc_msgs::msg::GcsCommandAck::RESULT_REJECTED;
+  outcome.reason = "GCS ARM authorisation not set";
+  pub_ack->publish(outcome);
+
+  ASSERT_TRUE(recv_until(MAVLINK_MSG_ID_COMMAND_ACK, frame));
+  mavlink_msg_command_ack_decode(&frame, &ack);
+  EXPECT_EQ(ack.command, 50001U);
+  EXPECT_EQ(ack.result, MAV_RESULT_DENIED);
+
+  ASSERT_TRUE(recv_until(MAVLINK_MSG_ID_STATUSTEXT, frame));
+  mavlink_statustext_t text{};
+  mavlink_msg_statustext_decode(&frame, &text);
+  EXPECT_EQ(text.severity, MAV_SEVERITY_WARNING);
+  EXPECT_EQ(std::string(text.text, strnlen(text.text, sizeof(text.text))),
+    "GCS ARM authorisation not set");
+}
+
+TEST_F(GcsMavlinkNodeTest, OtherCommandsStillAckAcceptedImmediately)
+{
+  peer_->send_command_long(1, 191, 50002, {1.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F});
+  mavlink_message_t frame;
+  bool got = false;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!got && std::chrono::steady_clock::now() < deadline) {
+    rclcpp::spin_some(node_);
+    got = peer_->recv_frame(0.05, frame) && frame.msgid == MAVLINK_MSG_ID_COMMAND_ACK;
+  }
+  ASSERT_TRUE(got);
+  mavlink_command_ack_t ack{};
+  mavlink_msg_command_ack_decode(&frame, &ack);
+  EXPECT_EQ(ack.command, 50002U);
+  EXPECT_EQ(ack.result, MAV_RESULT_ACCEPTED);
+}
+
+TEST_F(GcsMavlinkNodeTest, StatusTextIsRelayedAsStatustext)
+{
+  auto hb_timer = node_->create_wall_timer(
+    std::chrono::milliseconds(50), [this] {peer_->send_heartbeat();});
+  auto pub_text = node_->create_publisher<mc_msgs::msg::StatusText>(
+    "/mc/status_text", rclcpp::QoS(10));
+  spin_until(node_, [] {return false;}, std::chrono::milliseconds(200));
+
+  mc_msgs::msg::StatusText msg;
+  msg.severity = mc_msgs::msg::StatusText::SEVERITY_ERROR;
+  msg.text = "FCC link not alive";
+  pub_text->publish(msg);
+
+  mavlink_message_t frame;
+  bool got = false;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!got && std::chrono::steady_clock::now() < deadline) {
+    rclcpp::spin_some(node_);
+    got = peer_->recv_frame(0.05, frame) && frame.msgid == MAVLINK_MSG_ID_STATUSTEXT;
+  }
+  ASSERT_TRUE(got);
+  mavlink_statustext_t text{};
+  mavlink_msg_statustext_decode(&frame, &text);
+  EXPECT_EQ(text.severity, MAV_SEVERITY_ERROR);
+  EXPECT_EQ(std::string(text.text, strnlen(text.text, sizeof(text.text))), "FCC link not alive");
+}
+
+// Texts over STATUSTEXT's 50 chars (gnss_sim_node's anchor confirmation, long
+// pre-arm reasons) used to be cut at 50. They now go out as MAVLink v2
+// chunks sharing one nonzero id, which QGC and the TEST-007 panel reassemble.
+class GcsMavlinkNodeStatustextChunkTest : public GcsMavlinkNodeTest
+{
+protected:
+  std::vector<mavlink_statustext_t> relay(const std::string & text)
+  {
+    auto hb_timer = node_->create_wall_timer(
+      std::chrono::milliseconds(50), [this] {peer_->send_heartbeat();});
+    auto pub_text = node_->create_publisher<mc_msgs::msg::StatusText>(
+      "/mc/status_text", rclcpp::QoS(10));
+    spin_until(node_, [] {return false;}, std::chrono::milliseconds(200));
+
+    mc_msgs::msg::StatusText msg;
+    msg.severity = mc_msgs::msg::StatusText::SEVERITY_INFO;
+    msg.text = text;
+    pub_text->publish(msg);
+
+    std::vector<mavlink_statustext_t> chunks;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < deadline) {
+      rclcpp::spin_some(node_);
+      mavlink_message_t frame;
+      if (!peer_->recv_frame(0.05, frame) || frame.msgid != MAVLINK_MSG_ID_STATUSTEXT) {
+        continue;
+      }
+      mavlink_statustext_t chunk{};
+      mavlink_msg_statustext_decode(&frame, &chunk);
+      chunks.push_back(chunk);
+      if (strnlen(chunk.text, sizeof(chunk.text)) < sizeof(chunk.text)) {
+        break;  // a NUL marks the last chunk
+      }
+    }
+    return chunks;
+  }
+
+  static std::string join(const std::vector<mavlink_statustext_t> & chunks)
+  {
+    std::string out;
+    for (const auto & c : chunks) {
+      out.append(c.text, strnlen(c.text, sizeof(c.text)));
+    }
+    return out;
+  }
+};
+
+TEST_F(GcsMavlinkNodeStatustextChunkTest, LongTextIsSplitIntoChunksSharingOneId)
+{
+  const std::string text =
+    "gnss_sim_node: anchored false origin lat=1.4180151 lon=103.8629088 alt_msl=6.00";
+  ASSERT_GT(text.size(), 50U);
+  const auto chunks = relay(text);
+  ASSERT_EQ(chunks.size(), 2U);
+  EXPECT_NE(chunks[0].id, 0);
+  EXPECT_EQ(chunks[1].id, chunks[0].id);
+  EXPECT_EQ(chunks[0].chunk_seq, 0);
+  EXPECT_EQ(chunks[1].chunk_seq, 1);
+  EXPECT_EQ(chunks[0].severity, MAV_SEVERITY_INFO);
+  EXPECT_EQ(join(chunks), text);
+}
+
+TEST_F(GcsMavlinkNodeStatustextChunkTest, TextFillingItsLastChunkGetsAnEmptyTerminator)
+{
+  const std::string text(100, 'x');
+  const auto chunks = relay(text);
+  ASSERT_EQ(chunks.size(), 3U);
+  EXPECT_EQ(chunks[2].chunk_seq, 2);
+  EXPECT_EQ(strnlen(chunks[2].text, sizeof(chunks[2].text)), 0U);
+  EXPECT_EQ(join(chunks), text);
+}
+
+TEST_F(GcsMavlinkNodeStatustextChunkTest, ShortTextStaysOneFrameWithIdZero)
+{
+  const auto chunks = relay("FCC link not alive");
+  ASSERT_EQ(chunks.size(), 1U);
+  EXPECT_EQ(chunks[0].id, 0);
+  EXPECT_EQ(join(chunks), "FCC link not alive");
 }
