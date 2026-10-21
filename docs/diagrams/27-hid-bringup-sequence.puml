@@ -138,14 +138,18 @@ via MANET radio to drone;
 Connect to Pixhawk on UDP:14550;
 
 :Set PX4 parameters for HIF-001 serial:
-  UXRCE_DDS_CFG  = 102  (UART B)
-  UXRCE_DDS_BAUD = 921600
+  UXRCE_DDS_CFG   = 102  (UART B)
+  SER_TEL2_BAUD   = 921600
+  UXRCE_DDS_PTCFG = 2  (custom participant)
+  MAV_1_CONFIG    = 0  (TELEM2 free for DDS)
   Save and reboot Pixhawk;
 
 :Set PX4 parameters for HIF-002 Ethernet:
   Pixhawk Ethernet: 192.168.100.31/24  (its one address)
   UXRCE_DDS_AG_IP  = -1062706165  (192.168.100.11, signed int32)
-  UXRCE_DDS_PORT_CFG = 8888
+  UXRCE_DDS_PRT    = 8888
+  UXRCE_DDS_CFG    = 1000  (only on Ethernet fallback)
+  Channel A: keep MAV_2_* board defaults (14550)
   (Secondary transport — serial is primary);
 
 :Calibrate power monitor:

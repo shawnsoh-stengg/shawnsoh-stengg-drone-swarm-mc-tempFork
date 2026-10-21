@@ -142,7 +142,7 @@ Optical flow + rangefinder ── CAN1 ──► Pixhawk FCC (DroneCAN, IGS-002/
 | On-board routing | PCB trace on Holybro baseboard — no external cable required |
 | Jetson device node | `/dev/ttyTHS1` (Tegra High-Speed UART 1) |
 | Pixhawk port | UART B (TELEM2 equivalent) |
-| Signal lines used | TX, RX, RTS, CTS (hardware flow control) |
+| Signal lines used | TX, RX (RTS/CTS are routed on the board but unused, see §3.3) |
 | Signal voltage | 3.3 V CMOS (active high) |
 | Maximum cable length | N/A — on-board trace |
 
@@ -167,18 +167,19 @@ Both Jetson and Pixhawk UART pins are 3.3 V — no level shifting is required.
 | Data bits | 8 |
 | Parity | None |
 | Stop bits | 1 |
-| Flow control | RTS/CTS hardware |
+| Flow control | None. PX4's `uxrce_dds_client` clears `CRTSCTS` on TELEM2, so the FCC never drives CTS |
 | Protocol | Micro XRCE-DDS serial framing over UART |
 
 **PX4 firmware parameter required:**
 
 ```
 UXRCE_DDS_CFG = 102   (UART B / TELEM2)
-UXRCE_DDS_BAUD = 921600
+SER_TEL2_BAUD = 921600
 UXRCE_DDS_PTCFG = 2   (Custom participant — reboot required)
+MAV_1_CONFIG = 0      (no MAVLink instance may also claim TELEM2)
 ```
 
-Set via QGroundControl → Parameters → UXRCE_DDS_CFG and UXRCE_DDS_BAUD before first flight.
+Set via QGroundControl → Parameters before first flight. PX4 v1.17 has no `UXRCE_DDS_BAUD` parameter: the client takes its baud from the port's own `SER_TEL2_BAUD` (the `-b p:${BAUD_PARAM}` in `uxrce_dds_client`'s `module.yaml`). `MAV_1_CONFIG` is already `0` at the v1.17 default, but check it on any FCC previously set up for a MAVLink companion link on TELEM2. Full per-category list: `docs/FCC-PX4-PARAMETER-GUIDE.md`.
 
 `UXRCE_DDS_PTCFG = 2` is mandatory, not optional tuning. At the stock `0`, PX4 creates its Agent-side participant from an inline XML string that resets the Agent's Fast-DDS transports to their multicast defaults, and the MC's CycloneDDS (unicast-only on `lo`, `docker/ros2-core/cyclonedds.xml`) never discovers it: PX4 creates every `/fmu/*` topic, but `fcc_bridge_node` receives nothing (confirmed on the orin-nx + Pixhawk 6X bench pair, 2026-09-25). At `2`, PX4 asks the Agent for the `px4_participant` profile instead, which the fcc-bridge image ships in `docker/fcc-bridge/fastdds-agent.xml` (unicast on 127.0.0.1, matching the CycloneDDS config). The two must agree: with `PTCFG = 2` and no `px4_participant` profile loaded, the Agent can't create PX4's participant at all.
 
@@ -211,9 +212,10 @@ KERNEL=="ttyTHS1", MODE="0660", GROUP="dialout"
 
 ```bash
 MicroXRCEAgent serial --dev /dev/ttyTHS1 \
-                       --baudrate 921600 \
-                       --rts-cts
+                       --baudrate 921600
 ```
+
+No `--rts-cts`: PX4 doesn't use hardware flow control on TELEM2, and with `--rts-cts` the session kept dropping on real hardware (`docker/fcc-bridge/entrypoint.sh`).
 
 ### 3.4 Link Verification
 
@@ -284,10 +286,18 @@ network:
 **PX4 Ethernet configuration:**
 
 ```
-MAV_0_CONFIG = 1000   (Ethernet)
+# Channel A (GCS <-> FCC, UDP 14550): Pixhawk 6X board defaults, leave as-is
+MAV_2_CONFIG = 1000   (Ethernet)
+MAV_2_UDP_PRT = 14550
+MAV_2_REMOTE_PRT = 14550
+
+# uXRCE-DDS over Ethernet: only when FCC_TRANSPORT=ethernet (fallback)
+UXRCE_DDS_CFG = 1000   (Ethernet; replaces 102 — the client runs on one port at a time)
 UXRCE_DDS_AG_IP = -1062706165   (= MC_ETH_IP 192.168.100.11 as signed int32 big-endian)
-UXRCE_DDS_PORT_CFG = 8888
+UXRCE_DDS_PRT = 8888
 ```
+
+The 6X's `rc.board_defaults` already puts a MAVLink instance on Ethernet as `MAV_2`. `MAV_0` defaults to TELEM1, and pointing it at Ethernet too would start a second instance on 14550. Earlier revisions of this section listed `MAV_0_CONFIG = 1000` and a non-existent `UXRCE_DDS_PORT_CFG`, and omitted `UXRCE_DDS_CFG = 1000`. All three were corrected against the PX4 v1.17.0 source on 2026-10-20.
 
 `UXRCE_DDS_AG_IP` is `type: int32` in PX4 v1.17's `uxrce_dds_client` `module.yaml` ("192.168.1.2 is mapped to -1062731518"), so the agent (MC) address must be entered as a *signed* value — recompute it for a non-default `MC_ETH_IP`. (The previous value here, `3232238593`, was both for the retired `192.168.12.1` and unsigned — it doesn't fit an int32.)
 
@@ -329,7 +339,7 @@ FCC_TRANSPORT=serial    # serial (HIF-001, production default) or ethernet (HIF-
 The `FccBackend` factory reads `SIMULATION_MODE` to choose the implementation (FCC-001). `XrceDdsBackend` itself only logs `FCC_TRANSPORT`'s value — the DDS link it depends on is made real by a Micro XRCE-DDS Agent process, launched by `docker/fcc-bridge/entrypoint.sh` *before* `fcc_bridge_node` starts (FCC-008). The entrypoint reads `FCC_TRANSPORT` and runs the same two commands documented in §3.3/§4.2 above:
 
 ```
-serial   → MicroXRCEAgent serial --dev $FCC_SERIAL_DEVICE --baudrate $FCC_SERIAL_BAUD --rts-cts
+serial   → MicroXRCEAgent serial --dev $FCC_SERIAL_DEVICE --baudrate $FCC_SERIAL_BAUD
 ethernet → MicroXRCEAgent udp4 --port $FCC_ETH_PORT
 ```
 
@@ -1073,9 +1083,9 @@ Use this checklist for initial lab bring-up and after any hardware change. Each 
 ### 13.2 Software Configuration (one-time, per drone)
 
 - [ ] **HIF-001**, **HIF-002** Run `sudo scripts/01-install-os.sh` on the Jetson — installs the Netplan config (single `MC_ETH_IP`/24, default `192.168.100.11/24`, on eth0) the `/dev/ttyTHS1` udev rule, and the ttyTHS1 PIO device-tree overlay + extlinux `rxpio` boot entry (INFRA-009, §3.3). Reboot, then verify with `scripts/01b-smoke-test-os.sh` (TP-SM-001).
-- [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `UXRCE_DDS_BAUD = 921600`, `UXRCE_DDS_PTCFG = 2` via QGroundControl, then reboot the FCC (§3.3 — without `PTCFG = 2` no `/fmu/*` topic reaches `fcc_bridge_node`).
+- [ ] **HIF-001** Set PX4 parameters: `UXRCE_DDS_CFG = 102`, `SER_TEL2_BAUD = 921600`, `UXRCE_DDS_PTCFG = 2`, `MAV_1_CONFIG = 0` via QGroundControl, then reboot the FCC (§3.3 — without `PTCFG = 2` no `/fmu/*` topic reaches `fcc_bridge_node`).
 - [ ] **HIF-002** Set the Pixhawk's Ethernet address: edit `/fs/microsd/net.cfg` so `IPADDR` = this drone's `FCC_ETH_IP` (`BOOTPROTO=static`, `NETMASK=255.255.255.0`, §4.2), reboot the FCC, verify with `netman show` in the MAVLink console.
-- [ ] **HIF-002** Set PX4 agent IP: `UXRCE_DDS_AG_IP = -1062706165` (default `MC_ETH_IP` 192.168.100.11 as signed int32 — recompute for a non-default `MC_ETH_IP`, §4.2), `UXRCE_DDS_PORT_CFG = 8888`.
+- [ ] **HIF-002** Set PX4 agent IP: `UXRCE_DDS_AG_IP = -1062706165` (default `MC_ETH_IP` 192.168.100.11 as signed int32 — recompute for a non-default `MC_ETH_IP`, §4.2), `UXRCE_DDS_PRT = 8888`; `UXRCE_DDS_CFG = 1000` only while on the Ethernet fallback.
 - [ ] **HIF-003** Apply Jetson-IO device tree overlay for IMX219 on CSI port 0. Reboot.
 - [ ] **HIF-005** Calibrate power monitor: set `BAT1_V_DIV` and `BAT1_A_PER_V` in PX4 to baseboard values.
 - [ ] **HIF-007** Configure the gimbal camera with static IP `192.168.100.200/24` (on the camera itself). No Netplan changes on the Jetson are required — verify `ip -4 addr show eth0` still shows `192.168.100.11/24`.

@@ -70,11 +70,12 @@ For `FCC_TRANSPORT=serial`:
 
 ```
 param show UXRCE_DDS_CFG       # 102 (TELEM2)
-param show UXRCE_DDS_BAUD      # 921600
+param show SER_TEL2_BAUD       # 921600 (no UXRCE_DDS_BAUD in v1.17)
+param show MAV_1_CONFIG        # 0 — nothing else may claim TELEM2
 param show UXRCE_DDS_PTCFG     # 2 — mandatory, otherwise no /fmu/* topics reach the MC
 ```
 
-For `FCC_TRANSPORT=ethernet`, see `HID-MC-001.md` §4 (`UXRCE_DDS_AG_IP`
+For `FCC_TRANSPORT=ethernet`, see `HID-MC-001.md` §4 (`UXRCE_DDS_CFG` = 1000, `UXRCE_DDS_AG_IP`
 must encode the MC's **current** IP).
 
 ### 1.3 H-Flow (skip if mocking)
