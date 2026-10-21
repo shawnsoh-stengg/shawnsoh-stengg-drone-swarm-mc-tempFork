@@ -260,6 +260,20 @@ TEST_F(FccBridgeNodeTest, PublishesFccLinkLostFaultAfterLinkSilence)
   EXPECT_EQ(fault_msgs_.back()->failsafe_action, mc_msgs::msg::FaultEvent::ACTION_NONE);
 }
 
+// A slow first FCC message at startup is not a link loss: with no /fmu/out/*
+// traffic at all for well over link_timeout_s, no FCC_LINK_LOST may fire
+// (mission_manager_node latches any FCC_LINK_LOST as a terminal FAULT), and
+// vehicle_state must honestly report the link as down meanwhile.
+TEST_F(FccBridgeNodeTest, NoFccLinkLostFaultBeforeFirstFccMessage)
+{
+  spin_until(
+    {node_, harness_}, [] {return false;}, std::chrono::milliseconds(2500));
+
+  ASSERT_FALSE(vehicle_state_msgs_.empty());
+  EXPECT_FALSE(vehicle_state_msgs_.back()->fcc_link_ok);
+  EXPECT_TRUE(fault_msgs_.empty());
+}
+
 // IGS-002: fcc_bridge_node republishes whatever XrceDdsBackend's flow relay
 // reports onto /mc/sensors/optical_flow, once a real frame has arrived.
 TEST_F(FccBridgeNodeTest, RepublishesOpticalFlowOnceFrameArrives)

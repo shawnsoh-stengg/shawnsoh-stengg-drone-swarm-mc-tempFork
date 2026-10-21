@@ -138,10 +138,9 @@ protected:
   // poll loop: resending risks a second copy still sitting undrained in
   // recv_loop_'s queue right as a later handshake call grabs
   // socket_use_mtx_, which could be misread as a protocol reply and
-  // confuse the request-wait loop. Waits on xy_valid rather than is_link_alive():
-  // last_fcc_msg_time_ is seeded to construction time, so a generous
-  // is_link_alive(N) timeout reads "alive" immediately regardless of
-  // whether this datagram was actually processed. The trailing sleep gives
+  // confuse the request-wait loop. Waits on xy_valid, the field this
+  // datagram itself sets, so the wait proves this exact message was
+  // processed. The trailing sleep gives
   // recv_loop_ one more drain pass so its queue is confirmed empty before
   // the caller starts a mission-protocol call.
   void establish_peer()
@@ -345,6 +344,11 @@ TEST_F(MavlinkUdpBackendTest, IsLinkAliveFalseBeforeAnyMessageWithZeroTimeout)
 {
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
   EXPECT_FALSE(backend_->is_link_alive(0.0));
+}
+
+TEST_F(MavlinkUdpBackendTest, IsLinkAliveFalseBeforeAnyMessageEvenWithLongTimeout)
+{
+  EXPECT_FALSE(backend_->is_link_alive(5.0));
 }
 
 TEST_F(MavlinkUdpBackendTest, IsLinkAliveTrueAfterRecentMessage)
