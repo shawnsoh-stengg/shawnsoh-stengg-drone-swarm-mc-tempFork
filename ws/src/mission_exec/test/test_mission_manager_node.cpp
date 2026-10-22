@@ -1053,10 +1053,14 @@ TEST_F(MissionManagerNodeTest, AnyToFault_RelaysFaultCauseAsStatusText)
     spin_until(
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
       std::chrono::seconds(2)));
+  // A separate topic from the phase, so it can land after the phase does.
   EXPECT_TRUE(
-    any_status_text_contains(
-      status_texts_,
-      "FAULT: INDOOR_GNSS_SIM_LOST: waypoint deviation (8700.0 m) exceeded"));
+    spin_until(
+      {node_, harness_}, [this] {
+        return any_status_text_contains(
+          status_texts_, "FAULT: INDOOR_GNSS_SIM_LOST: waypoint deviation (8700.0 m) exceeded");
+      },
+      std::chrono::seconds(2)));
 }
 
 // --- FR-002: undefined transitions are rejected, phase unchanged ---

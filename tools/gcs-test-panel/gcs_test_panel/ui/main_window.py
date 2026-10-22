@@ -390,12 +390,15 @@ class MainWindow(QMainWindow):
             )
             expect, ok_text, fail_verdict = target, f"entered {defs.phase_name(target)}", (False if valid else None)
         elif cmd == defs.MC_CMD_ARM_AUTHORISE:
+            if r.params and r.params[0] == 0:
+                self.commands.set_effect(item, "authorisation cancelled (upload ID 0)", None)
+                return
             if start != 0:
                 self.commands.set_effect(item, f"recorded (no phase effect outside PREFLIGHT; now {start_name})", None)
                 return
             expect, ok_text, fail_verdict = 1, "pre-arm checks passed — MC entered ARMING and commanded FCC arm", None
             reject_text = ("authorisation recorded, still PREFLIGHT: at least one pre-arm check is failing "
-                           "(see the STATUSTEXT lines in the Monitor event log)")
+                           "(see the STATUSTEXT lines in the Event log tab)")
         elif cmd in (defs.MAV_CMD_COMPONENT_ARM_DISARM, defs.MAV_CMD_NAV_RETURN_TO_LAUNCH, defs.MAV_CMD_DO_SET_MODE):
             expect, ok_text, fail_verdict = 255, "MC forced FAULT and forwarded the command to the FCC", False
             reject_text = f"stayed in {start_name}: EMERGENCY command had no visible effect"
@@ -551,6 +554,8 @@ class MainWindow(QMainWindow):
                 "plan_activate", f"activate {name}: {result}" + (f" — {err}" if err else ""),
                 True if ack.result == 0 else None, client_request_id=request_id, result=result, error=err,
             )
+            if ack.result == 0:
+                self.commands.note_plan_activated()
         else:
             self.session.event(f"plan_{action}", f"{action} {name}: OK", True)
         self.on_library("list", "auto", None)
