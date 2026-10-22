@@ -291,6 +291,18 @@ TEST(PreArmChecksTest, VisualLocalisationCheckPassesWhenGnssDegradedButVoAlive)
   EXPECT_TRUE(check_visual_localisation_if_gnss_degraded(in).passed);
 }
 
+TEST(PreArmChecksTest, VisualLocalisationCheckPassesWhenGnssDegradedButIndoorGnssSimOk)
+{
+  // Indoors, fcc_bridge reports the HIL_GPS fix as gnss_ok == false by
+  // design, and there's no VO yet: a healthy gnss_sim_node fix must count.
+  auto in = good_inputs();
+  auto vs = std::make_shared<mc_msgs::msg::VehicleState>(*in.vehicle_state);
+  vs->gnss_ok = false;
+  in.vehicle_state = vs;
+  in.indoor_gnss_sim_ok = true;
+  EXPECT_TRUE(check_visual_localisation_if_gnss_degraded(in).passed);
+}
+
 // --- Aggregation: no short-circuit, all failures collected ---
 
 TEST(PreArmChecksTest, EvaluateCollectsAllFailuresWithoutShortCircuiting)

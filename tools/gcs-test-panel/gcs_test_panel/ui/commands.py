@@ -64,7 +64,11 @@ class CommandsTab(QWidget):
 
         self.upload_id = QSpinBox()
         self.upload_id.setRange(0, 2**31 - 1)
-        self.upload_id.setToolTip("Filled automatically from the last Channel B upload's MISSION_ACK")
+        self.upload_id.setToolTip(
+            "Filled automatically: from the last Channel B upload's MISSION_ACK, or a placeholder "
+            "after a Channel C activate (its upload_id isn't reported back). 0 CANCELS the "
+            "authorisation: mission_manager_node only checks param1 != 0."
+        )
         b = QPushButton("Send MC_CMD_ARM_AUTHORISE")
         b.clicked.connect(self._arm)
         g.addWidget(QLabel("Mission upload ID"), 1, 0)
@@ -174,8 +178,29 @@ class CommandsTab(QWidget):
         phase = self.phase_combo.currentData()
         self._send(f"MC_CMD_PHASE_TRANSITION → {defs.phase_name(phase)}", lambda ch: ch.phase_transition(phase))
 
+    def note_plan_activated(self) -> None:
+        """A Channel C activate is a new upload on the MC, but MC_MISSION_PLAN_ACK
+        doesn't carry the upload_id mission_orchestrator_node assigned it. The MC
+        only checks ARM_AUTHORISE's param1 != 0, so any non-zero value
+        authorises; keep a real Channel B upload_id if one is already there."""
+        if self.upload_id.value() == 0:
+            self.upload_id.setValue(1)
+
     def _arm(self) -> None:
         upload_id = self.upload_id.value()
+        if upload_id == 0:
+            answer = QMessageBox.question(
+                self, "Cancel arm authorisation?",
+                "Upload ID 0 doesn't authorise arming: mission_manager_node treats "
+                "param1 = 0 as \"not authorised\" and clears any authorisation already "
+                "given.\n\nUpload or activate a plan first (the ID fills in "
+                "automatically), or enter its upload ID.\n\nSend 0 anyway, to cancel "
+                "the authorisation?",
+                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+            )
+            if answer == QMessageBox.Yes:
+                self._send("MC_CMD_ARM_AUTHORISE upload 0 (cancel)", lambda ch: ch.arm_authorise(0))
+            return
         answer = QMessageBox.warning(
             self, "Authorise arming",
             "If every pre-arm check passes, mission_manager_node enters ARMING and "

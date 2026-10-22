@@ -33,6 +33,11 @@ struct PreArmCheckInputs
   double low_battery_margin{0.10};
   // Only consulted when vehicle_state->gnss_ok is false.
   bool visual_localisation_alive{false};
+  // Only consulted when vehicle_state->gnss_ok is false: gnss_sim_node is
+  // anchored, its status is fresh and its eph is within the limit. Separate
+  // from gnss_ok because fcc_bridge reports a HIL_GPS fix as "no fix" (that
+  // field means a real receiver -- gnss_sim_node's real-GPS lockout reads it).
+  bool indoor_gnss_sim_ok{false};
 };
 
 struct CheckResult

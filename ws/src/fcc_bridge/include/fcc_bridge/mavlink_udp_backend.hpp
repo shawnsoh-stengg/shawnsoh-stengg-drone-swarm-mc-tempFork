@@ -133,6 +133,10 @@ private:
   mutable std::mutex state_mtx_;
   VehicleState state_{};
   rclcpp::Time last_fcc_msg_time_;
+  // False until the FCC has actually sent something: "never heard from
+  // the FCC" must read as link-down, not as a grace-window "alive" that
+  // then times out into a spurious FCC_LINK_LOST at startup.
+  bool fcc_msg_received_{false};
 };
 
 }  // namespace fcc_bridge

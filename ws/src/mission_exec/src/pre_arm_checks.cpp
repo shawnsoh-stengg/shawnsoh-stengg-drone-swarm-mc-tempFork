@@ -99,8 +99,8 @@ CheckResult check_visual_localisation_if_gnss_degraded(const PreArmCheckInputs &
   if (!in.vehicle_state) {
     return {false, "no vehicle_state received yet (cannot verify GNSS quality)"};
   }
-  if (!in.vehicle_state->gnss_ok && !in.visual_localisation_alive) {
-    return {false, "GNSS degraded and visual localisation not alive"};
+  if (!in.vehicle_state->gnss_ok && !in.visual_localisation_alive && !in.indoor_gnss_sim_ok) {
+    return {false, "GNSS degraded, visual localisation and indoor GNSS sim not alive"};
   }
   return {true, ""};
 }

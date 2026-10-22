@@ -58,9 +58,11 @@ def test_full_session(qapp, tmp_path, ports, fake_mc, monkeypatch):
     assert pump(qapp, lambda: fake_mc.active == "bench_test.json")
     assert pump(qapp, lambda: "bench_test.json" in win.plans.active_label.text())
 
-    # Channel B: upload the same plan; the upload_id lands in the ARM_AUTHORISE box.
+    # Channel B: upload the same plan; the upload_id lands in the ARM_AUTHORISE box
+    # (already 1 here: the Channel C activate's placeholder, so wait on the upload).
     win.plans._push_b()
-    assert pump(qapp, lambda: win.commands.upload_id.value() == 1)
+    assert pump(qapp, lambda: any(e["kind"] == "mission_upload" for e in _events(win)))
+    assert win.commands.upload_id.value() == 1
     assert win.plans.progress.value() == win.plans.progress.maximum()
 
     win.commands._arm()
@@ -107,3 +109,43 @@ def test_full_session(qapp, tmp_path, ports, fake_mc, monkeypatch):
 
 def _events(win):
     return [json.loads(line) for line in (win.session.dir / "events.jsonl").read_text().splitlines()]
+
+
+def test_arm_authorise_upload_id_zero(qapp, tmp_path, ports, fake_mc, monkeypatch):
+    """Upload ID 0 cancels authorisation on the MC (param1 != 0 check), so a
+    Channel C activate must leave a non-zero ID, and sending 0 must ask first."""
+    for name in ("warning", "information", "critical"):
+        monkeypatch.setattr(QMessageBox, name, lambda *a, **k: QMessageBox.Yes)
+    b_recv, b_send, c_recv, c_send = ports
+    args = build_parser().parse_args([
+        "--mc-host", "127.0.0.1", "--bind", "127.0.0.1", "--log-dir", str(tmp_path),
+        "--b-recv-port", str(b_recv), "--b-send-port", str(b_send),
+        "--c-recv-port", str(c_recv), "--c-send-port", str(c_send),
+    ])
+    win = MainWindow(args)
+    win.connect_links()
+    assert pump(qapp, lambda: win.chb.link_up(), 5)
+    assert pump(qapp, lambda: win.telemetry.status is not None, 3)
+    assert win.commands.upload_id.value() == 0
+
+    # Channel C only: the activate ACK carries no upload_id, so a placeholder fills in.
+    win.plans._push_c("create")
+    assert pump(qapp, lambda: win.plans.table.rowCount() == 1)
+    win.plans.table.selectRow(0)
+    win.plans._lib("activate")
+    assert pump(qapp, lambda: win.commands.upload_id.value() == 1)
+
+    # 0 asks first; Cancel sends nothing.
+    win.commands.upload_id.setValue(0)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+    win.commands._arm()
+    pump(qapp, lambda: False, 0.5)
+    assert win.commands.table.rowCount() == 0
+
+    # Confirming sends it, labelled as a cancel.
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    win.commands._arm()
+    assert pump(qapp, lambda: win.commands.table.rowCount() == 1)
+    assert win.commands.table.item(0, 1).text() == "MC_CMD_ARM_AUTHORISE upload 0 (cancel)"
+    assert pump(qapp, lambda: win.commands.table.item(0, 6).text() == "authorisation cancelled (upload ID 0)", 2)
+    win.close()

@@ -56,6 +56,27 @@ double horizontal_distance_m(double lat1_deg, double lon1_deg, double lat2_deg, 
     std::cos(0.5 * (lat1_deg + lat2_deg) * kDegToRad);
   return kEarthRadiusM * std::hypot(dlat, dlon);
 }
+
+// FaultEvent.fault_id -> its constant name, for the FAULT cause report.
+std::string fault_name(uint16_t fault_id)
+{
+  using F = mc_msgs::msg::FaultEvent;
+  switch (fault_id) {
+    case F::FCC_LINK_LOST: return "FCC_LINK_LOST";
+    case F::GCS_LINK_LOST: return "GCS_LINK_LOST";
+    case F::MANAGER_DEAD: return "MANAGER_DEAD";
+    case F::LOW_BATTERY: return "LOW_BATTERY";
+    case F::PEER_LOST: return "PEER_LOST";
+    case F::GPU_OVERTEMP: return "GPU_OVERTEMP";
+    case F::DISK_FULL: return "DISK_FULL";
+    case F::CAMERA_FAIL: return "CAMERA_FAIL";
+    case F::GNSS_DEGRADED: return "GNSS_DEGRADED";
+    case F::VISUAL_ODOM_FAIL: return "VISUAL_ODOM_FAIL";
+    case F::VISION_MEM_HIGH: return "VISION_MEM_HIGH";
+    case F::INDOOR_GNSS_SIM_LOST: return "INDOOR_GNSS_SIM_LOST";
+    default: return "fault_id " + std::to_string(fault_id);
+  }
+}
 }  // namespace
 
 MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
@@ -76,6 +97,9 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
   low_battery_margin_ = declare_parameter("low_battery_margin", low_battery_margin_);
   local_pose_stale_timeout_s_ =
     declare_parameter("local_pose_stale_timeout_s", local_pose_stale_timeout_s_);
+  gnss_sim_status_stale_timeout_s_ =
+    declare_parameter("gnss_sim_status_stale_timeout_s", gnss_sim_status_stale_timeout_s_);
+  gnss_sim_max_eph_m_ = declare_parameter("gnss_sim_max_eph_m", gnss_sim_max_eph_m_);
   mission_upload_path_ = declare_parameter("mission_upload_path", mission_upload_path_);
   landed_max_vertical_speed_mps_ =
     declare_parameter("landed_max_vertical_speed_mps", landed_max_vertical_speed_mps_);
@@ -102,6 +126,7 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
   last_phase_publish_at_ = now();
   pending_ack_sent_at_ = now();
   last_local_pose_at_ = now();
+  last_gnss_sim_status_at_ = now();
 
   pub_mission_phase_ =
     create_publisher<mc_msgs::msg::MissionPhase>("/mc/mission_phase", rclcpp::QoS(10));
@@ -155,6 +180,15 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
     [this](geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
       last_local_pose_at_ = msg->header.stamp;
       local_pose_ever_received_ = true;
+    },
+    sub_opts);
+  // Freshness by arrival time: the status header.stamp is gnss_sim_node's
+  // own sample time, and this only needs "is it still publishing".
+  sub_gnss_sim_status_ = create_subscription<mc_msgs::msg::IndoorGnssSimStatus>(
+    "/mc/indoor/gnss_sim_status", rclcpp::QoS(10),
+    [this](mc_msgs::msg::IndoorGnssSimStatus::SharedPtr msg) {
+      gnss_sim_status_ = msg;
+      last_gnss_sim_status_at_ = now();
     },
     sub_opts);
 
@@ -238,6 +272,9 @@ PreArmCheckInputs MissionManagerNode::build_pre_arm_check_inputs() const
   in.low_battery_margin = low_battery_margin_;
   in.visual_localisation_alive = local_pose_ever_received_ &&
     (now() - last_local_pose_at_).seconds() <= local_pose_stale_timeout_s_;
+  in.indoor_gnss_sim_ok = gnss_sim_status_ && gnss_sim_status_->active &&
+    (now() - last_gnss_sim_status_at_).seconds() <= gnss_sim_status_stale_timeout_s_ &&
+    gnss_sim_status_->eph <= gnss_sim_max_eph_m_;
   return in;
 }
 
@@ -876,6 +913,9 @@ void MissionManagerNode::on_mission_channel_ack_failure()
       get_logger(), "mission-channel request failed after %d retries; escalating to FAULT",
       pending_ack_retries_ - 1);
     pending_ack_kind_ = AckKind::NONE;
+    if (current_phase_ != Phase::FAULT) {
+      announce_fault("FCC mission channel request failed");
+    }
     critical_fault_latched_ = true;
     evaluate_any_transitions();
     return;
@@ -980,12 +1020,30 @@ bool MissionManagerNode::is_critical_fault(const mc_msgs::msg::FaultEvent & faul
   return fault.severity <= kSeverityCritical;
 }
 
+void MissionManagerNode::announce_fault(const std::string & cause)
+{
+  // Says why the phase is about to become FAULT -- the transition itself
+  // and check_fault_ended()'s restart notice don't. gcs_mavlink_node
+  // chunks texts over 50 chars, so the fault's description goes out whole.
+  RCLCPP_ERROR(get_logger(), "entering FAULT: %s", cause.c_str());
+  mc_msgs::msg::StatusText msg;
+  msg.header.stamp = now();
+  msg.severity = mc_msgs::msg::StatusText::SEVERITY_CRITICAL;
+  msg.text = "FAULT: " + cause;
+  pub_status_text_->publish(msg);
+}
+
 void MissionManagerNode::on_fault(mc_msgs::msg::FaultEvent::SharedPtr msg)
 {
   if (current_phase_ == Phase::FAULT) {
     return;
   }
   if (is_critical_fault(*msg)) {
+    std::string cause = fault_name(msg->fault_id);
+    if (!msg->description.empty()) {
+      cause += ": " + msg->description;
+    }
+    announce_fault(cause);
     critical_fault_latched_ = true;
     evaluate_any_transitions();
   }
@@ -1022,6 +1080,7 @@ void MissionManagerNode::handle_gcs_command(const GcsCommandEnvelope & cmd)
     fwd.params = cmd.params;
     pub_send_command_->publish(fwd);
     if (current_phase_ != Phase::FAULT) {
+      announce_fault("GCS emergency command " + std::to_string(cmd.command));
       commit_transition(Phase::FAULT, mc_msgs::msg::MissionPhase::SOURCE_GCS_COMMAND);
     }
     return;

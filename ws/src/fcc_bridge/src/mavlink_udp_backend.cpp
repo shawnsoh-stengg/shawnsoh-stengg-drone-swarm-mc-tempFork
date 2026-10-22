@@ -171,6 +171,7 @@ void MavlinkUdpBackend::handle_global_position_int(const mavlink_message_t & msg
   state_.z_valid = true;
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 void MavlinkUdpBackend::handle_attitude(const mavlink_message_t & msg)
@@ -196,6 +197,7 @@ void MavlinkUdpBackend::handle_attitude(const mavlink_message_t & msg)
   state_.q[3] = static_cast<float>(cr * cp * sy - sr * sp * cy);  // z
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 void MavlinkUdpBackend::handle_battery_status(const mavlink_message_t & msg)
@@ -214,6 +216,7 @@ void MavlinkUdpBackend::handle_battery_status(const mavlink_message_t & msg)
   }
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 void MavlinkUdpBackend::handle_local_position_ned(const mavlink_message_t & msg)
@@ -231,6 +234,7 @@ void MavlinkUdpBackend::handle_local_position_ned(const mavlink_message_t & msg)
   state_.z_valid = true;
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 void MavlinkUdpBackend::handle_heartbeat(const mavlink_message_t & msg)
@@ -246,6 +250,7 @@ void MavlinkUdpBackend::handle_heartbeat(const mavlink_message_t & msg)
     kArmingStateArmed : kArmingStateDisarmed;
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 void MavlinkUdpBackend::handle_gps_raw_int(const mavlink_message_t & msg)
@@ -267,6 +272,7 @@ void MavlinkUdpBackend::handle_gps_raw_int(const mavlink_message_t & msg)
   state_.gnss_ok = is_gnss_ok(gps.fix_type, state_.hdop);
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 bool MavlinkUdpBackend::ensure_mission_client()
@@ -401,7 +407,7 @@ BaroAltitudeSample MavlinkUdpBackend::get_baro_altitude() const
 bool MavlinkUdpBackend::is_link_alive(double timeout_s) const
 {
   std::scoped_lock lock(state_mtx_);
-  return (node_->now() - last_fcc_msg_time_).seconds() <= timeout_s;
+  return fcc_msg_received_ && (node_->now() - last_fcc_msg_time_).seconds() <= timeout_s;
 }
 
 }  // namespace fcc_bridge

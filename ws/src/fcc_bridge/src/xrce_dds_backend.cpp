@@ -230,6 +230,7 @@ void XrceDdsBackend::touch_link_alive()
 {
   std::scoped_lock lock(state_mtx_);
   last_fcc_msg_time_ = node_->now();
+  fcc_msg_received_ = true;
 }
 
 void XrceDdsBackend::on_local_pos(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg)
@@ -246,6 +247,7 @@ void XrceDdsBackend::on_local_pos(const px4_msgs::msg::VehicleLocalPosition::Sha
   state_.z_valid = msg->z_valid;
   state_.stamp = node_->now();
   last_fcc_msg_time_ = state_.stamp;
+  fcc_msg_received_ = true;
 }
 
 void XrceDdsBackend::on_global_pos(const px4_msgs::msg::VehicleGlobalPosition::SharedPtr msg)
@@ -255,6 +257,7 @@ void XrceDdsBackend::on_global_pos(const px4_msgs::msg::VehicleGlobalPosition::S
   state_.lon = msg->lon;
   state_.alt_msl = msg->alt;
   last_fcc_msg_time_ = node_->now();
+  fcc_msg_received_ = true;
 }
 
 void XrceDdsBackend::on_vehicle_status(const px4_msgs::msg::VehicleStatus::SharedPtr msg)
@@ -268,6 +271,7 @@ void XrceDdsBackend::on_vehicle_status(const px4_msgs::msg::VehicleStatus::Share
   // read directly instead of approximated.
   state_.failure_flags = msg->failure_detector_status;
   last_fcc_msg_time_ = node_->now();
+  fcc_msg_received_ = true;
 
   // The FCC states its own MAV_SYS_ID here. Commands and mission items go to
   // DRONE_ID, so a mismatch means PX4 is silently ignoring all of them: say
@@ -292,6 +296,7 @@ void XrceDdsBackend::on_battery(const px4_msgs::msg::BatteryStatus::SharedPtr ms
   std::scoped_lock lock(state_mtx_);
   state_.battery_remaining = msg->remaining;
   last_fcc_msg_time_ = node_->now();
+  fcc_msg_received_ = true;
 }
 
 void XrceDdsBackend::on_attitude(const px4_msgs::msg::VehicleAttitude::SharedPtr msg)
@@ -299,6 +304,7 @@ void XrceDdsBackend::on_attitude(const px4_msgs::msg::VehicleAttitude::SharedPtr
   std::scoped_lock lock(state_mtx_);
   state_.q = {msg->q[0], msg->q[1], msg->q[2], msg->q[3]};
   last_fcc_msg_time_ = node_->now();
+  fcc_msg_received_ = true;
 }
 
 void XrceDdsBackend::on_odometry(const px4_msgs::msg::VehicleOdometry::SharedPtr /*msg*/)
@@ -334,6 +340,7 @@ void XrceDdsBackend::on_gps(const px4_msgs::msg::SensorGps::SharedPtr msg)
     state_.gnss_ok = is_gnss_ok(msg->fix_type, msg->hdop);
   }
   last_fcc_msg_time_ = node_->now();
+  fcc_msg_received_ = true;
 }
 
 bool XrceDdsBackend::upload_mission(const std::vector<MissionItem> & items)
@@ -450,7 +457,7 @@ BaroAltitudeSample XrceDdsBackend::get_baro_altitude() const
 bool XrceDdsBackend::is_link_alive(double timeout_s) const
 {
   std::scoped_lock lock(state_mtx_);
-  return (node_->now() - last_fcc_msg_time_).seconds() <= timeout_s;
+  return fcc_msg_received_ && (node_->now() - last_fcc_msg_time_).seconds() <= timeout_s;
 }
 
 }  // namespace fcc_bridge

@@ -103,10 +103,12 @@ private:
   rclcpp::Subscription<mc_msgs::msg::FccOffboardSetpoint>::SharedPtr sub_offboard_setpoint_;
 
   // Edge-triggers FCC_LINK_LOST — publish once per alive->dead transition,
-  // not on every tick the link stays down. Starts true: FccBackend also
-  // treats "no messages yet" as alive within its own grace window (see
-  // XrceDdsBackend ctor), so this matches the backend's own startup state.
-  bool link_was_alive_{true};
+  // not on every tick the link stays down. Starts false: FccBackend reads
+  // "no messages yet" as link-down, so a slow first FCC message at startup
+  // (DDS discovery of /fmu/out/* routinely takes > link_timeout_s on the
+  // Jetson) is never mistaken for a real link loss — which mission_manager_
+  // node would otherwise latch as a terminal FAULT on every boot.
+  bool link_was_alive_{false};
 };
 
 }  // namespace fcc_bridge

@@ -109,6 +109,7 @@ a conflict.
 | `/mc/search/coverage_path` | `nav_msgs/Path` | sub | `KeepLast(10)` | boustrophedon waypoints from `search_planner_node` | ✅ |
 | `/mc/fault` | `mc_msgs/FaultEvent` | sub | `KeepLast(10)` | drives `FAULT → RTL` escape | ✅ |
 | `/mc/local_pose` | `geometry_msgs/PoseWithCovarianceStamped` | sub | `KeepLast(10)` | liveness-only (staleness check), pose itself unused here | ✅ |
+| `/mc/indoor/gnss_sim_status` | `mc_msgs/IndoorGnssSimStatus` | sub | `KeepLast(10)` | pre-arm localisation source when GNSS is degraded: `active`, arrival within `gnss_sim_status_stale_timeout_s` (1 s), `eph` ≤ `gnss_sim_max_eph_m` (3 m) | ✅ |
 
 ### `health_monitor_node` (package `health_monitor`)
 

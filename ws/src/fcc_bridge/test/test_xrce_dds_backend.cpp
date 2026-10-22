@@ -314,6 +314,14 @@ TEST_F(XrceDdsBackendTest, IsLinkAliveFalseBeforeAnyMessageWithZeroTimeout)
   EXPECT_FALSE(backend_->is_link_alive(0.0));
 }
 
+// No FCC message yet must read as link-down regardless of timeout — a
+// construction-time "alive" grace window used to time out into a spurious
+// FCC_LINK_LOST whenever the first /fmu/out/* sample took > link_timeout_s.
+TEST_F(XrceDdsBackendTest, IsLinkAliveFalseBeforeAnyMessageEvenWithLongTimeout)
+{
+  EXPECT_FALSE(backend_->is_link_alive(5.0));
+}
+
 TEST_F(XrceDdsBackendTest, IsLinkAliveTrueAfterRecentMessage)
 {
   px4_msgs::msg::VehicleLocalPosition msg{};
