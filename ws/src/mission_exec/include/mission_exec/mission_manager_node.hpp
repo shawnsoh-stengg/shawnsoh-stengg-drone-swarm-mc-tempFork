@@ -18,6 +18,7 @@
 #include <mc_msgs/msg/fcc_mission_item.hpp>
 #include <mc_msgs/msg/gcs_command.hpp>
 #include <mc_msgs/msg/gcs_command_ack.hpp>
+#include <mc_msgs/msg/indoor_gnss_sim_status.hpp>
 #include <mc_msgs/msg/isr_role.hpp>
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/mission_upload.hpp>
@@ -239,6 +240,11 @@ private:
   double home_position_tolerance_m_{5.0};
   double low_battery_margin_{0.10};
   double local_pose_stale_timeout_s_{2.0};
+  // Indoor GNSS sim as a pre-arm localisation source. 3 m = PX4's
+  // EKF2_REQ_EPH default, the same bound gnss_sim_node's satellite count
+  // degrades against.
+  double gnss_sim_status_stale_timeout_s_{1.0};
+  double gnss_sim_max_eph_m_{3.0};
   double landed_max_vertical_speed_mps_{0.5};
   // EXEC-004: SDD §4.5 mission upload disk persistence path.
   std::string mission_upload_path_{"/var/drone-mc/mission_upload.yaml"};
@@ -266,6 +272,8 @@ private:
   nav_msgs::msg::Path::SharedPtr coverage_path_;
   rclcpp::Time last_local_pose_at_;
   bool local_pose_ever_received_{false};
+  mc_msgs::msg::IndoorGnssSimStatus::SharedPtr gnss_sim_status_;
+  rclcpp::Time last_gnss_sim_status_at_;
 
   // EXEC-002: last set of pre-arm failure reasons reported via
   // /mc/status_text — publish_pre_arm_status() only re-publishes when this
@@ -357,6 +365,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr sub_coverage_path_;
   rclcpp::Subscription<mc_msgs::msg::FaultEvent>::SharedPtr sub_fault_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_local_pose_;
+  rclcpp::Subscription<mc_msgs::msg::IndoorGnssSimStatus>::SharedPtr sub_gnss_sim_status_;
 };
 
 }  // namespace mission_exec

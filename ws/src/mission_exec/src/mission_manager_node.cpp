@@ -97,6 +97,9 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
   low_battery_margin_ = declare_parameter("low_battery_margin", low_battery_margin_);
   local_pose_stale_timeout_s_ =
     declare_parameter("local_pose_stale_timeout_s", local_pose_stale_timeout_s_);
+  gnss_sim_status_stale_timeout_s_ =
+    declare_parameter("gnss_sim_status_stale_timeout_s", gnss_sim_status_stale_timeout_s_);
+  gnss_sim_max_eph_m_ = declare_parameter("gnss_sim_max_eph_m", gnss_sim_max_eph_m_);
   mission_upload_path_ = declare_parameter("mission_upload_path", mission_upload_path_);
   landed_max_vertical_speed_mps_ =
     declare_parameter("landed_max_vertical_speed_mps", landed_max_vertical_speed_mps_);
@@ -123,6 +126,7 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
   last_phase_publish_at_ = now();
   pending_ack_sent_at_ = now();
   last_local_pose_at_ = now();
+  last_gnss_sim_status_at_ = now();
 
   pub_mission_phase_ =
     create_publisher<mc_msgs::msg::MissionPhase>("/mc/mission_phase", rclcpp::QoS(10));
@@ -176,6 +180,15 @@ MissionManagerNode::MissionManagerNode(const rclcpp::NodeOptions & options)
     [this](geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
       last_local_pose_at_ = msg->header.stamp;
       local_pose_ever_received_ = true;
+    },
+    sub_opts);
+  // Freshness by arrival time: the status header.stamp is gnss_sim_node's
+  // own sample time, and this only needs "is it still publishing".
+  sub_gnss_sim_status_ = create_subscription<mc_msgs::msg::IndoorGnssSimStatus>(
+    "/mc/indoor/gnss_sim_status", rclcpp::QoS(10),
+    [this](mc_msgs::msg::IndoorGnssSimStatus::SharedPtr msg) {
+      gnss_sim_status_ = msg;
+      last_gnss_sim_status_at_ = now();
     },
     sub_opts);
 
@@ -259,6 +272,9 @@ PreArmCheckInputs MissionManagerNode::build_pre_arm_check_inputs() const
   in.low_battery_margin = low_battery_margin_;
   in.visual_localisation_alive = local_pose_ever_received_ &&
     (now() - last_local_pose_at_).seconds() <= local_pose_stale_timeout_s_;
+  in.indoor_gnss_sim_ok = gnss_sim_status_ && gnss_sim_status_->active &&
+    (now() - last_gnss_sim_status_at_).seconds() <= gnss_sim_status_stale_timeout_s_ &&
+    gnss_sim_status_->eph <= gnss_sim_max_eph_m_;
   return in;
 }
 
