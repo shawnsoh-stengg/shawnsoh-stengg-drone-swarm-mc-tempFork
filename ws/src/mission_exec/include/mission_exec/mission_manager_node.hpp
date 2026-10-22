@@ -225,6 +225,8 @@ private:
 
   // --- fault handling (does not re-derive link health from vehicle_state) ---
   bool is_critical_fault(const mc_msgs::msg::FaultEvent & fault) const;
+  // Logs + relays (/mc/status_text) the cause, just before entering FAULT.
+  void announce_fault(const std::string & cause);
 
   // Params
   double control_loop_period_s_{0.1};

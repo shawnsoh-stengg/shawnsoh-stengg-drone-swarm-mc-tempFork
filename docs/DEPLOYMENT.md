@@ -337,6 +337,88 @@ No `.conf`/`.yaml` file under `/etc/drone-mc` or `/etc/netplan` is ever
 hand-edited directly — `GCS_IP` and the channel ports stay fleet-wide
 constants (same value on every drone) and are not per-drone inputs.
 
+### Porting to a new drone (cloned image, different radio subnet)
+
+For a new airframe that reuses this MC stack from an image cloned off an
+existing drone, with its own datalink radio on its own subnet and its own
+ground set (a separate fleet, with no air-to-air link to the existing
+one). Every item is per-drone. Nothing in this repo deploys the FCC-side
+items, and a missed one usually gives no error: a channel just carries
+nothing.
+
+**Source drone, before cloning**
+
+- [ ] Record what it actually runs: the org-repo commit, `docker images`
+  tags, and any hand edits under `/etc/drone-mc/` (diff against the repo
+  templates). Decide which fixes not yet ported to the org repo to bring
+  in first.
+- [ ] Capture the image (`l4t_backup_restore.sh` from the JetPack 6.2.2
+  `Linux_for_Tegra` tree, or a full NVMe image). The target needs the same
+  module (Orin NX 16GB), the same carrier board (the ttyTHS1 overlay is
+  board-specific, `HID-MC-001.md` §3.3) and storage at least as large.
+
+**Target Jetson**
+
+- [ ] Restore the image, working from the console. On first boot eth0 has
+  no address: netplan matches by MAC, and the cloned config still holds
+  the source unit's `MC_ETH_MAC`.
+- [ ] Give the clone its own identity: regenerate `/etc/machine-id` and the
+  SSH host keys, and set a unique hostname.
+- [ ] Edit `/etc/drone-mc/environment`: `DRONE_ID`, `MC_ETH_MAC`,
+  `MC_ETH_IP`, `FCC_ETH_IP`, `GCS_IP` (and `MC_ETH_GATEWAY`/`MC_ETH_DNS`
+  if used). `DRONE_ID` must equal the FCC's `MAV_SYS_ID`; it is also the
+  MAVLink sysid the GCS test panel's `--drone-id` must match.
+- [ ] Don't use `192.168.10.x` for the new subnet: `01`/`02` rewrite any
+  `192.168.10.N` value to `192.168.100.N` (subnet-move migration below).
+- [ ] If the new subnet isn't `192.168.x.x`, swarm-manifest uploads can't
+  carry its addresses: Channel B only transmits the last two octets
+  (`gcs_mavlink_node.cpp`'s `kSwarmPeerIpOctet1/2`, ICD §4.6), and the GCS
+  test panel rejects them (`tools/gcs-test-panel/gcs_test_panel/core/plan.py`). That
+  needs a code change first.
+- [ ] Give the new fleet its own `config/fleet.yaml` entries.
+- [ ] Re-run `01-install-os.sh` (from the console: SSH drops at
+  `netplan apply`) and `02-install-systemd-units.sh`, then `01b`/`02b`.
+
+**FCC (Pixhawk SD card and parameters)**
+
+- [ ] `/fs/microsd/net.cfg`: `IPADDR` = `FCC_ETH_IP`,
+  `NETMASK=255.255.255.0`. Reboot, check with `netman show`.
+- [ ] Create **`/fs/microsd/etc/extras.txt`** from
+  `docs/FCC-PX4-PARAMETER-GUIDE.md` §5, with every `-t` set to **this
+  drone's `MC_ETH_IP`**. A fresh Pixhawk has no such file, and without it
+  nothing listens on the MC↔FCC MAVLink ports:
+  - `:14557`: `HIL_GPS` is dropped. After anchoring `gnss_sim_node`, QGC
+    shows 0 satellites and no position.
+  - `:14556`: no flow/baro relay to the MC, so `gnss_sim_node` has no
+    vertical input.
+  - `:14555`: mission upload from the MC has no listener.
+
+  Reboot the FCC. `mavlink status` must list UDP 14555, 14556 and 14557.
+- [ ] Parameters per `docs/FCC-PX4-PARAMETER-GUIDE.md`: `MAV_SYS_ID` =
+  `DRONE_ID`, the uXRCE-DDS set, the indoor or outdoor profile
+  (`MAV_USEHILGPS`, `EKF2_GPS_CTRL 7`, `SENS_BAR_AUTOCAL 0` indoors), the
+  DroneCAN set, and `UXRCE_DDS_AG_IP` if on the Ethernet fallback.
+
+**Radio, camera, ground set**
+
+- [ ] Air and ground radios: static IPs, transparent L2 bridge, DHCP off,
+  MTU ≥ 1500 (`HID-MC-001.md` §6.5).
+- [ ] Gimbal camera: a static IP on the new subnet.
+- [ ] GCS laptop: static IP = `GCS_IP` on the drone-facing NIC. QGC comm
+  link to `<MC_ETH_IP>:14550`. GCS test panel:
+  `--mc-host <MC_ETH_IP> --drone-id <DRONE_ID>`.
+
+**Verify**
+
+- [ ] GCS test panel: Channel B link up, and Channel C `list` answers.
+- [ ] On the MC: `ros2 topic hz /mc/sensors/baro_altitude` shows about
+  10 Hz.
+- [ ] Indoor: start `drone-mc-indoor-nav` and anchor it.
+  `listener sensor_gps` in the FCC's MAVLink console shows the fix, and
+  QGC shows satellites and the drone's position.
+- [ ] Run `docs/FT-006-BENCH-RUNBOOK.md` and
+  `docs/MISSION-ORCHESTRATOR-BENCH-RUNBOOK.md`.
+
 ### Changing an ID or address on a deployed drone
 
 Each of these values is copied into places that nothing re-checks: the

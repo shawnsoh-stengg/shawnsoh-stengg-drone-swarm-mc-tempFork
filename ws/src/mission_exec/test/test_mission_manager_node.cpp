@@ -1038,6 +1038,27 @@ TEST_F(MissionManagerNodeTest, AnyToFault_FccLinkLostFaultCommandsRtl)
   // the /mc/fault content, never to /mc/fcc/vehicle_state.fcc_link_ok.
 }
 
+TEST_F(MissionManagerNodeTest, AnyToFault_RelaysFaultCauseAsStatusText)
+{
+  pub_vehicle_state_->publish(good_vehicle_state());
+  spin_until({node_, harness_}, [this] {return !heartbeats_.empty();}, std::chrono::seconds(1));
+
+  mc_msgs::msg::FaultEvent fault;
+  fault.fault_id = mc_msgs::msg::FaultEvent::INDOOR_GNSS_SIM_LOST;
+  fault.severity = 2;
+  fault.description = "waypoint deviation (8700.0 m) exceeded max_waypoint_deviation_m (50.0)";
+  pub_fault_->publish(fault);
+
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::FAULT);},
+      std::chrono::seconds(2)));
+  EXPECT_TRUE(
+    any_status_text_contains(
+      status_texts_,
+      "FAULT: INDOOR_GNSS_SIM_LOST: waypoint deviation (8700.0 m) exceeded"));
+}
+
 // --- FR-002: undefined transitions are rejected, phase unchanged ---
 
 TEST_F(MissionManagerNodeTest, InvalidTransitionRequestIsRejected)
