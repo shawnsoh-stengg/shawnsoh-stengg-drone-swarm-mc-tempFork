@@ -655,6 +655,38 @@ TEST_F(MissionOrchestratorNodeTest, ActivateInvalidJsonIsRejected)
   EXPECT_EQ(ack.result, 1);  // REJECTED_INVALID_JSON (ICD §12.2)
 }
 
+TEST_F(MissionOrchestratorNodeTest, ActivateCarriesSkipPhaseMask)
+{
+  std::filesystem::create_directories(plans_dir_);
+  {
+    std::ofstream f(plans_dir_ + "/solo.json", std::ios::binary);
+    f << R"({"name":"solo","skip_phase_mask":112})";
+  }
+  peer_->send_activate(11, "solo.json");
+  MockOrchestratorPeer::AckFields ack;
+  ASSERT_TRUE(spin_until_ack(ack));
+  EXPECT_EQ(ack.result, 0);  // ACCEPTED
+  ASSERT_TRUE(
+    spin_until(
+      node_, [this] {return !mission_upload_msgs_.empty();}, std::chrono::seconds(1)));
+  EXPECT_EQ(
+    mission_upload_msgs_.back()->skip_phase_mask,
+    mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES);
+}
+
+TEST_F(MissionOrchestratorNodeTest, ActivateUnflyableSkipPhaseMaskIsRejected)
+{
+  std::filesystem::create_directories(plans_dir_);
+  {
+    std::ofstream f(plans_dir_ + "/muster_only.json", std::ios::binary);
+    f << R"({"name":"muster_only","skip_phase_mask":16})";
+  }
+  peer_->send_activate(12, "muster_only.json");
+  MockOrchestratorPeer::AckFields ack;
+  ASSERT_TRUE(spin_until_ack(ack));
+  EXPECT_EQ(ack.result, 1);  // REJECTED_INVALID_JSON (ICD §12.2)
+}
+
 TEST_F(MissionOrchestratorNodeTest, ActivateOutsidePreflightIsRejected)
 {
   const std::string content = R"({"name":"recon_alpha"})";

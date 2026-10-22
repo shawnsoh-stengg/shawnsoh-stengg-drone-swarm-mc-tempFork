@@ -617,6 +617,97 @@ TEST_F(GcsMavlinkNodeTest, MissionUploadAssemblesAllItemKindsWithDroppedRetriedI
   EXPECT_EQ(up.swarm_manifest[0].ip_address, "192.168.100.13");
 }
 
+// MC_MISSION_CONFIG (50205): param1 = MissionUpload.skip_phase_mask. Serves
+// `items` to the node's MISSION_REQUEST_INTs and returns the final
+// MISSION_ACK type, or -1 if the handshake broke off.
+namespace
+{
+int serve_mission_items(MockGcsPeer & peer, const std::vector<mavlink_mission_item_int_t> & items)
+{
+  for (uint16_t served = 0; served < items.size(); ) {
+    mavlink_message_t msg;
+    if (!peer.recv_frame(3.0, msg)) {
+      return -1;
+    }
+    if (msg.msgid == MAVLINK_MSG_ID_MISSION_ACK) {
+      mavlink_mission_ack_t ack{};
+      mavlink_msg_mission_ack_decode(&msg, &ack);
+      return ack.type;  // rejected mid-upload
+    }
+    if (msg.msgid != MAVLINK_MSG_ID_MISSION_REQUEST_INT) {
+      continue;
+    }
+    mavlink_mission_request_int_t req{};
+    mavlink_msg_mission_request_int_decode(&msg, &req);
+    if (req.seq == served) {
+      peer.send_mission_item_int(items[served++]);
+    }
+  }
+  mavlink_message_t msg;
+  while (peer.recv_frame(3.0, msg)) {
+    if (msg.msgid == MAVLINK_MSG_ID_MISSION_ACK) {
+      mavlink_mission_ack_t ack{};
+      mavlink_msg_mission_ack_decode(&msg, &ack);
+      return ack.type;
+    }
+  }
+  return -1;
+}
+
+mavlink_mission_item_int_t mission_item(uint16_t seq, uint16_t command, float param1)
+{
+  mavlink_mission_item_int_t item{};
+  item.seq = seq;
+  item.frame = MAV_FRAME_GLOBAL;
+  item.command = command;
+  item.param1 = param1;
+  item.x = 13000000;
+  item.y = 1038000000;
+  item.z = 30.0F;
+  return item;
+}
+}  // namespace
+
+TEST_F(GcsMavlinkNodeTest, MissionUploadCarriesSkipPhaseMaskFromMissionConfigItem)
+{
+  const std::vector<mavlink_mission_item_int_t> items = {
+    mission_item(0, 50200 /*ingress waypoint*/, 0.0F),
+    mission_item(
+      1, 50205 /*MC_MISSION_CONFIG*/,
+      static_cast<float>(
+        mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES | mc_msgs::msg::MissionUpload::SKIP_SEARCH)),
+  };
+  std::atomic<int> ack_type{-1};
+  std::thread mock_gcs([&] {ack_type = serve_mission_items(*peer_, items);});
+  peer_->send_mission_count(static_cast<uint16_t>(items.size()));
+
+  ASSERT_TRUE(
+    spin_until(
+      node_, [this] {return !mission_upload_msgs_.empty();}, std::chrono::seconds(5)));
+  mock_gcs.join();
+  EXPECT_EQ(ack_type, MAV_MISSION_ACCEPTED);
+  EXPECT_EQ(
+    mission_upload_msgs_.back()->skip_phase_mask,
+    mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES | mc_msgs::msg::MissionUpload::SKIP_SEARCH);
+}
+
+TEST_F(GcsMavlinkNodeTest, MissionUploadRejectsUnflyableSkipPhaseMask)
+{
+  // MUSTER alone (bit 4) -- not a flyable stage set.
+  const std::vector<mavlink_mission_item_int_t> items = {
+    mission_item(0, 50200 /*ingress waypoint*/, 0.0F),
+    mission_item(1, 50205 /*MC_MISSION_CONFIG*/, 16.0F),
+  };
+  std::atomic<int> ack_type{-1};
+  std::thread mock_gcs([&] {ack_type = serve_mission_items(*peer_, items);});
+  peer_->send_mission_count(static_cast<uint16_t>(items.size()));
+
+  spin_until(node_, [&] {return ack_type != -1;}, std::chrono::seconds(5));
+  mock_gcs.join();
+  EXPECT_EQ(ack_type, MAV_MISSION_INVALID_PARAM1);
+  EXPECT_TRUE(mission_upload_msgs_.empty());
+}
+
 // No mock GCS response at all — the 2 s mission_upload_timeout_s_ override
 // (SetUp()) must fire MISSION_ACK(MAV_MISSION_ERROR) and return to IDLE
 // rather than blocking the state machine forever (SDD §11.2 "on timeout").

@@ -130,6 +130,7 @@ item semantics distinguished by the `command` field of each `MISSION_ITEM_INT` (
 | Formation offset | 50202 | param1 = drone_id, N/E offset (mm-scaled int32 ×1000), D offset (native float) | |
 | Search-area vertex | 50203 | param1 = vertex_index, param2 = total_vertices, lat/lon | |
 | Swarm peer entry | 50204 | drone_id, IP octets 3–4 (reconstructed as `192.168.<oct3>.<oct4>`) | |
+| Mission config | 50205 | param1 = `skip_phase_mask` (0 / 112 / 240) | optional; absent = full mission. Any other value → `MISSION_ACK(MAV_MISSION_INVALID_PARAM1)`, upload dropped |
 
 Implemented (GCS-002, 2026-07-26) via `handle_mission_count()` / `handle_mission_item_int()`. Known gaps: `arm_authorised` is always `false` at upload time — set later via `MC_CMD_ARM_AUTHORISE` — and `low_battery_threshold`/`offboard_phase_mask` aren't overridable at upload (default to 0.20 / 0).
 
@@ -199,8 +200,16 @@ ingress_waypoints: [{lat, lon, alt_m, speed_mps}],
 formation_offsets: [{drone_id, north_m, east_m, down_m}],
 search_polygon:    [{lat, lon}],
 swarm_manifest:    [{drone_id, ip}],
-arm_authorised, low_battery_threshold, offboard_phase_mask
+arm_authorised, low_battery_threshold, offboard_phase_mask,
+skip_phase_mask   (optional, default 0; 112 = solo, 240 = transit only)
 ```
+
+`skip_phase_mask` picks which stages the mission flies (ICD §9.2): `0` =
+the full swarm mission, `112` = solo (INGRESS → SEARCH over the whole
+`search_polygon` → RETURN), `240` = transit only (INGRESS → RETURN). Any
+other value makes `activate` fail with `REJECTED_INVALID_JSON`. A solo or
+transit plan may leave `formation_offsets`/`swarm_manifest` empty, and a
+transit plan `search_polygon` too.
 
 ### Activate flow
 

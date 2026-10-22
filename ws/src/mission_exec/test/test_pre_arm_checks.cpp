@@ -264,6 +264,68 @@ TEST(PreArmChecksTest, MissionUploadCompleteFailsWhenSwarmManifestEmpty)
   EXPECT_FALSE(check_mission_upload_complete(in).passed);
 }
 
+// skip_phase_mask: only the fields the unskipped phases use are required.
+
+TEST(PreArmChecksTest, MissionUploadCompletePassesTransitOnlyWithIngressWaypointsAlone)
+{
+  auto in = good_inputs();
+  auto up = std::make_shared<mc_msgs::msg::MissionUpload>();
+  up->ingress_waypoints = {geometry_msgs::msg::PoseStamped()};
+  up->skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES |
+    mc_msgs::msg::MissionUpload::SKIP_SEARCH;
+  in.mission_upload = up;
+  EXPECT_TRUE(check_mission_upload_complete(in).passed);
+}
+
+TEST(PreArmChecksTest, MissionUploadCompleteSoloNeedsSearchPolygonButNotSwarmFields)
+{
+  auto in = good_inputs();
+  auto up = std::make_shared<mc_msgs::msg::MissionUpload>();
+  up->ingress_waypoints = {geometry_msgs::msg::PoseStamped()};
+  up->skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES;
+  in.mission_upload = up;
+  EXPECT_FALSE(check_mission_upload_complete(in).passed);
+  up->search_polygon = {geographic_msgs::msg::GeoPoint(), geographic_msgs::msg::GeoPoint()};
+  EXPECT_TRUE(check_mission_upload_complete(in).passed);
+}
+
+TEST(PreArmChecksTest, MissionUploadCompleteRejectsUnflyableSkipPhaseMask)
+{
+  auto in = good_inputs();
+  auto up = std::make_shared<mc_msgs::msg::MissionUpload>(*in.mission_upload);
+  // MUSTER alone: ISR_SELECTION would then wait on a muster that never ran.
+  up->skip_phase_mask = 1U << mc_msgs::msg::MissionPhase::MUSTER;
+  in.mission_upload = up;
+  const auto result = check_mission_upload_complete(in);
+  EXPECT_FALSE(result.passed);
+  EXPECT_NE(result.reason.find("skip_phase_mask"), std::string::npos);
+}
+
+TEST(PreArmChecksTest, IsValidSkipPhaseMaskAcceptsOnlyTheThreeStageSets)
+{
+  using U = mc_msgs::msg::MissionUpload;
+  EXPECT_TRUE(is_valid_skip_phase_mask(0));
+  EXPECT_TRUE(is_valid_skip_phase_mask(U::SKIP_SWARM_PHASES));
+  EXPECT_TRUE(is_valid_skip_phase_mask(U::SKIP_SWARM_PHASES | U::SKIP_SEARCH));
+  EXPECT_FALSE(is_valid_skip_phase_mask(U::SKIP_SEARCH));  // swarm phases, then nothing to search
+  EXPECT_FALSE(is_valid_skip_phase_mask(1U << mc_msgs::msg::MissionPhase::INGRESS));
+}
+
+TEST(PreArmChecksTest, SwarmPeersPreflightIgnoresPeersForSoloMission)
+{
+  auto in = good_inputs();
+  auto up = std::make_shared<mc_msgs::msg::MissionUpload>(*in.mission_upload);
+  up->skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES;
+  in.mission_upload = up;
+  auto peers = std::make_shared<mc_msgs::msg::SwarmPeerArray>();
+  mc_msgs::msg::SwarmPeer peer;
+  peer.peer_status = mc_msgs::msg::SwarmPeer::STATUS_ALIVE;
+  peer.mission_phase = mc_msgs::msg::MissionPhase::SEARCH;
+  peers->peers = {peer};
+  in.peer_states = peers;
+  EXPECT_TRUE(check_swarm_peers_preflight(in).passed);
+}
+
 // --- 7. Visual localisation alive if GNSS degraded ---
 
 TEST(PreArmChecksTest, VisualLocalisationCheckPassesWhenGnssOk)

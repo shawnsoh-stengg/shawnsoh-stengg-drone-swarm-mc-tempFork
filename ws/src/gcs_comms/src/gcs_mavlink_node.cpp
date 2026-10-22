@@ -45,6 +45,7 @@ constexpr uint16_t kCmdMusterPoint = 50201;
 constexpr uint16_t kCmdFormationOffset = 50202;
 constexpr uint16_t kCmdSearchAreaVertex = 50203;
 constexpr uint16_t kCmdSwarmPeerEntry = 50204;
+constexpr uint16_t kCmdMissionConfig = 50205;
 
 // Beyond SDD §11.2's pseudocode (a single 5 s abort timeout): re-requests
 // the outstanding item at this cadence rather than waiting the full 5 s on
@@ -531,6 +532,16 @@ void GcsMavlinkNode::handle_mission_item_int(const mavlink_message_t & msg)
     case kCmdSwarmPeerEntry:
       decode_swarm_peer_entry_item(item);
       break;
+    case kCmdMissionConfig:
+      if (!decode_mission_config_item(item)) {
+        RCLCPP_WARN(
+          get_logger(), "mission upload %u: skip_phase_mask %.0f is not a flyable stage set",
+          mission_upload_msg_.upload_id, static_cast<double>(item.param1));
+        send_mission_ack(MAV_MISSION_INVALID_PARAM1);
+        mission_state_ = MissionUploadState::IDLE;
+        return;
+      }
+      break;
     default:
       RCLCPP_WARN(
         get_logger(), "mission upload %u: unrecognised item command %u at seq %u — skipped",
@@ -669,6 +680,22 @@ void GcsMavlinkNode::decode_swarm_peer_entry_item(const mavlink_mission_item_int
     std::to_string(kSwarmPeerIpOctet2) + "." + std::to_string(octet3) + "." +
     std::to_string(octet4);
   mission_upload_msg_.swarm_manifest.push_back(peer);
+}
+
+bool GcsMavlinkNode::decode_mission_config_item(const mavlink_mission_item_int_t & item)
+{
+  // param1 = skip_phase_mask. Same flyable set mission_exec's
+  // is_valid_skip_phase_mask() accepts -- checked here too so a bad plan is
+  // NACKed at upload, not only refused at pre-arm.
+  using U = mc_msgs::msg::MissionUpload;
+  const long mask = std::lround(item.param1);
+  if (mask != 0 && mask != U::SKIP_SWARM_PHASES &&
+    mask != (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH))
+  {
+    return false;
+  }
+  mission_upload_msg_.skip_phase_mask = static_cast<uint16_t>(mask);
+  return true;
 }
 
 // --- GCS-003: telemetry multiplexer (SDD §11.3, ICD §4.6) ---

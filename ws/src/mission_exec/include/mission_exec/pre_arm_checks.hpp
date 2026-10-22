@@ -46,6 +46,14 @@ struct CheckResult
   std::string reason;  // empty iff passed
 };
 
+// MissionUpload.skip_phase_mask: only the three stage sets the message
+// documents are flyable (full, solo, transit) -- any other combination,
+// e.g. skipping MUSTER alone, would leave a phase waiting on swarm state
+// that never arrives.
+bool is_valid_skip_phase_mask(uint16_t mask);
+// The upload skips every phase in `bits`. Null upload => skips nothing.
+bool skips_phases(const mc_msgs::msg::MissionUpload * upload, uint16_t bits);
+
 // One function per SDD §4.2 bullet. Each guards against its own missing
 // inputs (rather than assuming an earlier check already rejected a null
 // vehicle_state/mission_upload) so every check is safe to call standalone.
@@ -53,7 +61,12 @@ CheckResult check_fcc_link_alive(const PreArmCheckInputs & in);
 CheckResult check_fcc_disarmed(const PreArmCheckInputs & in);
 CheckResult check_gcs_arm_authorised(const PreArmCheckInputs & in);
 CheckResult check_battery_margin(const PreArmCheckInputs & in);
+// Passes vacuously for a solo/transit upload (SKIP_SWARM_PHASES): peers in
+// other phases don't affect a drone that never musters with them.
 CheckResult check_swarm_peers_preflight(const PreArmCheckInputs & in);
+// Also rejects an invalid skip_phase_mask, and only requires the fields the
+// upload's unskipped phases use: formation_offsets/swarm_manifest for the
+// swarm phases, search_polygon for SEARCH.
 CheckResult check_mission_upload_complete(const PreArmCheckInputs & in);
 CheckResult check_visual_localisation_if_gnss_degraded(const PreArmCheckInputs & in);
 

@@ -52,6 +52,12 @@ namespace mission_exec
 // EXEC-006: LAND recycles to PREFLIGHT once the FCC is landed and disarmed,
 // ready for the next mission. FAULT stays terminal: a faulted drone needs
 // inspection and a restart (SRS FR-006/FR-007).
+//
+// MissionUpload.skip_phase_mask lets a plan leave stages out. INGRESS has
+// one row per flyable stage set, each guard keyed off the flown upload's
+// mask: -> MUSTER (full swarm), -> SEARCH (solo, whole search_polygon),
+// -> RETURN (transit only). The skipped phases are never entered, so
+// swarm_coordinator_node's MUSTER-triggered election never starts either.
 enum class Phase : uint8_t
 {
   PREFLIGHT = 0,
@@ -108,7 +114,14 @@ private:
   bool guard_preflight_to_arming() const;
   bool guard_arming_to_takeoff() const;
   bool guard_takeoff_to_ingress() const;
+  // Shared by every INGRESS row: the vehicle has reached the last ingress
+  // waypoint (the muster point, for a swarm mission).
+  bool ingress_route_complete() const;
+  // flown_mission_upload_ skips every phase in `bits` (skip_phase_mask).
+  bool flown_skips(uint16_t bits) const;
   bool guard_ingress_to_muster() const;
+  bool guard_ingress_to_search() const;
+  bool guard_ingress_to_return() const;
   bool guard_muster_to_isr_selection() const;
   bool guard_isr_selection_to_voronoi_partition() const;
   bool guard_voronoi_partition_to_search() const;
@@ -132,6 +145,10 @@ private:
   void action_begin_ingress_route_upload();
   void action_disable_formation_ctrl();
   void action_disable_detection();
+  // Entry into RETURN from the phase table (INGRESS or SEARCH done). Sends
+  // RTL so the vehicle actually flies home -- the Any -> RETURN overlay
+  // already does, via action_cancel_active_mission().
+  void action_begin_return();
   void action_begin_coverage_path_upload();
   void action_send_land();
   void action_log_mission_complete();
@@ -194,8 +211,9 @@ private:
   void send_ingress_route_upload();
   void send_coverage_path_upload();
   // An uploaded mission doesn't fly itself: PX4 stays in whatever mode it
-  // was in (AUTO_LOITER after TAKEOFF) until MAV_CMD_MISSION_START switches
-  // it to AUTO_MISSION. Sent once each upload acks; check_mission_start()
+  // was in (AUTO_LOITER after TAKEOFF; still AUTO_MISSION, loitering at
+  // the end of the ingress route, before SEARCH) until MAV_CMD_MISSION_START
+  // starts it. Sent once each upload (ingress route or coverage path) acks; check_mission_start()
   // resends it a bounded number of times until vehicle_state reports
   // AUTO_MISSION, then stops for good, so a later GCS/pilot mode change
   // (FR-003 override authority) is never fought. A backend that doesn't
@@ -316,8 +334,9 @@ private:
 
   // send_mission_start()/check_mission_start() bookkeeping. pending_ is
   // true from the upload ack until AUTO_MISSION is observed, attempts run
-  // out, or the phase changes.
+  // out, or the phase changes away from mission_start_phase_.
   bool mission_start_pending_{false};
+  Phase mission_start_phase_{Phase::INGRESS};
   int mission_start_attempts_{0};
   rclcpp::Time mission_start_sent_at_;
 

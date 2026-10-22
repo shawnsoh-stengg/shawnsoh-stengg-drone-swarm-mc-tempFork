@@ -45,3 +45,23 @@ def test_items_match_gcs_mavlink_node_decoding():
     peer = items[-1]
     assert peer.command == defs.CMD_SWARM_PEER_ENTRY
     assert (peer.x, peer.y, peer.z) == (1, 100, 11.0)  # 192.168.<y>.<z>
+
+
+def test_skip_phase_mask_only_accepts_flyable_stage_sets():
+    p = plan.example_plan()
+    for mask in defs.SKIP_PHASE_MASKS:
+        p["skip_phase_mask"] = mask
+        plan.validate(p)
+    p["skip_phase_mask"] = 0x10  # MUSTER alone
+    with pytest.raises(plan.PlanError, match="skip_phase_mask"):
+        plan.validate(p)
+
+
+def test_skip_phase_mask_sent_as_trailing_mission_config_item():
+    p = plan.example_plan()
+    assert all(i.command != defs.CMD_MISSION_CONFIG for i in plan.to_mission_items(p))
+
+    p["skip_phase_mask"] = defs.SKIP_SWARM_PHASES | defs.SKIP_SEARCH
+    cfg = plan.to_mission_items(p)[-1]
+    assert cfg.command == defs.CMD_MISSION_CONFIG
+    assert cfg.param1 == 0xF0

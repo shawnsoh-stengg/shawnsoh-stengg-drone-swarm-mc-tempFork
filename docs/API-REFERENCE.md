@@ -190,7 +190,7 @@ All custom messages live in `ws/src/mc_msgs/msg/`. Field-level detail below is a
 | `GcsCommand` | `command` (MAV_CMD), `params[7]`, `target_system`, `target_component`, `confirmation` | Decoded GCS MAVLink command |
 | `GcsCommandAck` | `command`, `result` (`RESULT_ACCEPTED`/`RESULT_REJECTED`), `reason` | Outcome-level ack, distinct from `gcs_mavlink_node`'s immediate `COMMAND_ACK` |
 | `LinkStatus` | `gcs_link_ok`, `last_heartbeat_us`, `link_quality`, `rx/tx_packet_count`, `rx_drop_count` | GCS↔MC link health |
-| `MissionUpload` | `upload_id`, `ingress_waypoints[]`, `formation_offsets[]`, `search_polygon[]`, `swarm_manifest[]`, `arm_authorised`, `low_battery_threshold`, `offboard_phase_mask` | Full mission data from GCS or the orchestrator |
+| `MissionUpload` | `upload_id`, `ingress_waypoints[]`, `formation_offsets[]`, `search_polygon[]`, `swarm_manifest[]`, `arm_authorised`, `low_battery_threshold`, `offboard_phase_mask`, `skip_phase_mask` | Full mission data from GCS or the orchestrator. `skip_phase_mask` (EXEC-008): 0 = full swarm mission, `SKIP_SWARM_PHASES` = solo, `SKIP_SWARM_PHASES\|SKIP_SEARCH` = transit only |
 | `FormationOffset` | `drone_id`, `n/e/d` (NED offset, m) | Element of `MissionUpload.formation_offsets` |
 | `MissionPhase` | `phase` (0–9, or 255=`FAULT`), `phase_name`, `phase_entered_us`, `source` (`GCS_COMMAND`/`AUTONOMOUS`/`FAILSAFE`) | Current mission state machine phase |
 | `StatusText` | `severity` (MAV_SEVERITY), `text` | Human-readable status for GCS; not yet relayed as a real MAVLink `STATUSTEXT` |

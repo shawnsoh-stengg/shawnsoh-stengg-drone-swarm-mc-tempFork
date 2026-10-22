@@ -17,6 +17,18 @@ namespace
 constexpr uint8_t kArmingStateDisarmed = 1;
 }  // namespace
 
+bool is_valid_skip_phase_mask(uint16_t mask)
+{
+  using U = mc_msgs::msg::MissionUpload;
+  return mask == 0 || mask == U::SKIP_SWARM_PHASES ||
+         mask == (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH);
+}
+
+bool skips_phases(const mc_msgs::msg::MissionUpload * upload, uint16_t bits)
+{
+  return upload && (upload->skip_phase_mask & bits) == bits;
+}
+
 CheckResult check_fcc_link_alive(const PreArmCheckInputs & in)
 {
   if (!in.vehicle_state) {
@@ -64,6 +76,9 @@ CheckResult check_battery_margin(const PreArmCheckInputs & in)
 
 CheckResult check_swarm_peers_preflight(const PreArmCheckInputs & in)
 {
+  if (skips_phases(in.mission_upload.get(), mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES)) {
+    return {true, ""};
+  }
   if (!in.peer_states) {
     return {true, ""};
   }
@@ -84,10 +99,15 @@ CheckResult check_mission_upload_complete(const PreArmCheckInputs & in)
   if (!in.mission_upload) {
     return {false, "no mission upload received"};
   }
-  if (in.mission_upload->ingress_waypoints.empty() ||
-    in.mission_upload->formation_offsets.empty() ||
-    in.mission_upload->search_polygon.empty() ||
-    in.mission_upload->swarm_manifest.empty())
+  const auto & up = *in.mission_upload;
+  if (!is_valid_skip_phase_mask(up.skip_phase_mask)) {
+    return {false, "mission upload skip_phase_mask is not a flyable stage set"};
+  }
+  const bool swarm = !skips_phases(&up, mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES);
+  const bool search = !skips_phases(&up, mc_msgs::msg::MissionUpload::SKIP_SEARCH);
+  if (up.ingress_waypoints.empty() ||
+    (swarm && (up.formation_offsets.empty() || up.swarm_manifest.empty())) ||
+    (search && up.search_polygon.empty()))
   {
     return {false, "mission upload incomplete (waypoints/offsets/polygon/manifest)"};
   }

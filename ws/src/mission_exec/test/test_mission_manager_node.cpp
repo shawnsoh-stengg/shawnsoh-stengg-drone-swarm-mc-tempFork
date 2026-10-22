@@ -254,6 +254,50 @@ protected:
         [](const mc_msgs::msg::FccCommand::SharedPtr & c) {return c->cmd == kMavCmdMissionStart;}));
   }
 
+  // far_muster_mission_upload() with skip_phase_mask set, and the fields the
+  // skipped phases would use left empty -- pre-arm must not require them.
+  mc_msgs::msg::MissionUpload staged_mission_upload(uint16_t skip_phase_mask) const
+  {
+    auto up = far_muster_mission_upload();
+    up.skip_phase_mask = skip_phase_mask;
+    if (skip_phase_mask & mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES) {
+      up.formation_offsets.clear();
+      up.swarm_manifest.clear();
+    }
+    if (skip_phase_mask & mc_msgs::msg::MissionUpload::SKIP_SEARCH) {
+      up.search_polygon.clear();
+    }
+    return up;
+  }
+
+  // Armed at 10 m AGL, ~1.1 m from far_muster_mission_upload()'s last
+  // ingress waypoint; x/y (local NED) away from home.
+  mc_msgs::msg::VehicleState at_ingress_end_vehicle_state() const
+  {
+    auto vs = good_vehicle_state();
+    vs.arming_state = kArmingStateArmed;
+    vs.z = -10.0F;
+    vs.lat = 1.30201;
+    vs.lon = 103.801;
+    vs.x = 250.0F;
+    vs.y = 120.0F;
+    return vs;
+  }
+
+  bool phase_ever_reached(uint8_t phase) const
+  {
+    return std::any_of(
+      phases_.begin(), phases_.end(),
+      [phase](const mc_msgs::msg::MissionPhase::SharedPtr & p) {return p->phase == phase;});
+  }
+
+  bool any_command_sent(uint32_t cmd) const
+  {
+    return std::any_of(
+      send_commands_.begin(), send_commands_.end(),
+      [cmd](const mc_msgs::msg::FccCommand::SharedPtr & c) {return c->cmd == cmd;});
+  }
+
   mc_msgs::msg::MissionUpload full_mission_upload(bool arm_authorised) const
   {
     mc_msgs::msg::MissionUpload up;
@@ -935,9 +979,10 @@ TEST_F(MissionManagerNodeTest, VoronoiPartitionToSearch_GuardTrueUploadsCoverage
 
   nav_msgs::msg::Path path;
   geometry_msgs::msg::PoseStamped p1;
-  p1.pose.position.x = 103.8;  // lon
-  p1.pose.position.y = 1.3;    // lat
-  p1.pose.position.z = 50.0;   // alt_msl
+  // Away from the vehicle: reaching the last coverage waypoint ends SEARCH.
+  p1.pose.position.x = 103.81;  // lon
+  p1.pose.position.y = 1.31;    // lat
+  p1.pose.position.z = 50.0;    // alt_msl
   path.poses = {p1};
   pub_coverage_path_->publish(path);
 
@@ -1013,6 +1058,127 @@ TEST_F(MissionManagerNodeTest, SearchToReturn_GuardTrueOnFccMissionComplete)
     spin_until(
       {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
       std::chrono::seconds(2)));
+}
+
+// --- skip_phase_mask: missions that leave stages out ---
+
+TEST_F(MissionManagerNodeTest, TransitOnly_IngressGoesStraightToReturnCommandsRtlThenLands)
+{
+  advance_to_ingress(
+    staged_mission_upload(
+      mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES | mc_msgs::msg::MissionUpload::SKIP_SEARCH));
+  ASSERT_FALSE(any_command_sent(kMavCmdNavReturnToLaunch));
+
+  auto vs = at_ingress_end_vehicle_state();
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+      std::chrono::seconds(2)));
+  EXPECT_TRUE(any_command_sent(kMavCmdNavReturnToLaunch));
+  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::MUSTER));
+  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::SEARCH));
+
+  vs.x = 0.0F;
+  vs.y = 0.0F;  // home
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::LAND);},
+      std::chrono::seconds(2)));
+  land_and_disarm_to_preflight();
+}
+
+TEST_F(MissionManagerNodeTest, Solo_IngressWaitsForCoveragePathThenSearchesAndReturns)
+{
+  advance_to_ingress(staged_mission_upload(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES));
+  auto vs = at_ingress_end_vehicle_state();
+  pub_vehicle_state_->publish(vs);
+  // Route done, but nothing to search yet.
+  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 10;}, std::chrono::seconds(1));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
+
+  const size_t uploads_before = fcc_mission_uploads_.size();
+  nav_msgs::msg::Path path;
+  geometry_msgs::msg::PoseStamped p1;
+  p1.pose.position.x = 103.805;  // lon
+  p1.pose.position.y = 1.305;    // lat
+  p1.pose.position.z = 50.0;
+  path.poses = {p1};
+  pub_coverage_path_->publish(path);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_},
+      [this, uploads_before] {return fcc_mission_uploads_.size() > uploads_before;},
+      std::chrono::seconds(2)));
+
+  const size_t commands_before_ack = send_commands_.size();
+  mc_msgs::msg::FccMissionAck ack;
+  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
+  ack.success = true;
+  pub_mission_ack_->publish(ack);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
+      std::chrono::seconds(2)));
+  // The coverage path is started from its first item, like the ingress
+  // route. (INGRESS's own resends, param1 = -1, may still interleave.)
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this, commands_before_ack] {
+        return std::any_of(
+          send_commands_.begin() + static_cast<std::ptrdiff_t>(commands_before_ack),
+          send_commands_.end(), [](const mc_msgs::msg::FccCommand::SharedPtr & c) {
+            return c->cmd == kMavCmdMissionStart && c->params[0] == 0.F;
+          });
+      },
+      std::chrono::seconds(2)));
+
+  vs.nav_state = kNavStateAutoMission;  // PX4 stays here when a mission ends
+  vs.lat = 1.30501;
+  vs.lon = 103.805;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+      std::chrono::seconds(2)));
+  EXPECT_TRUE(any_command_sent(kMavCmdNavReturnToLaunch));
+  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::MUSTER));
+  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::ISR_SELECTION));
+  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION));
+}
+
+TEST_F(MissionManagerNodeTest, Solo_GcsRequestToEnterMusterIsRejected)
+{
+  advance_to_ingress(staged_mission_upload(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES));
+  pub_vehicle_state_->publish(at_ingress_end_vehicle_state());
+  wait_for_ticks();
+  // advance_to_ingress()'s own INGRESS request already left an ACCEPTED ack.
+  const size_t acks_before = command_acks_.size();
+  send_gcs_command(
+    50001 /*MC_CMD_PHASE_TRANSITION*/,
+    {static_cast<float>(mc_msgs::msg::MissionPhase::MUSTER), 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this, acks_before] {return command_acks_.size() > acks_before;},
+      std::chrono::seconds(2)));
+  EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_REJECTED);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
+}
+
+TEST_F(MissionManagerNodeTest, UnflyableSkipPhaseMaskBlocksArming)
+{
+  auto up = full_mission_upload(/*arm_authorised=*/ true);
+  up.skip_phase_mask = 1U << mc_msgs::msg::MissionPhase::MUSTER;
+  pub_mission_upload_->publish(up);
+  pub_vehicle_state_->publish(good_vehicle_state());
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_},
+      [this] {return any_status_text_contains(status_texts_, "skip_phase_mask");},
+      std::chrono::seconds(2)));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
 }
 
 // --- RETURN -> LAND ---

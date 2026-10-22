@@ -57,6 +57,24 @@ double horizontal_distance_m(double lat1_deg, double lon1_deg, double lat2_deg, 
   return kEarthRadiusM * std::hypot(dlat, dlon);
 }
 
+const char * phase_name(Phase p)
+{
+  switch (p) {
+    case Phase::PREFLIGHT: return "PREFLIGHT";
+    case Phase::ARMING: return "ARMING";
+    case Phase::TAKEOFF: return "TAKEOFF";
+    case Phase::INGRESS: return "INGRESS";
+    case Phase::MUSTER: return "MUSTER";
+    case Phase::ISR_SELECTION: return "ISR_SELECTION";
+    case Phase::VORONOI_PARTITION: return "VORONOI_PARTITION";
+    case Phase::SEARCH: return "SEARCH";
+    case Phase::RETURN: return "RETURN";
+    case Phase::LAND: return "LAND";
+    case Phase::FAULT: return "FAULT";
+    default: return "UNKNOWN";
+  }
+}
+
 // FaultEvent.fault_id -> its constant name, for the FAULT cause report.
 std::string fault_name(uint16_t fault_id)
 {
@@ -218,9 +236,14 @@ void MissionManagerNode::build_transition_table()
     {Phase::INGRESS, [this] {return guard_takeoff_to_ingress();},
       [this] {action_begin_ingress_route_upload();}},
   };
+  // One row per skip_phase_mask stage set -- at most one guard is ever true.
   transition_table_[Phase::INGRESS] = {
     {Phase::MUSTER, [this] {return guard_ingress_to_muster();},
       [this] {action_disable_formation_ctrl();}},
+    {Phase::SEARCH, [this] {return guard_ingress_to_search();},
+      [this] {action_begin_coverage_path_upload();}},
+    {Phase::RETURN, [this] {return guard_ingress_to_return();},
+      [this] {action_begin_return();}},
   };
   transition_table_[Phase::MUSTER] = {
     {Phase::ISR_SELECTION, [this] {return guard_muster_to_isr_selection();},
@@ -236,7 +259,7 @@ void MissionManagerNode::build_transition_table()
   };
   transition_table_[Phase::SEARCH] = {
     {Phase::RETURN, [this] {return guard_search_to_return();},
-      [this] {action_disable_detection();}},
+      [this] {action_disable_detection(); action_begin_return();}},
   };
   transition_table_[Phase::RETURN] = {
     {Phase::LAND, [this] {return guard_return_to_land();}, [this] {action_send_land();}},
@@ -331,7 +354,35 @@ bool MissionManagerNode::guard_takeoff_to_ingress() const
   return std::abs(altitude_agl - takeoff_altitude_m_) <= takeoff_altitude_tolerance_m_;
 }
 
+bool MissionManagerNode::flown_skips(uint16_t bits) const
+{
+  return skips_phases(flown_mission_upload_.get(), bits);
+}
+
 bool MissionManagerNode::guard_ingress_to_muster() const
+{
+  return ingress_route_complete() &&
+         !flown_skips(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES);
+}
+
+bool MissionManagerNode::guard_ingress_to_search() const
+{
+  // Solo: search_planner_node plans the whole search_polygon (no Voronoi
+  // cell), so the coverage path is the only input to wait for.
+  return ingress_route_complete() &&
+         flown_skips(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES) &&
+         !flown_skips(mc_msgs::msg::MissionUpload::SKIP_SEARCH) &&
+         coverage_path_ && !coverage_path_->poses.empty();
+}
+
+bool MissionManagerNode::guard_ingress_to_return() const
+{
+  return ingress_route_complete() &&
+         flown_skips(
+    mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES | mc_msgs::msg::MissionUpload::SKIP_SEARCH);
+}
+
+bool MissionManagerNode::ingress_route_complete() const
 {
   if (!vehicle_state_ || !flown_mission_upload_ ||
     flown_mission_upload_->ingress_waypoints.empty())
@@ -387,7 +438,24 @@ bool MissionManagerNode::guard_search_to_return() const
   // return()), which applies from every phase including SEARCH — this
   // guard covers only the phase-specific "FCC mission complete" half of
   // SDD §4.1's "FCC mission complete OR GCS END_MISSION" row.
-  return vehicle_state_ && vehicle_state_->nav_state == kNavStateAutoLoiter;
+  if (!vehicle_state_) {
+    return false;
+  }
+  if (vehicle_state_->nav_state == kNavStateAutoLoiter) {
+    return true;
+  }
+  // PX4 v1.17 stays in AUTO_MISSION when a mission ends ("Mission
+  // finished, loitering" -- Commander only drops to LOITER after a
+  // takeoff), so the AUTO_LOITER check alone never fires after a real
+  // search. Reaching the last coverage waypoint does, the same way
+  // ingress_route_complete() ends INGRESS. Coverage poses are x=lon, y=lat
+  // (send_coverage_path_upload()).
+  if (!coverage_path_ || coverage_path_->poses.empty()) {
+    return false;
+  }
+  const auto & last_wp = coverage_path_->poses.back().pose.position;
+  return horizontal_distance_m(vehicle_state_->lat, vehicle_state_->lon, last_wp.y, last_wp.x) <=
+         waypoint_acceptance_radius_m_;
 }
 
 bool MissionManagerNode::guard_return_to_land() const
@@ -552,12 +620,13 @@ void MissionManagerNode::check_mission_start()
   if (!mission_start_pending_) {
     return;
   }
-  if (current_phase_ != Phase::INGRESS) {
+  if (current_phase_ != mission_start_phase_) {
     mission_start_pending_ = false;
     return;
   }
+  const char * phase = phase_name(mission_start_phase_);
   if (vehicle_state_ && vehicle_state_->nav_state == kNavStateAutoMission) {
-    RCLCPP_INFO(get_logger(), "INGRESS: FCC in MISSION mode, flying ingress route");
+    RCLCPP_INFO(get_logger(), "%s: FCC in MISSION mode, flying uploaded route", phase);
     mission_start_pending_ = false;
     return;
   }
@@ -569,18 +638,18 @@ void MissionManagerNode::check_mission_start()
     // start the mission or abort. Just make sure the operator knows.
     mission_start_pending_ = false;
     RCLCPP_ERROR(
-      get_logger(), "INGRESS: FCC not in MISSION mode after %d MISSION_START attempts",
+      get_logger(), "%s: FCC not in MISSION mode after %d MISSION_START attempts", phase,
       mission_start_attempts_);
     mc_msgs::msg::StatusText msg;
     msg.header.stamp = now();
     msg.severity = mc_msgs::msg::StatusText::SEVERITY_CRITICAL;
     // ICD §4.7: the MAVLink STATUSTEXT relay truncates to 50 chars.
-    msg.text = "INGRESS: FCC rejected MISSION_START, holding";
+    msg.text = std::string(phase) + ": FCC rejected MISSION_START, holding";
     pub_status_text_->publish(msg);
     return;
   }
   RCLCPP_WARN(
-    get_logger(), "INGRESS: FCC not in MISSION mode yet, resending MISSION_START (%d/%d)",
+    get_logger(), "%s: FCC not in MISSION mode yet, resending MISSION_START (%d/%d)", phase,
     mission_start_attempts_ + 1, kMissionStartMaxAttempts);
   send_mission_start();
 }
@@ -593,6 +662,12 @@ void MissionManagerNode::action_disable_formation_ctrl()
 void MissionManagerNode::action_disable_detection()
 {
   RCLCPP_INFO(get_logger(), "phase entry: disabling detection pipeline");
+}
+
+void MissionManagerNode::action_begin_return()
+{
+  RCLCPP_INFO(get_logger(), "phase entry: route complete, commanding RTL");
+  send_rtl_command();
 }
 
 void MissionManagerNode::send_coverage_path_upload()
@@ -748,26 +823,6 @@ bool MissionManagerNode::evaluate_any_transitions()
   return false;
 }
 
-namespace
-{
-const char * phase_name(Phase p)
-{
-  switch (p) {
-    case Phase::PREFLIGHT: return "PREFLIGHT";
-    case Phase::ARMING: return "ARMING";
-    case Phase::TAKEOFF: return "TAKEOFF";
-    case Phase::INGRESS: return "INGRESS";
-    case Phase::MUSTER: return "MUSTER";
-    case Phase::ISR_SELECTION: return "ISR_SELECTION";
-    case Phase::VORONOI_PARTITION: return "VORONOI_PARTITION";
-    case Phase::SEARCH: return "SEARCH";
-    case Phase::RETURN: return "RETURN";
-    case Phase::LAND: return "LAND";
-    case Phase::FAULT: return "FAULT";
-    default: return "UNKNOWN";
-  }
-}
-}  // namespace
 
 MissionManagerNode::TransitionResult MissionManagerNode::try_transition(
   Phase target, bool from_gcs_command)
@@ -895,14 +950,14 @@ void MissionManagerNode::on_mission_channel_ack_success()
 {
   const Phase target = pending_target_phase_;
   const uint8_t source = pending_source_;
-  const AckKind kind = pending_ack_kind_;
   pending_ack_kind_ = AckKind::NONE;
   commit_transition(target, source);
-  if (kind == AckKind::INGRESS_ROUTE_UPLOAD) {
-    mission_start_attempts_ = 0;
-    mission_start_pending_ = true;
-    send_mission_start();
-  }
+  // Both uploads (ingress route -> INGRESS, coverage path -> SEARCH) need
+  // starting; the coverage path otherwise sat unflown in FCC dataman.
+  mission_start_phase_ = target;
+  mission_start_attempts_ = 0;
+  mission_start_pending_ = true;
+  send_mission_start();
 }
 
 void MissionManagerNode::on_mission_channel_ack_failure()

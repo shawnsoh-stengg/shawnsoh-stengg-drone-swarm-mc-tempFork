@@ -878,6 +878,15 @@ bool MissionOrchestratorNode::parse_plan_json(
     out_msg.arm_authorised = j.value("arm_authorised", false);
     out_msg.low_battery_threshold = j.value("low_battery_threshold", 0.20F);
     out_msg.offboard_phase_mask = j.value("offboard_phase_mask", static_cast<uint16_t>(0));
+    // Rejected here (activate -> INVALID_JSON) rather than left to fail
+    // pre-arm -- same flyable set as mission_exec's is_valid_skip_phase_mask().
+    using U = mc_msgs::msg::MissionUpload;
+    out_msg.skip_phase_mask = j.value("skip_phase_mask", static_cast<uint16_t>(0));
+    if (out_msg.skip_phase_mask != 0 && out_msg.skip_phase_mask != U::SKIP_SWARM_PHASES &&
+      out_msg.skip_phase_mask != (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH))
+    {
+      return false;
+    }
   } catch (const nlohmann::json::exception &) {
     return false;
   }

@@ -73,7 +73,12 @@ ISR_SELECTION --> VORONOI_PARTITION : ISR role agreed\n[FR-034]
 
 VORONOI_PARTITION --> SEARCH : Voronoi cell accepted\ncoverage path ready [FR-040]
 
-SEARCH --> RETURN : Coverage path complete\nOR GCS: end-mission [FR-046]
+SEARCH --> RETURN : Last coverage waypoint reached\nOR GCS: end-mission [FR-046]\n→ RTL
+
+' ── Partial missions: MissionUpload.skip_phase_mask (EXEC-008) ──
+
+INGRESS -[#1F6FB2,dashed]-> SEARCH : Solo plan (skip swarm phases)\nlast ingress waypoint reached\n+ coverage path (whole polygon)
+INGRESS -[#1F6FB2,dashed]-> RETURN : Transit plan (skip swarm\nphases + SEARCH): last ingress\nwaypoint reached → RTL
 
 RETURN --> LAND : Home waypoint reached
 
@@ -139,6 +144,9 @@ note as N_IMPL_STATUS #FFE0E0
   MUSTER → ISR_SELECTION guard, and autonomous progression stalls
   there until swarm_coord (SC-*) and search_planner_node (part of
   ME-001/EXEC-*) are actually built out.
+  A **transit** plan (skip_phase_mask, EXEC-008)
+  never enters MUSTER, so it completes autonomously
+  today: INGRESS → RETURN → LAND.
 end note
 
 note bottom of VORONOI_PARTITION
@@ -166,6 +174,7 @@ legend right
   | Black | Nominal transition |
   | <#CC3333> Red | Failsafe / fault |
   | <#E07000> Orange | GCS-link-loss HOLD |
+  | <#1F6FB2> Blue dashed | Partial mission (skip_phase_mask) |
 endlegend
 
 @enduml
