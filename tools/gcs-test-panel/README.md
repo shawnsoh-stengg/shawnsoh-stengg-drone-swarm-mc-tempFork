@@ -81,9 +81,11 @@ chars are reassembled from their chunks. The **Effect** column still watches
 - **PREFLIGHT → ARMING** needs `MC_CMD_ARM_AUTHORISE` *and* all 7 pre-arm
   checks (`mission_exec/pre_arm_checks.cpp`): FCC link alive, FCC disarmed,
   ARM authorised, battery above threshold + margin, live peers in
-  PREFLIGHT/ARMING, a complete mission upload (waypoints, formation offsets,
-  search polygon and swarm manifest all non-empty), and GNSS OK or visual
-  localisation alive. Once they hold, the MC enters ARMING **by itself and
+  PREFLIGHT/ARMING, a complete mission upload, and GNSS OK or visual
+  localisation alive. "Complete" depends on the plan's `skip_phase_mask`:
+  ingress waypoints always; formation offsets and swarm manifest unless the
+  plan is solo/transit; search polygon unless it is transit. The live-peer
+  check is skipped for solo/transit plans. Once they hold, the MC enters ARMING **by itself and
   arms the FCC**; no phase command is needed.
 - Send ARM_AUTHORISE **after** the Channel B upload or Channel C activate.
   Every new mission upload resets the authorisation to the plan's own
@@ -102,6 +104,34 @@ chars are reassembled from their chunks. The **Effect** column still watches
   *no reply at all* is a FAIL.
 - Fault raised/cleared and node-liveness changes are also logged as
   observations, without a verdict.
+
+## Example plans
+
+`examples/` holds one plan per `skip_phase_mask` stage set (EXEC-008). Load
+one with **Plans → Load file…**, then push it over Channel C (save to the
+library, then Activate) or Channel B (upload):
+
+| File | `skip_phase_mask` | Mission |
+|---|---|---|
+| `swarm_full.json` | `0` | TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND (3 drones) |
+| `solo_search.json` | `112` | TAKEOFF → INGRESS → SEARCH (whole polygon) → RETURN → LAND |
+| `solo_transit.json` | `240` | TAKEOFF → INGRESS → RETURN → LAND |
+
+- The coordinates are placeholders near Singapore (the same ones
+  `plan.example_plan()` uses). Replace them with your test site's before
+  activating on a real drone.
+- `arm_authorised` is `false` in every example, so send ARM_AUTHORISE
+  after the upload.
+- INGRESS ends at the last ingress waypoint. `solo_transit` sends RTL
+  there, and `solo_search` starts its search there.
+- `swarm_full` still stalls at ISR_SELECTION until `swarm_coord` is built.
+- `solo_search` holds at the end of INGRESS until `search_planner_node`
+  (EXEC-002) publishes a coverage path. GCS END_MISSION brings it home.
+- Over Channel B, `solo_*` end with an `MC_MISSION_CONFIG` (50205) item
+  carrying the mask.
+
+`tests/test_plan.py` checks every file here is valid and that all three
+stage sets are covered.
 
 ## Logs (test evidence)
 
@@ -184,4 +214,5 @@ gcs_test_panel/
     tlog.py, replay.py
   ui/              # PySide6 widgets; bridge.py moves results back onto the GUI thread
   fake_mc.py       # loopback test double
+examples/          # example plans, one per skip_phase_mask stage set
 ```

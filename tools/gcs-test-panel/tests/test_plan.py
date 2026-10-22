@@ -65,3 +65,17 @@ def test_skip_phase_mask_sent_as_trailing_mission_config_item():
     cfg = plan.to_mission_items(p)[-1]
     assert cfg.command == defs.CMD_MISSION_CONFIG
     assert cfg.param1 == 0xF0
+
+
+def test_example_plan_files_are_valid():
+    # examples/*.json: one plan per skip_phase_mask stage set (README "Example plans").
+    from pathlib import Path
+
+    files = sorted((Path(__file__).parent.parent / "examples").glob("*.json"))
+    masks = set()
+    for f in files:
+        p, warnings = plan.parse(f.read_text())
+        assert warnings == [], (f.name, warnings)
+        assert p["name"] == f.stem
+        masks.add(p.get("skip_phase_mask", 0))
+    assert masks == set(defs.SKIP_PHASE_MASKS)
