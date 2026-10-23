@@ -41,7 +41,7 @@ constexpr uint8_t kMavFrameGlobalRelativeAltInt = 6;
 constexpr uint16_t kMavCmdNavWaypoint = 16;
 
 // check_mission_start(): resend MISSION_START this often, at most this many
-// times in total, until vehicle_state reports AUTO_MISSION.
+// times in total, until the FCC is seen flying the uploaded route.
 constexpr double kMissionStartRetryPeriodS = 1.0;
 constexpr int kMissionStartMaxAttempts = 3;
 
@@ -237,11 +237,12 @@ void MissionManagerNode::build_transition_table()
       [this] {action_begin_ingress_route_upload();}},
   };
   // One row per skip_phase_mask stage set -- at most one guard is ever true.
+  // (No INGRESS -> SEARCH row for solo SKIP_SWARM_PHASES yet: nothing
+  // publishes /mc/search/coverage_path until search_planner_node is built,
+  // so is_valid_skip_phase_mask() refuses that mask.)
   transition_table_[Phase::INGRESS] = {
     {Phase::MUSTER, [this] {return guard_ingress_to_muster();},
       [this] {action_disable_formation_ctrl();}},
-    {Phase::SEARCH, [this] {return guard_ingress_to_search();},
-      [this] {action_begin_coverage_path_upload();}},
     {Phase::RETURN, [this] {return guard_ingress_to_return();},
       [this] {action_begin_return();}},
   };
@@ -365,15 +366,6 @@ bool MissionManagerNode::guard_ingress_to_muster() const
          !flown_skips(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES);
 }
 
-bool MissionManagerNode::guard_ingress_to_search() const
-{
-  // Solo: search_planner_node plans the whole search_polygon (no Voronoi
-  // cell), so the coverage path is the only input to wait for.
-  return ingress_route_complete() &&
-         flown_skips(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES) &&
-         !flown_skips(mc_msgs::msg::MissionUpload::SKIP_SEARCH) &&
-         coverage_path_ && !coverage_path_->poses.empty();
-}
 
 bool MissionManagerNode::guard_ingress_to_return() const
 {
@@ -403,7 +395,11 @@ bool MissionManagerNode::guard_muster_to_isr_selection() const
   int alive_in_muster = 0;
   if (peer_states_) {
     for (const auto & peer : peer_states_->peers) {
-      if (peer.peer_status != mc_msgs::msg::SwarmPeer::STATUS_ALIVE) {
+      // A drone outside this mission's manifest (e.g. one flying a transit
+      // plan on the same mesh) is never coming to this muster.
+      if (peer.peer_status != mc_msgs::msg::SwarmPeer::STATUS_ALIVE ||
+        !in_swarm_manifest(flown_mission_upload_.get(), peer.drone_id))
+      {
         continue;
       }
       if (peer.mission_phase != static_cast<uint8_t>(Phase::MUSTER)) {
@@ -447,15 +443,34 @@ bool MissionManagerNode::guard_search_to_return() const
   // PX4 v1.17 stays in AUTO_MISSION when a mission ends ("Mission
   // finished, loitering" -- Commander only drops to LOITER after a
   // takeoff), so the AUTO_LOITER check alone never fires after a real
-  // search. Reaching the last coverage waypoint does, the same way
-  // ingress_route_complete() ends INGRESS. Coverage poses are x=lon, y=lat
-  // (send_coverage_path_upload()).
-  if (!coverage_path_ || coverage_path_->poses.empty()) {
-    return false;
+  // search. Having reached every waypoint of the path the FCC is actually
+  // flying, in order, does (update_search_progress()) -- not just the last
+  // one, which may sit next to where SEARCH started.
+  return flown_coverage_path_ &&
+         coverage_waypoints_reached_ >= flown_coverage_path_->poses.size();
+}
+
+void MissionManagerNode::update_search_progress()
+{
+  if (current_phase_ != Phase::SEARCH || !vehicle_state_ || !flown_coverage_path_) {
+    return;
   }
-  const auto & last_wp = coverage_path_->poses.back().pose.position;
-  return horizontal_distance_m(vehicle_state_->lat, vehicle_state_->lon, last_wp.y, last_wp.x) <=
-         waypoint_acceptance_radius_m_;
+  const auto & poses = flown_coverage_path_->poses;
+  // Horizontal and vertical both within the acceptance radius, so rows
+  // stacked over the same footprint (+5 m per row) aren't counted early.
+  // Coverage poses are x=lon, y=lat, z=alt_msl (send_coverage_path_upload()).
+  while (coverage_waypoints_reached_ < poses.size()) {
+    const auto & wp = poses[coverage_waypoints_reached_].pose.position;
+    const bool reached =
+      horizontal_distance_m(vehicle_state_->lat, vehicle_state_->lon, wp.y, wp.x) <=
+      waypoint_acceptance_radius_m_ &&
+      std::abs(static_cast<double>(vehicle_state_->alt_msl) - wp.z) <=
+      waypoint_acceptance_radius_m_;
+    if (!reached) {
+      break;
+    }
+    ++coverage_waypoints_reached_;
+  }
 }
 
 bool MissionManagerNode::guard_return_to_land() const
@@ -605,14 +620,36 @@ void MissionManagerNode::send_mission_start()
   // param1 = first item; only param1 is read. PX4 v1.17's Commander
   // accepts -1..seq_total-1 and switches to AUTO_MISSION; its navigator
   // then jumps to that item if it's >= 0. So the first send starts at item
-  // 0 and resends use -1, which leaves the current item alone -- a resend
-  // that lands after PX4 did switch (the ack or vehicle_state was just
-  // slow) must not rewind the route.
-  const float first_item = mission_start_attempts_ == 0 ? 0.F : -1.F;
+  // 0 and INGRESS resends use -1, which leaves the current item alone -- a
+  // resend that lands after PX4 did switch (the ack or vehicle_state was
+  // just slow) must not rewind the route. SEARCH resends keep 0: the
+  // vehicle is already in AUTO_MISSION at the finished ingress route, and
+  // -1 never moves a finished mission on (navigator_main.cpp only calls
+  // set_current_mission_index() for param1 >= 0). Rewinding a just-started
+  // coverage path to item 0 costs at most a few metres.
+  const float first_item =
+    (mission_start_attempts_ == 0 || mission_start_phase_ == Phase::SEARCH) ? 0.F : -1.F;
   cmd.params = {first_item, 0.F, 0.F, 0.F, 0.F, 0.F, 0.F};
   pub_send_command_->publish(cmd);
   ++mission_start_attempts_;
   mission_start_sent_at_ = now();
+}
+
+bool MissionManagerNode::mission_start_confirmed() const
+{
+  if (!vehicle_state_) {
+    return false;
+  }
+  if (mission_start_phase_ != Phase::SEARCH) {
+    return vehicle_state_->nav_state == kNavStateAutoMission;
+  }
+  // SEARCH starts in AUTO_MISSION already (end of the ingress route), so
+  // nav_state proves nothing: the vehicle leaving where SEARCH began, or
+  // reaching a waypoint beyond the first, does.
+  return coverage_waypoints_reached_ > 1 ||
+         horizontal_distance_m(
+    vehicle_state_->lat, vehicle_state_->lon, search_entry_lat_, search_entry_lon_) >
+         waypoint_acceptance_radius_m_;
 }
 
 void MissionManagerNode::check_mission_start()
@@ -625,7 +662,7 @@ void MissionManagerNode::check_mission_start()
     return;
   }
   const char * phase = phase_name(mission_start_phase_);
-  if (vehicle_state_ && vehicle_state_->nav_state == kNavStateAutoMission) {
+  if (mission_start_confirmed()) {
     RCLCPP_INFO(get_logger(), "%s: FCC in MISSION mode, flying uploaded route", phase);
     mission_start_pending_ = false;
     return;
@@ -684,7 +721,7 @@ void MissionManagerNode::send_coverage_path_upload()
   // position.z = alt_msl (m). Flagged for ICD-owner ratification, same as
   // this repo's other locally-authored "gap note" message definitions.
   uint16_t seq = 0;
-  for (const auto & pose : coverage_path_->poses) {
+  for (const auto & pose : flown_coverage_path_->poses) {
     mc_msgs::msg::FccMissionItem item;
     item.header.stamp = now();
     item.seq = seq++;
@@ -708,6 +745,10 @@ void MissionManagerNode::action_begin_coverage_path_upload()
   pending_source_ = mc_msgs::msg::MissionPhase::SOURCE_AUTONOMOUS;
   pending_ack_retries_ = 0;
   pending_upload_id_ = next_upload_id_++;
+  // Snapshot: upload retries resend this, and SEARCH's progress is judged
+  // against it, even if a newer path is published meanwhile.
+  flown_coverage_path_ = coverage_path_;
+  coverage_waypoints_reached_ = 0;
   send_coverage_path_upload();
   RCLCPP_INFO(get_logger(), "phase entry: uploading coverage path, enabling detection");
 }
@@ -759,6 +800,8 @@ void MissionManagerNode::reset_mission_state()
   isr_role_.reset();
   voronoi_cell_.reset();
   coverage_path_.reset();
+  flown_coverage_path_.reset();
+  coverage_waypoints_reached_ = 0;
   // Re-report every pre-arm failure for the new mission, even if the set is
   // unchanged from the last PREFLIGHT.
   last_reported_pre_arm_failures_.clear();
@@ -954,6 +997,10 @@ void MissionManagerNode::on_mission_channel_ack_success()
   commit_transition(target, source);
   // Both uploads (ingress route -> INGRESS, coverage path -> SEARCH) need
   // starting; the coverage path otherwise sat unflown in FCC dataman.
+  if (target == Phase::SEARCH && vehicle_state_) {
+    search_entry_lat_ = vehicle_state_->lat;
+    search_entry_lon_ = vehicle_state_->lon;
+  }
   mission_start_phase_ = target;
   mission_start_attempts_ = 0;
   mission_start_pending_ = true;
@@ -1061,6 +1108,14 @@ void MissionManagerNode::on_voronoi_cell(mc_msgs::msg::VoronoiCell::SharedPtr ms
 void MissionManagerNode::on_coverage_path(nav_msgs::msg::Path::SharedPtr msg)
 {
   coverage_path_ = msg;
+  if (current_phase_ == Phase::SEARCH && msg != flown_coverage_path_) {
+    // Re-partition on peer loss (SDD §3.x) replans the cell, but nothing
+    // re-uploads mid-SEARCH yet: the FCC keeps flying, and SEARCH keeps
+    // judging completion against, the path uploaded on entry.
+    RCLCPP_WARN(
+      get_logger(), "SEARCH: new coverage path (%zu poses) not uploaded; still flying the "
+      "uploaded one", msg->poses.size());
+  }
 }
 
 bool MissionManagerNode::is_critical_fault(const mc_msgs::msg::FaultEvent & fault) const
@@ -1190,6 +1245,7 @@ void MissionManagerNode::on_control_timer()
 {
   drain_gcs_command_queue();
   check_ack_timeout();
+  update_search_progress();
   check_mission_start();
   if (current_phase_ == Phase::PREFLIGHT) {
     publish_pre_arm_status();

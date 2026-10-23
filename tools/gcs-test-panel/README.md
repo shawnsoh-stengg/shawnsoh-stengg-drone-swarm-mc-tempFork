@@ -83,9 +83,10 @@ chars are reassembled from their chunks. The **Effect** column still watches
   ARM authorised, battery above threshold + margin, live peers in
   PREFLIGHT/ARMING, a complete mission upload, and GNSS OK or visual
   localisation alive. "Complete" depends on the plan's `skip_phase_mask`:
-  ingress waypoints always; formation offsets and swarm manifest unless the
-  plan is solo/transit; search polygon unless it is transit. The live-peer
-  check is skipped for solo/transit plans. Once they hold, the MC enters ARMING **by itself and
+  ingress waypoints always; formation offsets, swarm manifest and search
+  polygon unless the plan is transit. The live-peer check is skipped for
+  transit plans, and only counts peers in the plan's swarm manifest
+  otherwise. Once they hold, the MC enters ARMING **by itself and
   arms the FCC**; no phase command is needed.
 - Send ARM_AUTHORISE **after** the Channel B upload or Channel C activate.
   Every new mission upload resets the authorisation to the plan's own
@@ -114,7 +115,6 @@ library, then Activate) or Channel B (upload):
 | File | `skip_phase_mask` | Mission |
 |---|---|---|
 | `swarm_full.json` | `0` | TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND (3 drones) |
-| `solo_search.json` | `112` | TAKEOFF → INGRESS → SEARCH (whole polygon) → RETURN → LAND |
 | `solo_transit.json` | `240` | TAKEOFF → INGRESS → RETURN → LAND |
 
 - The coordinates are placeholders near Singapore (the same ones
@@ -123,15 +123,17 @@ library, then Activate) or Channel B (upload):
 - `arm_authorised` is `false` in every example, so send ARM_AUTHORISE
   after the upload.
 - INGRESS ends at the last ingress waypoint. `solo_transit` sends RTL
-  there, and `solo_search` starts its search there.
+  there.
 - `swarm_full` still stalls at ISR_SELECTION until `swarm_coord` is built.
-- `solo_search` holds at the end of INGRESS until `search_planner_node`
-  (EXEC-002) publishes a coverage path. GCS END_MISSION brings it home.
-- Over Channel B, `solo_*` end with an `MC_MISSION_CONFIG` (50205) item
-  carrying the mask.
+- Solo search (`skip_phase_mask` `112`: INGRESS → SEARCH over the whole
+  polygon → RETURN) is refused at upload and pre-arm until
+  `search_planner_node` publishes a coverage path — without one the drone
+  would hold at the end of INGRESS forever.
+- Over Channel B, `solo_transit` ends with an `MC_MISSION_CONFIG` (50205)
+  item carrying the mask.
 
-`tests/test_plan.py` checks every file here is valid and that all three
-stage sets are covered.
+`tests/test_plan.py` checks every file here is valid and that every
+accepted stage set is covered.
 
 ## Logs (test evidence)
 

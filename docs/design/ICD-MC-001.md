@@ -1376,15 +1376,16 @@ float32 low_battery_threshold             # 0.0–1.0 (default 0.20)
 # bit N = Mission Phase ID N (§10.6) requires OFFBOARD for its FCC-facing
 # legs; 0 = all MISSION mode (pre-FR-026 behaviour). See FR-020/026-029.
 uint16 offboard_phase_mask
-# EXEC-008: bit N = skip Mission Phase ID N (§10.6). Only three values fly
+# EXEC-008: bit N = skip Mission Phase ID N (§10.6). Only two values fly
 # (anything else fails pre-arm, and both GCS decoders reject it at upload):
 #   0                               full swarm mission
-#   SKIP_SWARM_PHASES (112)         solo: TAKEOFF→INGRESS→SEARCH→RETURN→LAND,
-#                                   searching the whole search_polygon
 #   SKIP_SWARM_PHASES|SKIP_SEARCH   transit: TAKEOFF→INGRESS→RETURN→LAND
 #   (240)
-# Fields a skipped phase would use (formation_offsets/swarm_manifest for
-# the swarm phases, search_polygon for SEARCH) may then be empty.
+# SKIP_SWARM_PHASES alone (112, solo: INGRESS→SEARCH over the whole
+# search_polygon) is reserved but refused until search_planner_node
+# (EXEC-002) publishes /mc/search/coverage_path.
+# Fields a skipped phase would use (formation_offsets/swarm_manifest/
+# search_polygon for a transit plan) may then be empty.
 uint16 SKIP_SWARM_PHASES = 112  # MUSTER | ISR_SELECTION | VORONOI_PARTITION
 uint16 SKIP_SEARCH       = 128
 uint16 skip_phase_mask

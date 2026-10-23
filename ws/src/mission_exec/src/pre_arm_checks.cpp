@@ -3,6 +3,8 @@
 
 #include "mission_exec/pre_arm_checks.hpp"
 
+#include <algorithm>
+
 #include <mc_msgs/msg/mission_phase.hpp>
 #include <mc_msgs/msg/swarm_peer.hpp>
 
@@ -20,13 +22,22 @@ constexpr uint8_t kArmingStateDisarmed = 1;
 bool is_valid_skip_phase_mask(uint16_t mask)
 {
   using U = mc_msgs::msg::MissionUpload;
-  return mask == 0 || mask == U::SKIP_SWARM_PHASES ||
-         mask == (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH);
+  return mask == 0 || mask == (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH);
 }
 
 bool skips_phases(const mc_msgs::msg::MissionUpload * upload, uint16_t bits)
 {
   return upload && (upload->skip_phase_mask & bits) == bits;
+}
+
+bool in_swarm_manifest(const mc_msgs::msg::MissionUpload * upload, uint8_t drone_id)
+{
+  if (!upload || upload->swarm_manifest.empty()) {
+    return true;
+  }
+  return std::any_of(
+    upload->swarm_manifest.begin(), upload->swarm_manifest.end(),
+    [drone_id](const mc_msgs::msg::SwarmPeer & p) {return p.drone_id == drone_id;});
 }
 
 CheckResult check_fcc_link_alive(const PreArmCheckInputs & in)
@@ -83,6 +94,9 @@ CheckResult check_swarm_peers_preflight(const PreArmCheckInputs & in)
     return {true, ""};
   }
   for (const auto & peer : in.peer_states->peers) {
+    if (!in_swarm_manifest(in.mission_upload.get(), peer.drone_id)) {
+      continue;  // not flying this mission, e.g. a transit drone on the same mesh
+    }
     const bool alive = peer.peer_status == mc_msgs::msg::SwarmPeer::STATUS_ALIVE;
     const bool preflight_or_arming =
       peer.mission_phase == mc_msgs::msg::MissionPhase::PREFLIGHT ||

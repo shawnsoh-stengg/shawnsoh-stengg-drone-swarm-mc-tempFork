@@ -659,10 +659,10 @@ TEST_F(MissionOrchestratorNodeTest, ActivateCarriesSkipPhaseMask)
 {
   std::filesystem::create_directories(plans_dir_);
   {
-    std::ofstream f(plans_dir_ + "/solo.json", std::ios::binary);
-    f << R"({"name":"solo","skip_phase_mask":112})";
+    std::ofstream f(plans_dir_ + "/transit.json", std::ios::binary);
+    f << R"({"name":"transit","skip_phase_mask":240})";
   }
-  peer_->send_activate(11, "solo.json");
+  peer_->send_activate(11, "transit.json");
   MockOrchestratorPeer::AckFields ack;
   ASSERT_TRUE(spin_until_ack(ack));
   EXPECT_EQ(ack.result, 0);  // ACCEPTED
@@ -671,20 +671,28 @@ TEST_F(MissionOrchestratorNodeTest, ActivateCarriesSkipPhaseMask)
       node_, [this] {return !mission_upload_msgs_.empty();}, std::chrono::seconds(1)));
   EXPECT_EQ(
     mission_upload_msgs_.back()->skip_phase_mask,
-    mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES);
+    mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES | mc_msgs::msg::MissionUpload::SKIP_SEARCH);
 }
 
 TEST_F(MissionOrchestratorNodeTest, ActivateUnflyableSkipPhaseMaskIsRejected)
 {
+  // MUSTER alone; solo (no search planner yet); and values a uint16_t read
+  // would narrow into 240 (0x100F0 -> 0xF0, 240.9 -> 240) or wrap.
+  const std::vector<std::string> masks = {"16", "112", "65776", "240.9", "240.0", "-16"};
   std::filesystem::create_directories(plans_dir_);
-  {
-    std::ofstream f(plans_dir_ + "/muster_only.json", std::ios::binary);
-    f << R"({"name":"muster_only","skip_phase_mask":16})";
+  uint16_t seq = 12;
+  for (const auto & mask : masks) {
+    SCOPED_TRACE(mask);
+    {
+      std::ofstream f(plans_dir_ + "/bad_mask.json", std::ios::binary | std::ios::trunc);
+      f << R"({"name":"bad_mask","skip_phase_mask":)" << mask << "}";
+    }
+    peer_->send_activate(seq++, "bad_mask.json");
+    MockOrchestratorPeer::AckFields ack;
+    ASSERT_TRUE(spin_until_ack(ack));
+    EXPECT_EQ(ack.result, 1);  // REJECTED_INVALID_JSON (ICD §12.2)
   }
-  peer_->send_activate(12, "muster_only.json");
-  MockOrchestratorPeer::AckFields ack;
-  ASSERT_TRUE(spin_until_ack(ack));
-  EXPECT_EQ(ack.result, 1);  // REJECTED_INVALID_JSON (ICD §12.2)
+  EXPECT_TRUE(mission_upload_msgs_.empty());
 }
 
 TEST_F(MissionOrchestratorNodeTest, ActivateOutsidePreflightIsRejected)

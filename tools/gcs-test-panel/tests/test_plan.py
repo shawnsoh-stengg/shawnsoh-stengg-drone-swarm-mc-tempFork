@@ -52,9 +52,11 @@ def test_skip_phase_mask_only_accepts_flyable_stage_sets():
     for mask in defs.SKIP_PHASE_MASKS:
         p["skip_phase_mask"] = mask
         plan.validate(p)
-    p["skip_phase_mask"] = 0x10  # MUSTER alone
-    with pytest.raises(plan.PlanError, match="skip_phase_mask"):
-        plan.validate(p)
+    # MUSTER alone; solo (refused until search_planner_node exists); a float.
+    for bad in (0x10, defs.SKIP_SWARM_PHASES, 240.0):
+        p["skip_phase_mask"] = bad
+        with pytest.raises(plan.PlanError, match="skip_phase_mask"):
+            plan.validate(p)
 
 
 def test_skip_phase_mask_sent_as_trailing_mission_config_item():

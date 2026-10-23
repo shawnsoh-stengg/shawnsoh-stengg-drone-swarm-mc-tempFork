@@ -298,6 +298,78 @@ protected:
       [cmd](const mc_msgs::msg::FccCommand::SharedPtr & c) {return c->cmd == cmd;});
   }
 
+  // Coverage poses are x=lon, y=lat, z=alt_msl (send_coverage_path_upload()).
+  static geometry_msgs::msg::PoseStamped coverage_pose(double lat, double lon, double alt_msl)
+  {
+    geometry_msgs::msg::PoseStamped p;
+    p.pose.position.x = lon;
+    p.pose.position.y = lat;
+    p.pose.position.z = alt_msl;
+    return p;
+  }
+
+  // Armed at home, 10 m AGL, still in AUTO_MISSION at the end of the
+  // ingress route -- how PX4 v1.17 enters SEARCH.
+  mc_msgs::msg::VehicleState searching_vehicle_state() const
+  {
+    auto vs = good_vehicle_state();
+    vs.arming_state = kArmingStateArmed;
+    vs.z = -10.0F;
+    vs.nav_state = kNavStateAutoMission;
+    return vs;
+  }
+
+  // advance_to_ingress(), then the swarm phases and an acked upload of
+  // `path` into SEARCH, the vehicle at searching_vehicle_state().
+  // search_ack_command_index_ = send_commands_.size() just before that ack.
+  void advance_to_search(const nav_msgs::msg::Path & path)
+  {
+    advance_to_ingress();
+    pub_vehicle_state_->publish(searching_vehicle_state());
+    mc_msgs::msg::IsrRole role;
+    role.all_peers_acked = true;
+    pub_isr_role_->publish(role);
+    ASSERT_TRUE(
+      spin_until(
+        {node_, harness_},
+        [this] {return phase_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION);},
+        std::chrono::seconds(2)));
+    mc_msgs::msg::VoronoiCell cell;
+    cell.upload_id = 42;
+    pub_voronoi_cell_->publish(cell);
+    const size_t uploads_before = fcc_mission_uploads_.size();
+    pub_coverage_path_->publish(path);
+    ASSERT_TRUE(
+      spin_until(
+        {node_, harness_},
+        [this, uploads_before] {return fcc_mission_uploads_.size() > uploads_before;},
+        std::chrono::seconds(2)));
+    search_ack_command_index_ = send_commands_.size();
+    mc_msgs::msg::FccMissionAck ack;
+    ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
+    ack.upload_id = fcc_mission_uploads_.back()->upload_id;
+    ack.success = true;
+    pub_mission_ack_->publish(ack);
+    ASSERT_TRUE(
+      spin_until(
+        {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
+        std::chrono::seconds(2)));
+  }
+
+  // param1 of every MISSION_START sent since the SEARCH upload's ack.
+  std::vector<float> search_mission_start_items() const
+  {
+    std::vector<float> items;
+    for (size_t i = search_ack_command_index_; i < send_commands_.size(); ++i) {
+      if (send_commands_[i]->cmd == kMavCmdMissionStart) {
+        items.push_back(send_commands_[i]->params[0]);
+      }
+    }
+    return items;
+  }
+
+  size_t search_ack_command_index_{0};
+
   mc_msgs::msg::MissionUpload full_mission_upload(bool arm_authorised) const
   {
     mc_msgs::msg::MissionUpload up;
@@ -882,6 +954,36 @@ TEST_F(MissionManagerNodeTest, MusterToIsrSelection_GuardTrueWithSoloQuorum)
       std::chrono::seconds(2)));
 }
 
+TEST_F(MissionManagerNodeTest, MusterToIsrSelection_IgnoresAlivePeerOutsideManifest)
+{
+  // full_mission_upload()'s manifest is {drone 1}; still in PREFLIGHT, so
+  // it passes pre-arm but holds this drone in MUSTER.
+  mc_msgs::msg::SwarmPeerArray peers;
+  mc_msgs::msg::SwarmPeer peer;
+  peer.drone_id = 1;
+  peer.peer_status = mc_msgs::msg::SwarmPeer::STATUS_ALIVE;
+  peer.mission_phase = mc_msgs::msg::MissionPhase::PREFLIGHT;
+  peers.peers = {peer};
+  pub_peer_states_->publish(peers);
+  advance_to_ingress();
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::MUSTER);},
+      std::chrono::seconds(2)));
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::MUSTER);
+
+  // An ALIVE drone outside the manifest (e.g. flying a transit plan) is
+  // never coming to this muster, whatever phase it's in.
+  peers.peers[0].drone_id = 9;
+  peers.peers[0].mission_phase = mc_msgs::msg::MissionPhase::SEARCH;
+  pub_peer_states_->publish(peers);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::ISR_SELECTION);},
+      std::chrono::seconds(2)));
+}
+
 // --- ISR_SELECTION -> VORONOI_PARTITION ---
 
 TEST_F(MissionManagerNodeTest, IsrSelectionToVoronoiPartition_GuardFalseUntilAllPeersAcked)
@@ -1060,6 +1162,105 @@ TEST_F(MissionManagerNodeTest, SearchToReturn_GuardTrueOnFccMissionComplete)
       std::chrono::seconds(2)));
 }
 
+TEST_F(MissionManagerNodeTest, Search_ResendsMissionStartFromItemZeroUntilVehicleMoves)
+{
+  nav_msgs::msg::Path path;
+  path.poses = {coverage_pose(1.301, 103.8, 40.0)};  // ~110 m north
+  advance_to_search(path);
+  // Already in AUTO_MISSION, so that proves nothing; the vehicle never
+  // leaves home. -1 would not restart PX4's finished ingress mission.
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_},
+      [this] {return any_status_text_contains(status_texts_, "SEARCH: FCC");},
+      std::chrono::seconds(5)));
+  EXPECT_EQ(search_mission_start_items(), (std::vector<float>{0.F, 0.F, 0.F}));
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::SEARCH);
+}
+
+TEST_F(MissionManagerNodeTest, Search_MissionStartStopsOnceVehicleLeavesEntryPosition)
+{
+  nav_msgs::msg::Path path;
+  path.poses = {coverage_pose(1.301, 103.8, 40.0)};
+  advance_to_search(path);
+  auto vs = searching_vehicle_state();
+  vs.lat = 1.3002;  // ~22 m on its way, beyond the 5 m acceptance radius
+  pub_vehicle_state_->publish(vs);
+  spin_until({node_, harness_}, [] {return false;}, std::chrono::milliseconds(2500));
+  EXPECT_EQ(search_mission_start_items(), (std::vector<float>{0.F}));
+}
+
+TEST_F(MissionManagerNodeTest, SearchToReturn_NeedsEveryCoverageWaypointInOrder)
+{
+  // Ends where SEARCH starts: reaching the last pose alone must not end it.
+  nav_msgs::msg::Path path;
+  path.poses = {coverage_pose(1.301, 103.8, 40.0), coverage_pose(1.3, 103.8, 40.0)};
+  advance_to_search(path);
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::SEARCH);
+
+  auto vs = searching_vehicle_state();
+  vs.lat = 1.301;
+  pub_vehicle_state_->publish(vs);
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::SEARCH);
+
+  vs.lat = 1.3;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+      std::chrono::seconds(2)));
+  EXPECT_TRUE(any_command_sent(kMavCmdNavReturnToLaunch));
+}
+
+TEST_F(MissionManagerNodeTest, SearchToReturn_CountsWaypointsInAltitudeToo)
+{
+  // Second row stacked 5+ m above the first over the same spot.
+  nav_msgs::msg::Path path;
+  path.poses = {coverage_pose(1.301, 103.8, 40.0), coverage_pose(1.301, 103.8, 50.0)};
+  advance_to_search(path);
+  auto vs = searching_vehicle_state();
+  vs.lat = 1.301;
+  pub_vehicle_state_->publish(vs);
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::SEARCH);
+
+  vs.alt_msl = 50.0F;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+      std::chrono::seconds(2)));
+}
+
+TEST_F(MissionManagerNodeTest, SearchToReturn_JudgesTheUploadedPathNotALaterOne)
+{
+  nav_msgs::msg::Path path;
+  path.poses = {coverage_pose(1.301, 103.8, 40.0)};
+  advance_to_search(path);
+  const size_t uploads_in_search = fcc_mission_uploads_.size();
+
+  // A replan (e.g. re-partition on peer loss) isn't uploaded mid-SEARCH, so
+  // the FCC keeps flying the first path -- and completion follows it.
+  nav_msgs::msg::Path replanned;
+  replanned.poses = {coverage_pose(1.302, 103.8, 40.0)};
+  pub_coverage_path_->publish(replanned);
+  auto vs = searching_vehicle_state();
+  vs.lat = 1.302;
+  pub_vehicle_state_->publish(vs);
+  wait_for_ticks(5);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::SEARCH);
+  EXPECT_EQ(fcc_mission_uploads_.size(), uploads_in_search);
+
+  vs.lat = 1.301;
+  pub_vehicle_state_->publish(vs);
+  ASSERT_TRUE(
+    spin_until(
+      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
+      std::chrono::seconds(2)));
+}
+
 // --- skip_phase_mask: missions that leave stages out ---
 
 TEST_F(MissionManagerNodeTest, TransitOnly_IngressGoesStraightToReturnCommandsRtlThenLands)
@@ -1089,82 +1290,18 @@ TEST_F(MissionManagerNodeTest, TransitOnly_IngressGoesStraightToReturnCommandsRt
   land_and_disarm_to_preflight();
 }
 
-TEST_F(MissionManagerNodeTest, Solo_IngressWaitsForCoveragePathThenSearchesAndReturns)
+TEST_F(MissionManagerNodeTest, SoloSkipPhaseMaskBlocksArmingUntilSearchPlannerExists)
 {
-  advance_to_ingress(staged_mission_upload(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES));
-  auto vs = at_ingress_end_vehicle_state();
-  pub_vehicle_state_->publish(vs);
-  // Route done, but nothing to search yet.
-  spin_until({node_, harness_}, [this] {return heartbeats_.size() > 10;}, std::chrono::seconds(1));
-  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
-
-  const size_t uploads_before = fcc_mission_uploads_.size();
-  nav_msgs::msg::Path path;
-  geometry_msgs::msg::PoseStamped p1;
-  p1.pose.position.x = 103.805;  // lon
-  p1.pose.position.y = 1.305;    // lat
-  p1.pose.position.z = 50.0;
-  path.poses = {p1};
-  pub_coverage_path_->publish(path);
+  auto up = full_mission_upload(/*arm_authorised=*/ true);
+  up.skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES;
+  pub_mission_upload_->publish(up);
+  pub_vehicle_state_->publish(good_vehicle_state());
   ASSERT_TRUE(
     spin_until(
       {node_, harness_},
-      [this, uploads_before] {return fcc_mission_uploads_.size() > uploads_before;},
+      [this] {return any_status_text_contains(status_texts_, "skip_phase_mask");},
       std::chrono::seconds(2)));
-
-  const size_t commands_before_ack = send_commands_.size();
-  mc_msgs::msg::FccMissionAck ack;
-  ack.request_type = mc_msgs::msg::FccMissionAck::UPLOAD;
-  ack.upload_id = fcc_mission_uploads_.back()->upload_id;
-  ack.success = true;
-  pub_mission_ack_->publish(ack);
-  ASSERT_TRUE(
-    spin_until(
-      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::SEARCH);},
-      std::chrono::seconds(2)));
-  // The coverage path is started from its first item, like the ingress
-  // route. (INGRESS's own resends, param1 = -1, may still interleave.)
-  ASSERT_TRUE(
-    spin_until(
-      {node_, harness_}, [this, commands_before_ack] {
-        return std::any_of(
-          send_commands_.begin() + static_cast<std::ptrdiff_t>(commands_before_ack),
-          send_commands_.end(), [](const mc_msgs::msg::FccCommand::SharedPtr & c) {
-            return c->cmd == kMavCmdMissionStart && c->params[0] == 0.F;
-          });
-      },
-      std::chrono::seconds(2)));
-
-  vs.nav_state = kNavStateAutoMission;  // PX4 stays here when a mission ends
-  vs.lat = 1.30501;
-  vs.lon = 103.805;
-  pub_vehicle_state_->publish(vs);
-  ASSERT_TRUE(
-    spin_until(
-      {node_, harness_}, [this] {return phase_reached(mc_msgs::msg::MissionPhase::RETURN);},
-      std::chrono::seconds(2)));
-  EXPECT_TRUE(any_command_sent(kMavCmdNavReturnToLaunch));
-  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::MUSTER));
-  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::ISR_SELECTION));
-  EXPECT_FALSE(phase_ever_reached(mc_msgs::msg::MissionPhase::VORONOI_PARTITION));
-}
-
-TEST_F(MissionManagerNodeTest, Solo_GcsRequestToEnterMusterIsRejected)
-{
-  advance_to_ingress(staged_mission_upload(mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES));
-  pub_vehicle_state_->publish(at_ingress_end_vehicle_state());
-  wait_for_ticks();
-  // advance_to_ingress()'s own INGRESS request already left an ACCEPTED ack.
-  const size_t acks_before = command_acks_.size();
-  send_gcs_command(
-    50001 /*MC_CMD_PHASE_TRANSITION*/,
-    {static_cast<float>(mc_msgs::msg::MissionPhase::MUSTER), 0.F, 0.F, 0.F, 0.F, 0.F, 0.F});
-  ASSERT_TRUE(
-    spin_until(
-      {node_, harness_}, [this, acks_before] {return command_acks_.size() > acks_before;},
-      std::chrono::seconds(2)));
-  EXPECT_EQ(command_acks_.back()->result, mc_msgs::msg::GcsCommandAck::RESULT_REJECTED);
-  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::INGRESS);
+  EXPECT_EQ(node_->current_phase(), mission_exec::Phase::PREFLIGHT);
 }
 
 TEST_F(MissionManagerNodeTest, UnflyableSkipPhaseMaskBlocksArming)

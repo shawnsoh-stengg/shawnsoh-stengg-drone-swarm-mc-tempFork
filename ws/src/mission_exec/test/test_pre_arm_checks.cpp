@@ -277,16 +277,17 @@ TEST(PreArmChecksTest, MissionUploadCompletePassesTransitOnlyWithIngressWaypoint
   EXPECT_TRUE(check_mission_upload_complete(in).passed);
 }
 
-TEST(PreArmChecksTest, MissionUploadCompleteSoloNeedsSearchPolygonButNotSwarmFields)
+TEST(PreArmChecksTest, MissionUploadCompleteRejectsSoloUntilSearchPlannerExists)
 {
   auto in = good_inputs();
-  auto up = std::make_shared<mc_msgs::msg::MissionUpload>();
-  up->ingress_waypoints = {geometry_msgs::msg::PoseStamped()};
+  auto up = std::make_shared<mc_msgs::msg::MissionUpload>(*in.mission_upload);
+  // Every field present, but nothing would publish the coverage path that
+  // INGRESS -> SEARCH needs.
   up->skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES;
   in.mission_upload = up;
-  EXPECT_FALSE(check_mission_upload_complete(in).passed);
-  up->search_polygon = {geographic_msgs::msg::GeoPoint(), geographic_msgs::msg::GeoPoint()};
-  EXPECT_TRUE(check_mission_upload_complete(in).passed);
+  const auto result = check_mission_upload_complete(in);
+  EXPECT_FALSE(result.passed);
+  EXPECT_NE(result.reason.find("skip_phase_mask"), std::string::npos);
 }
 
 TEST(PreArmChecksTest, MissionUploadCompleteRejectsUnflyableSkipPhaseMask)
@@ -301,21 +302,22 @@ TEST(PreArmChecksTest, MissionUploadCompleteRejectsUnflyableSkipPhaseMask)
   EXPECT_NE(result.reason.find("skip_phase_mask"), std::string::npos);
 }
 
-TEST(PreArmChecksTest, IsValidSkipPhaseMaskAcceptsOnlyTheThreeStageSets)
+TEST(PreArmChecksTest, IsValidSkipPhaseMaskAcceptsOnlyFullAndTransit)
 {
   using U = mc_msgs::msg::MissionUpload;
   EXPECT_TRUE(is_valid_skip_phase_mask(0));
-  EXPECT_TRUE(is_valid_skip_phase_mask(U::SKIP_SWARM_PHASES));
+  EXPECT_FALSE(is_valid_skip_phase_mask(U::SKIP_SWARM_PHASES));  // solo: no search planner yet
   EXPECT_TRUE(is_valid_skip_phase_mask(U::SKIP_SWARM_PHASES | U::SKIP_SEARCH));
   EXPECT_FALSE(is_valid_skip_phase_mask(U::SKIP_SEARCH));  // swarm phases, then nothing to search
   EXPECT_FALSE(is_valid_skip_phase_mask(1U << mc_msgs::msg::MissionPhase::INGRESS));
 }
 
-TEST(PreArmChecksTest, SwarmPeersPreflightIgnoresPeersForSoloMission)
+TEST(PreArmChecksTest, SwarmPeersPreflightIgnoresPeersForTransitMission)
 {
   auto in = good_inputs();
   auto up = std::make_shared<mc_msgs::msg::MissionUpload>(*in.mission_upload);
-  up->skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES;
+  up->skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES |
+    mc_msgs::msg::MissionUpload::SKIP_SEARCH;
   in.mission_upload = up;
   auto peers = std::make_shared<mc_msgs::msg::SwarmPeerArray>();
   mc_msgs::msg::SwarmPeer peer;
@@ -324,6 +326,22 @@ TEST(PreArmChecksTest, SwarmPeersPreflightIgnoresPeersForSoloMission)
   peers->peers = {peer};
   in.peer_states = peers;
   EXPECT_TRUE(check_swarm_peers_preflight(in).passed);
+}
+
+TEST(PreArmChecksTest, SwarmPeersPreflightIgnoresAlivePeerOutsideManifest)
+{
+  // e.g. a drone flying its own transit plan on the same mesh.
+  auto in = good_inputs();  // manifest = {drone_id 0}
+  auto peers = std::make_shared<mc_msgs::msg::SwarmPeerArray>();
+  mc_msgs::msg::SwarmPeer peer;
+  peer.drone_id = 7;
+  peer.peer_status = mc_msgs::msg::SwarmPeer::STATUS_ALIVE;
+  peer.mission_phase = mc_msgs::msg::MissionPhase::SEARCH;
+  peers->peers = {peer};
+  in.peer_states = peers;
+  EXPECT_TRUE(check_swarm_peers_preflight(in).passed);
+  peers->peers[0].drone_id = 0;  // the same peer, in the manifest
+  EXPECT_FALSE(check_swarm_peers_preflight(in).passed);
 }
 
 // --- 7. Visual localisation alive if GNSS degraded ---

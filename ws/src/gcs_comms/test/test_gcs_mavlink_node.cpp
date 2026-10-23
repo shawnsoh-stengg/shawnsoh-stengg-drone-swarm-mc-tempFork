@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -693,18 +694,22 @@ TEST_F(GcsMavlinkNodeTest, MissionUploadCarriesSkipPhaseMaskFromMissionConfigIte
 
 TEST_F(GcsMavlinkNodeTest, MissionUploadRejectsUnflyableSkipPhaseMask)
 {
-  // MUSTER alone (bit 4) -- not a flyable stage set.
-  const std::vector<mavlink_mission_item_int_t> items = {
-    mission_item(0, 50200 /*ingress waypoint*/, 0.0F),
-    mission_item(1, 50205 /*MC_MISSION_CONFIG*/, 16.0F),
-  };
-  std::atomic<int> ack_type{-1};
-  std::thread mock_gcs([&] {ack_type = serve_mission_items(*peer_, items);});
-  peer_->send_mission_count(static_cast<uint16_t>(items.size()));
+  // MUSTER alone (bit 4); solo (no search planner yet); and values that
+  // rounding would have turned into a valid mask, or UB (NaN).
+  for (const float mask : {16.0F, 112.0F, 239.6F, std::numeric_limits<float>::quiet_NaN()}) {
+    SCOPED_TRACE(mask);
+    const std::vector<mavlink_mission_item_int_t> items = {
+      mission_item(0, 50200 /*ingress waypoint*/, 0.0F),
+      mission_item(1, 50205 /*MC_MISSION_CONFIG*/, mask),
+    };
+    std::atomic<int> ack_type{-1};
+    std::thread mock_gcs([&] {ack_type = serve_mission_items(*peer_, items);});
+    peer_->send_mission_count(static_cast<uint16_t>(items.size()));
 
-  spin_until(node_, [&] {return ack_type != -1;}, std::chrono::seconds(5));
-  mock_gcs.join();
-  EXPECT_EQ(ack_type, MAV_MISSION_INVALID_PARAM1);
+    spin_until(node_, [&] {return ack_type != -1;}, std::chrono::seconds(5));
+    mock_gcs.join();
+    EXPECT_EQ(ack_type, MAV_MISSION_INVALID_PARAM1);
+  }
   EXPECT_TRUE(mission_upload_msgs_.empty());
 }
 

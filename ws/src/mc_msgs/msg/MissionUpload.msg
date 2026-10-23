@@ -27,9 +27,10 @@ uint16 offboard_phase_mask
 # stage to complete. Only these values are accepted (anything else fails
 # the pre-arm check, and both GCS decoders reject it at upload):
 #   0                                   full swarm mission
-#   SKIP_SWARM_PHASES                   solo: TAKEOFF->INGRESS->SEARCH->RETURN->LAND,
-#                                       searching the whole search_polygon
 #   SKIP_SWARM_PHASES | SKIP_SEARCH     transit: TAKEOFF->INGRESS->RETURN->LAND
+# SKIP_SWARM_PHASES alone (solo: INGRESS->SEARCH over the whole
+# search_polygon) is reserved but refused until search_planner_node
+# publishes /mc/search/coverage_path.
 uint16 SKIP_SWARM_PHASES = 112  # MUSTER | ISR_SELECTION | VORONOI_PARTITION (bits 4-6)
 uint16 SKIP_SEARCH       = 128  # SEARCH (bit 7)
 uint16 skip_phase_mask

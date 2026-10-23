@@ -123,8 +123,9 @@ def validate(plan) -> list[str]:
         if not (0 <= m <= 0xFFFF and m == int(m)):
             raise PlanError("'offboard_phase_mask' must be an integer 0-65535")
     if "skip_phase_mask" in plan:
-        m = _num(plan, "skip_phase_mask", "plan")
-        if m not in defs.SKIP_PHASE_MASKS:
+        m = plan["skip_phase_mask"]
+        # A JSON integer only: mission_orchestrator_node rejects 240.0.
+        if isinstance(m, bool) or not isinstance(m, int) or m not in defs.SKIP_PHASE_MASKS:
             allowed = ", ".join(f"{k} ({v})" for k, v in defs.SKIP_PHASE_MASKS.items())
             raise PlanError(f"'skip_phase_mask' must be one of {allowed}")
     return warnings

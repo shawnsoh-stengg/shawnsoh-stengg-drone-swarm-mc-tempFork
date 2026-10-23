@@ -190,11 +190,12 @@ PLAN_ACK_RESULTS = {
 }
 
 # mc_msgs/MissionUpload.skip_phase_mask -- the only flyable stage sets.
+# SKIP_SWARM_PHASES alone (solo search) is refused MC-side until
+# search_planner_node publishes a coverage path.
 SKIP_SWARM_PHASES = 0x70  # MUSTER | ISR_SELECTION | VORONOI_PARTITION
 SKIP_SEARCH = 0x80
 SKIP_PHASE_MASKS = {
     0: "full swarm mission",
-    SKIP_SWARM_PHASES: "solo: ingress -> search -> return",
     SKIP_SWARM_PHASES | SKIP_SEARCH: "transit: ingress -> return",
 }
 

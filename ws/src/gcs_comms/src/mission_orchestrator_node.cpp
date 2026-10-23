@@ -880,12 +880,19 @@ bool MissionOrchestratorNode::parse_plan_json(
     out_msg.offboard_phase_mask = j.value("offboard_phase_mask", static_cast<uint16_t>(0));
     // Rejected here (activate -> INVALID_JSON) rather than left to fail
     // pre-arm -- same flyable set as mission_exec's is_valid_skip_phase_mask().
+    // Read as a JSON integer first: j.value<uint16_t>() would silently
+    // narrow 65776 or 240.9 into a valid mask.
     using U = mc_msgs::msg::MissionUpload;
-    out_msg.skip_phase_mask = j.value("skip_phase_mask", static_cast<uint16_t>(0));
-    if (out_msg.skip_phase_mask != 0 && out_msg.skip_phase_mask != U::SKIP_SWARM_PHASES &&
-      out_msg.skip_phase_mask != (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH))
-    {
-      return false;
+    out_msg.skip_phase_mask = 0;
+    if (const auto it = j.find("skip_phase_mask"); it != j.end()) {
+      if (!it->is_number_integer()) {
+        return false;
+      }
+      const auto mask = it->get<int64_t>();
+      if (mask != 0 && mask != (U::SKIP_SWARM_PHASES | U::SKIP_SEARCH)) {
+        return false;
+      }
+      out_msg.skip_phase_mask = static_cast<uint16_t>(mask);
     }
   } catch (const nlohmann::json::exception &) {
     return false;
