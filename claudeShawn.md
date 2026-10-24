@@ -2,6 +2,52 @@
 
 Paths below are relative to the repo root.
 
+## Repo setup
+
+This repo (`shawnsoh-stengg/shawnsoh-stengg-drone-swarm-mc-tempFork`) is a
+personal copy of the team repo `AI-DA-STC/drone-swarm-mc`. It stands in for
+a fork, because the AI-DA-STC organisation has forking disabled.
+
+Two local folders under `~/SW/cpp/`:
+
+| Folder | Remote `origin` | Used for |
+|---|---|---|
+| `drone-swarm-mc/` | team repo | receiving team updates only, no personal work |
+| `shawnsoh-stengg-drone-swarm-mc-tempFork/` | this repo | all personal work |
+
+Branches in this repo (same names locally and on GitHub):
+
+| Branch | Contents | Rule |
+|---|---|---|
+| `upstream-main` | exact copy of the team's `main`, full history | never commit to it, the sync script owns it |
+| `main` | `upstream-main` + personal work (this file, `sync-from-team.sh`, new code) | work here or on feature branches off it |
+
+### Getting team updates
+
+Run `./sync-from-team.sh` from this repo whenever you want the team's latest
+code. It:
+
+1. pulls the team's `main` into `~/SW/cpp/drone-swarm-mc` (override with
+   `TEAM_DIR=...`)
+2. copies it into this repo's `upstream-main` with `git fetch` from that
+   folder (keeps history, so merges work) and pushes it to GitHub
+3. merges `upstream-main` into `main` and pushes `main`
+
+It stops without changing anything if this repo has uncommitted changes, and
+stops with instructions on a merge conflict. Uses merge, not rebase, so it
+never force-pushes.
+
+### Rules for Claude working in this repo
+
+- Never commit to, rebase, or force-push `upstream-main`.
+- Personal files (`claudeShawn.md`, `sync-from-team.sh`) live at the repo
+  root, outside the team's folders, to keep merges from the team conflict-free.
+- Don't create a file named `CLAUDE.md`: the team repo may add one, which
+  would conflict on the next sync.
+- Changes meant for the team go through the team repo: a feature branch and
+  PR in `~/SW/cpp/drone-swarm-mc`, not a push from here.
+- The code is proprietary (AI-DA-STC). Keep this repo private.
+
 ## Goal
 
 MC software on a drone that receives a set of mission plan files from the
