@@ -210,6 +210,7 @@ bool save_mission_upload(const std::string & path, const mc_msgs::msg::MissionUp
   root["arm_authorised"] = upload.arm_authorised;
   root["low_battery_threshold"] = upload.low_battery_threshold;
   root["offboard_phase_mask"] = upload.offboard_phase_mask;
+  root["skip_phase_mask"] = upload.skip_phase_mask;
 
   YAML::Emitter emitter;
   emitter << root;
@@ -263,6 +264,10 @@ std::optional<mc_msgs::msg::MissionUpload> load_mission_upload(const std::string
     upload.arm_authorised = root["arm_authorised"].as<bool>();
     upload.low_battery_threshold = root["low_battery_threshold"].as<float>();
     upload.offboard_phase_mask = root["offboard_phase_mask"].as<uint16_t>();
+    // Absent from files persisted before skip_phase_mask existed -- those
+    // were all full missions.
+    upload.skip_phase_mask =
+      root["skip_phase_mask"] ? root["skip_phase_mask"].as<uint16_t>() : uint16_t{0};
     return upload;
   } catch (const YAML::Exception &) {
     return std::nullopt;

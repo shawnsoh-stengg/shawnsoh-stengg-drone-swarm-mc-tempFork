@@ -87,6 +87,9 @@ private:
   void decode_formation_offset_item(const mavlink_mission_item_int_t & item);
   void decode_search_area_vertex_item(const mavlink_mission_item_int_t & item);
   void decode_swarm_peer_entry_item(const mavlink_mission_item_int_t & item);
+  // false => param1 isn't a flyable skip_phase_mask; the caller rejects
+  // the whole upload rather than letting it fail pre-arm later.
+  bool decode_mission_config_item(const mavlink_mission_item_int_t & item);
 
   // --- GCS-003: telemetry multiplexer (SDD §11.3, ICD §4.6 MC_STATUS/
   // MC_DETECTION/MC_HEALTH). Subscriptions run on mux_sub_cb_group_

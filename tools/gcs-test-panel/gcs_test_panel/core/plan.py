@@ -6,7 +6,7 @@ One JSON shape serves both paths into the MC:
   mission_orchestrator_node's activate path parses
   (docs/GCS-MAVLINK-API-REFERENCE.md "Mission plan JSON format");
 - Channel B encodes the same plan as MC_MISSION_UPLOAD MISSION_ITEM_INTs
-  (commands 50200-50204), exactly as gcs_mavlink_node.cpp decodes them.
+  (commands 50200-50205), exactly as gcs_mavlink_node.cpp decodes them.
 
 So a tester edits one plan and can push it either way, and a mismatch between
 the two MC-side decoders shows up as a difference in the resulting
@@ -122,6 +122,12 @@ def validate(plan) -> list[str]:
         m = _num(plan, "offboard_phase_mask", "plan")
         if not (0 <= m <= 0xFFFF and m == int(m)):
             raise PlanError("'offboard_phase_mask' must be an integer 0-65535")
+    if "skip_phase_mask" in plan:
+        m = plan["skip_phase_mask"]
+        # A JSON integer only: mission_orchestrator_node rejects 240.0.
+        if isinstance(m, bool) or not isinstance(m, int) or m not in defs.SKIP_PHASE_MASKS:
+            allowed = ", ".join(f"{k} ({v})" for k, v in defs.SKIP_PHASE_MASKS.items())
+            raise PlanError(f"'skip_phase_mask' must be one of {allowed}")
     return warnings
 
 
@@ -152,6 +158,7 @@ def to_mission_items(plan: dict) -> list[MissionItem]:
 
     Fields Channel B cannot carry (arm_authorised, low_battery_threshold,
     offboard_phase_mask) are silently dropped -- documented MC-side gap.
+    skip_phase_mask goes as a trailing MC_MISSION_CONFIG item when nonzero.
     """
     validate(plan)
     items: list[MissionItem] = []
@@ -203,6 +210,14 @@ def to_mission_items(plan: dict) -> list[MissionItem]:
                 z=float(octets[3]),
             )
         )
+    if plan.get("skip_phase_mask", 0):
+        items.append(
+            MissionItem(
+                command=defs.CMD_MISSION_CONFIG,
+                frame=defs.MAV_FRAME_MISSION,
+                param1=float(plan["skip_phase_mask"]),
+            )
+        )
     return items
 
 
@@ -227,4 +242,5 @@ def example_plan(name: str = "bench_test") -> dict:
         "arm_authorised": False,
         "low_battery_threshold": 0.2,
         "offboard_phase_mask": 0,
+        "skip_phase_mask": 0,
     }

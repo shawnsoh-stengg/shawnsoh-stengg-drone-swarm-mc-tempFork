@@ -1,0 +1,27 @@
+{
+  "name": "swarm_full",
+  "ingress_waypoints": [
+    {"lat": 1.3521000, "lon": 103.8198000, "alt_m": 30.0, "speed_mps": 5.0},
+    {"lat": 1.3525000, "lon": 103.8203000, "alt_m": 30.0, "speed_mps": 5.0}
+  ],
+  "formation_offsets": [
+    {"drone_id": 1, "north_m": 0.0, "east_m": 0.0,  "down_m": 0.0},
+    {"drone_id": 2, "north_m": 0.0, "east_m": 10.0, "down_m": 0.0},
+    {"drone_id": 3, "north_m": 0.0, "east_m": -10.0, "down_m": 0.0}
+  ],
+  "search_polygon": [
+    {"lat": 1.3530000, "lon": 103.8200000},
+    {"lat": 1.3530000, "lon": 103.8210000},
+    {"lat": 1.3522000, "lon": 103.8210000},
+    {"lat": 1.3522000, "lon": 103.8200000}
+  ],
+  "swarm_manifest": [
+    {"drone_id": 1, "ip": "192.168.100.11"},
+    {"drone_id": 2, "ip": "192.168.100.12"},
+    {"drone_id": 3, "ip": "192.168.100.13"}
+  ],
+  "arm_authorised": false,
+  "low_battery_threshold": 0.20,
+  "offboard_phase_mask": 0,
+  "skip_phase_mask": 0
+}
