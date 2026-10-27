@@ -192,6 +192,7 @@ Build, integrate, and validate the MC software stack. Needs: containerised deplo
 | FR-005 | SHOULD | Inspection | The MC shall log all mission phase transitions with timestamp, source (GCS or autonomous), and the triggering condition. Logs shall survive container restart. |
 | FR-006 | MUST | Test | After a normal mission end (mission complete, or GCS end-mission/abort), the MC shall return from LAND to PREFLIGHT once the FCC reports disarmed and on the ground, ready for the next mission without a restart. On that transition it shall discard the flown mission upload, including its persisted copy, and its ARM authorisation, so the next arm requires a new upload (FR-010). |
 | FR-007 | MUST | Test | FAULT shall be terminal: the MC shall reject every phase-transition request in FAULT, and only a restart shall leave it. This includes a FAULT forced by a GCS emergency command (DISARM, RTL or manual-mode takeover). Once the FCC reports disarmed and on the ground in FAULT, the MC shall notify the GCS once that a restart is required. |
+| FR-008 | MUST | Test | A mission plan shall be able to leave stages out (`skip_phase_mask`, ICD-MC-001 §9.2) and still complete normally. At minimum: a solo plan (TAKEOFF → INGRESS → SEARCH → RETURN → LAND, with no MUSTER/ISR_SELECTION/VORONOI_PARTITION and SEARCH covering the whole search area) and a transit plan (TAKEOFF → INGRESS → RETURN → LAND). The MC shall reject a stage combination it cannot fly, at upload and again at pre-arm, and shall not require mission-upload fields that only skipped phases use. |
 
 #### 4.1.2 FCC Control and Monitoring
 
@@ -609,6 +610,7 @@ All requirements shall be verified prior to hardware-in-the-loop acceptance.
 | FR-005 | Transition logging persists | I | SITL |
 | FR-006 | LAND → PREFLIGHT recycle + mission reset | T | SITL |
 | FR-007 | FAULT terminal until restart | T | SITL |
+| FR-008 | Partial missions (solo / transit) via `skip_phase_mask` | T | SITL |
 | FR-010 | ARM requires GCS authorisation | T | SITL |
 | FR-011 | DISARM on command / failsafe | T | SITL |
 | FR-012 | Flight mode commands | T | SITL |

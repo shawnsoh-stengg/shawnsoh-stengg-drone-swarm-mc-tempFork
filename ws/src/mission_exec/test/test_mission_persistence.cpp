@@ -101,6 +101,7 @@ mc_msgs::msg::MissionUpload sample_upload()
   up.arm_authorised = true;
   up.low_battery_threshold = 0.20F;
   up.offboard_phase_mask = 0x0006;
+  up.skip_phase_mask = mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES;
   return up;
 }
 
@@ -162,6 +163,28 @@ TEST_F(MissionPersistenceTest, SaveThenLoadRoundTripsAllFields)
   EXPECT_TRUE(loaded->arm_authorised);
   EXPECT_FLOAT_EQ(loaded->low_battery_threshold, 0.20F);
   EXPECT_EQ(loaded->offboard_phase_mask, 0x0006);
+  EXPECT_EQ(loaded->skip_phase_mask, mc_msgs::msg::MissionUpload::SKIP_SWARM_PHASES);
+}
+
+TEST_F(MissionPersistenceTest, LoadDefaultsSkipPhaseMaskForFilePersistedBeforeIt)
+{
+  ASSERT_TRUE(save_mission_upload(path_, sample_upload()));
+  // Rewrite without the key, as a file saved before skip_phase_mask existed.
+  std::ifstream in(path_);
+  std::string line;
+  std::string without_key;
+  while (std::getline(in, line)) {
+    if (line.rfind("skip_phase_mask:", 0) != 0) {
+      without_key += line + "\n";
+    }
+  }
+  in.close();
+  ASSERT_NE(without_key.find("offboard_phase_mask:"), std::string::npos);
+  std::ofstream(path_) << without_key;
+
+  const auto loaded = load_mission_upload(path_);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->skip_phase_mask, 0);
 }
 
 TEST_F(MissionPersistenceTest, SaveDoesNotLeaveTmpFileBehindOnSuccess)

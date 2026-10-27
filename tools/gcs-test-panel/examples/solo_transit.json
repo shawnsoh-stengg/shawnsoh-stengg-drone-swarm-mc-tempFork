@@ -1,0 +1,11 @@
+{
+  "name": "solo_transit",
+  "ingress_waypoints": [
+    {"lat": 1.3521000, "lon": 103.8198000, "alt_m": 30.0, "speed_mps": 5.0},
+    {"lat": 1.3525000, "lon": 103.8203000, "alt_m": 30.0, "speed_mps": 5.0}
+  ],
+  "arm_authorised": false,
+  "low_battery_threshold": 0.20,
+  "offboard_phase_mask": 0,
+  "skip_phase_mask": 240
+}

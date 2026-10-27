@@ -81,9 +81,12 @@ chars are reassembled from their chunks. The **Effect** column still watches
 - **PREFLIGHT → ARMING** needs `MC_CMD_ARM_AUTHORISE` *and* all 7 pre-arm
   checks (`mission_exec/pre_arm_checks.cpp`): FCC link alive, FCC disarmed,
   ARM authorised, battery above threshold + margin, live peers in
-  PREFLIGHT/ARMING, a complete mission upload (waypoints, formation offsets,
-  search polygon and swarm manifest all non-empty), and GNSS OK or visual
-  localisation alive. Once they hold, the MC enters ARMING **by itself and
+  PREFLIGHT/ARMING, a complete mission upload, and GNSS OK or visual
+  localisation alive. "Complete" depends on the plan's `skip_phase_mask`:
+  ingress waypoints always; formation offsets, swarm manifest and search
+  polygon unless the plan is transit. The live-peer check is skipped for
+  transit plans, and only counts peers in the plan's swarm manifest
+  otherwise. Once they hold, the MC enters ARMING **by itself and
   arms the FCC**; no phase command is needed.
 - Send ARM_AUTHORISE **after** the Channel B upload or Channel C activate.
   Every new mission upload resets the authorisation to the plan's own
@@ -102,6 +105,65 @@ chars are reassembled from their chunks. The **Effect** column still watches
   *no reply at all* is a FAIL.
 - Fault raised/cleared and node-liveness changes are also logged as
   observations, without a verdict.
+
+## Example plans
+
+`examples/` holds one plan per `skip_phase_mask` stage set (EXEC-008). Load
+one with **Plans → Load file…**, then push it over Channel C (save to the
+library, then Activate) or Channel B (upload):
+
+| File | `skip_phase_mask` | Mission |
+|---|---|---|
+| `swarm_full.json` | `0` | TAKEOFF → INGRESS → MUSTER → ISR_SELECTION → VORONOI_PARTITION → SEARCH → RETURN → LAND (3 drones) |
+| `solo_transit.json` | `240` | TAKEOFF → INGRESS → RETURN → LAND |
+
+- The coordinates are placeholders near Singapore (the same ones
+  `plan.example_plan()` uses). Replace them with your test site's before
+  activating on a real drone.
+- `arm_authorised` is `false` in every example, so send ARM_AUTHORISE
+  after the upload.
+- INGRESS ends at the last ingress waypoint. `solo_transit` sends RTL
+  there.
+- `swarm_full` still stalls at ISR_SELECTION until `swarm_coord` is built.
+- Solo search (`skip_phase_mask` `112`: INGRESS → SEARCH over the whole
+  polygon → RETURN) is refused at upload and pre-arm until
+  `search_planner_node` publishes a coverage path — without one the drone
+  would hold at the end of INGRESS forever.
+- Over Channel B, `solo_transit` ends with an `MC_MISSION_CONFIG` (50205)
+  item carrying the mask.
+
+`tests/test_plan.py` checks every file here is valid and that every
+accepted stage set is covered.
+
+## Indoor GNSS sim: satellite count and fix decay
+
+After an **Indoor GNSS sim anchor**, `gnss_sim_node` reports a falling
+satellite count to PX4 in `HIL_GPS` (`satellites_visible`), from 10 at
+the anchor down to 4. The panel only sends the anchor. The count and
+how fast it falls are set MC-side in `ws/src/indoor_nav/params/default.yaml`
+(`gnss_sim_node.ros__parameters`):
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `hil_gps_sats_at_anchor` | `10.0` | Satellite count just after an anchor |
+| `hil_gps_min_sats` | `4.0` | Floor the count falls to |
+| `eph_growth_rate_m_per_s` | `0.02` | How fast the horizontal error (`eph`) grows, so how fast the count falls. Not in the YAML yet; add it to override the code default |
+| `eph_at_anchor_m` | `1.0` | `eph` at the anchor. Not in the YAML yet either |
+| `max_eph_before_fault_m` | `5.0` | `eph` at which the sim latches `INDOOR_GNSS_SIM_LOST` |
+
+- The count falls in a straight line from `hil_gps_sats_at_anchor` to
+  `hil_gps_min_sats` as `eph` grows from `eph_at_anchor_m` to 3 m, PX4's
+  `EKF2_REQ_EPH` default (`send_hil_gps()` in `gnss_sim_node.cpp`). So
+  with the defaults it reaches 4 about 100 s after the anchor, when PX4
+  also stops accepting the fix. The 5 m fault follows at about 200 s.
+- To fly longer between anchors, lower `eph_growth_rate_m_per_s`. Changing
+  only the two satellite counts doesn't change the timing.
+- The YAML is copied into the image when it's built
+  (`docker/indoor-nav/Dockerfile`), so rebuild and restart after editing:
+  `sudo ./scripts/16-build-indoor-nav-image.sh && sudo systemctl restart drone-mc-indoor-nav`.
+  The Jetsons build from the org repo (`AI-DA-STC/drone-swarm-mc`), so
+  make the edit there too.
+- Send a new anchor to reset the count to `hil_gps_sats_at_anchor`.
 
 ## Logs (test evidence)
 
@@ -184,4 +246,5 @@ gcs_test_panel/
     tlog.py, replay.py
   ui/              # PySide6 widgets; bridge.py moves results back onto the GUI thread
   fake_mc.py       # loopback test double
+examples/          # example plans, one per skip_phase_mask stage set
 ```

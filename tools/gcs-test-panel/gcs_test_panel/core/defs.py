@@ -189,6 +189,16 @@ PLAN_ACK_RESULTS = {
     3: "REJECTED_PHASE",
 }
 
+# mc_msgs/MissionUpload.skip_phase_mask -- the only flyable stage sets.
+# SKIP_SWARM_PHASES alone (solo search) is refused MC-side until
+# search_planner_node publishes a coverage path.
+SKIP_SWARM_PHASES = 0x70  # MUSTER | ISR_SELECTION | VORONOI_PARTITION
+SKIP_SEARCH = 0x80
+SKIP_PHASE_MASKS = {
+    0: "full swarm mission",
+    SKIP_SWARM_PHASES | SKIP_SEARCH: "transit: ingress -> return",
+}
+
 # --- Channel B mission upload (gcs_mavlink_node.cpp, docs/GCS-MAVLINK-API-REFERENCE.md) ---
 MAV_MISSION_TYPE_MC = 3  # kMavMissionTypeMc -- not in common.xml's enum
 CMD_INGRESS_WAYPOINT = 50200
@@ -196,12 +206,14 @@ CMD_MUSTER_POINT = 50201
 CMD_FORMATION_OFFSET = 50202
 CMD_SEARCH_AREA_VERTEX = 50203
 CMD_SWARM_PEER_ENTRY = 50204
+CMD_MISSION_CONFIG = 50205  # param1 = skip_phase_mask
 MISSION_ITEM_NAMES = {
     CMD_INGRESS_WAYPOINT: "ingress waypoint",
     CMD_MUSTER_POINT: "muster point",
     CMD_FORMATION_OFFSET: "formation offset",
     CMD_SEARCH_AREA_VERTEX: "search-area vertex",
     CMD_SWARM_PEER_ENTRY: "swarm peer",
+    CMD_MISSION_CONFIG: "mission config",
 }
 MAV_MISSION_RESULT_NAMES = {
     0: "ACCEPTED",

@@ -669,6 +669,7 @@ Mission item encoding for MC-specific items:
 | 50202 | Formation offset | N offset (m) | E offset (m) | D offset (m) | drone_id | — |
 | 50203 | Search area vertex | lat | lon | — | vertex_index | total_vertices |
 | 50204 | Swarm peer entry | drone_id | IP octet 3 | IP octet 4 | — | — |
+| 50205 | Mission config (`MC_MISSION_CONFIG`) | — | — | — | `skip_phase_mask` (§9.2) | — |
 
 > **Gap notes (`gcs_mavlink_node` implementation, 2026-07-26):** this table
 > covers only the fields the upload state machine (§11.2) can place directly
@@ -700,6 +701,12 @@ Mission item encoding for MC-specific items:
 >   assembling the upload itself. `low_battery_threshold`/`offboard_phase_mask`
 >   are left at their documented defaults (0.20 / 0) pending a future
 >   upload-time override mechanism.
+> - Command 50205 (EXEC-008, 2026-10-22) carries `skip_phase_mask` in
+>   `param1`; absent = 0 (full mission). A value outside the three flyable
+>   stage sets (§9.2) is rejected at once with `MISSION_ACK(MAV_MISSION_
+>   INVALID_PARAM1)` and nothing is published. `param2`+ are free for
+>   further per-plan settings (EXEC-007's takeoff altitude is meant to use
+>   `param2`).
 
 ---
 
@@ -1369,6 +1376,19 @@ float32 low_battery_threshold             # 0.0–1.0 (default 0.20)
 # bit N = Mission Phase ID N (§10.6) requires OFFBOARD for its FCC-facing
 # legs; 0 = all MISSION mode (pre-FR-026 behaviour). See FR-020/026-029.
 uint16 offboard_phase_mask
+# EXEC-008: bit N = skip Mission Phase ID N (§10.6). Only two values fly
+# (anything else fails pre-arm, and both GCS decoders reject it at upload):
+#   0                               full swarm mission
+#   SKIP_SWARM_PHASES|SKIP_SEARCH   transit: TAKEOFF→INGRESS→RETURN→LAND
+#   (240)
+# SKIP_SWARM_PHASES alone (112, solo: INGRESS→SEARCH over the whole
+# search_polygon) is reserved but refused until search_planner_node
+# (EXEC-002) publishes /mc/search/coverage_path.
+# Fields a skipped phase would use (formation_offsets/swarm_manifest/
+# search_polygon for a transit plan) may then be empty.
+uint16 SKIP_SWARM_PHASES = 112  # MUSTER | ISR_SELECTION | VORONOI_PARTITION
+uint16 SKIP_SEARCH       = 128
+uint16 skip_phase_mask
 ```
 
 #### `mc_msgs/SwarmPeerArray`
@@ -1852,7 +1872,7 @@ Single MAVFTP session at a time. Filenames are the plan's identity (validated: a
 
 ### 12.4 JSON mission plan format
 
-One JSON file per plan, mirroring `mc_msgs/MissionUpload`'s fields directly (`name`, `created_at`, `updated_at`, `ingress_waypoints`, `formation_offsets`, `search_polygon`, `swarm_manifest`, `arm_authorised`, `low_battery_threshold`, `offboard_phase_mask`) — see the spec §6.1 for the full example. Persisted under `/var/drone-mc/mission_plans/`, additive to `mission_manager_node`'s existing single-file YAML persistence (unrelated file, unrelated format).
+One JSON file per plan, mirroring `mc_msgs/MissionUpload`'s fields directly (`name`, `created_at`, `updated_at`, `ingress_waypoints`, `formation_offsets`, `search_polygon`, `swarm_manifest`, `arm_authorised`, `low_battery_threshold`, `offboard_phase_mask`, `skip_phase_mask`) — see the spec §6.1 for the full example. Persisted under `/var/drone-mc/mission_plans/`, additive to `mission_manager_node`'s existing single-file YAML persistence (unrelated file, unrelated format).
 
 ### 12.5 Activate
 
